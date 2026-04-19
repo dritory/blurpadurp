@@ -93,7 +93,7 @@ CREATE TABLE story (
   early_reject boolean NOT NULL DEFAULT false,
   passed_gate boolean NOT NULL DEFAULT false,
   published_to_reader boolean NOT NULL DEFAULT false,
-  published_at timestamptz,
+  published_to_reader_at timestamptz,
   backtest_run_id bigint,
 
   -- video

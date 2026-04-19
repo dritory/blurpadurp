@@ -30,8 +30,13 @@ export async function runMigrations(): Promise<void> {
     }
     const text = await readFile(join(MIGRATIONS_DIR, file), "utf8");
     console.log(`applying ${file}...`);
-    await sql.raw(text).execute(db);
-    await db.insertInto("schema_migration").values({ name: file }).execute();
+    await db.transaction().execute(async (trx) => {
+      await sql.raw(text).execute(trx);
+      await trx
+        .insertInto("schema_migration")
+        .values({ name: file })
+        .execute();
+    });
   }
   console.log("migrations complete");
 }

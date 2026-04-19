@@ -57,7 +57,7 @@ export interface Database {
     early_reject: Generated<boolean>;
     passed_gate: Generated<boolean>;
     published_to_reader: Generated<boolean>;
-    published_at: Date | null;
+    published_to_reader_at: Date | null;
     backtest_run_id: number | null;
     has_video: Generated<boolean>;
     video_url: string | null;
