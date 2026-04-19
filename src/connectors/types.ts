@@ -4,6 +4,9 @@
 export interface Cursor {
   last_seen_at: Date | null;
   last_seen_id: string | null;
+  // scope_key is how the same connector can maintain multiple cursors
+  // (e.g. 'global' vs 'theme:42'). Defaults to 'global'.
+  scope_key?: string;
 }
 
 export interface RawSourceItem {

@@ -144,6 +144,7 @@ export interface Database {
 
   source_cursor: {
     connector_name: string;
+    scope_key: Generated<string>;
     last_seen_at: Date | null;
     last_seen_id: string | null;
     updated_at: Created;

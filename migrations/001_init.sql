@@ -246,10 +246,12 @@ INSERT INTO config (key, value) VALUES
 -- ============================================================
 
 CREATE TABLE source_cursor (
-  connector_name text PRIMARY KEY,
+  connector_name text NOT NULL,
+  scope_key text NOT NULL DEFAULT 'global',
   last_seen_at timestamptz,
   last_seen_id text,
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (connector_name, scope_key)
 );
 
 -- ============================================================
