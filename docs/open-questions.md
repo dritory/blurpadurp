@@ -62,16 +62,12 @@ compliance, unsubscribe flow, PWA install prompt — all TBD.
 Vercel / Fly / Railway / self-hosted VPS all work. Not urgent.
 
 ### O4 — Gate threshold calibration
-`X` and `Δ` tuned against historical GDELT data. Target: 1–5 items pass per
-average week; silence ~10–20% of cycles. Requires scoring prompt first.
+`X` and `Δ` tuned against historical GDELT data. Target: 3–10 items pass
+per average week; silence ~1–10% of cycles. Requires the scoring prompt
+to be live and producing output (it is — v0.1).
 
-### O5 — Scoring prompt v1
-Rubric design is specified. Actual prompt text with gold anchors, structured
-output fields, and per-category calibration notes is still to be drafted.
-**Highest-leverage open item — everything downstream depends on it.**
-
-### O6 — Viral/zeitgeist scoring signals
-How specifically to encode "cross-platform spread," "mainstream crossover,"
-"longevity," and "derivative production" as features the scorer can use.
-Some are measurable (Google Trends tail), some require a separate sub-model
-(mainstream-media mention detector). Design during prompt drafting (O5).
+### O6 — Viral/zeitgeist signal collection
+The prompt already consumes `viral_signals` when present (cross-platform
+count, mainstream crossover, Google Trends tail, derivative count,
+KnowYourMeme status). The upstream collectors that compute these fields
+still need to be built. Each is a small source-specific module.

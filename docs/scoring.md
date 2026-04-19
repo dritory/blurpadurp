@@ -5,7 +5,7 @@ importance/significance distinction, and the precision bias. This doc
 specifies what the scorer must do, which techniques achieve the precision
 target, and how we maintain calibration over time.
 
-The prompt itself lives in `scoring-prompt.md` (current version: v2).
+The prompt itself lives in `scoring-prompt.md` (current version: v0.1).
 
 ## Design target
 
@@ -98,7 +98,7 @@ has something worth covering.
    High base rate ⇒ importance cap. Low base rate (first-of-kind) ⇒ allowed
    to score high.
 
-5. **Gold anchor examples in the prompt — seven buckets (v2).**
+5. **Gold anchor examples in the prompt — seven buckets.**
    See `scoring-prompt.md`. Structured as:
    - **A.** Big-and-universally-discussed (easy 5s)
    - **B.** Novel-specialist at the time — ACCEPTED MISSES (low zeitgeist,
@@ -176,15 +176,15 @@ injection is the strongest preservative:
 
 The scorer is a **reasoner over evidence**, never a remembrance engine.
 
-## Scoring output schema (v1.1)
+## Scoring output schema
 
 The scorer returns a single JSON object. Free-text reasoning is paired with
 structured companions so the data is SQL-queryable, not just readable.
 
 ```json
 {
-  "schema_version": "2.0",
-  "scorer_version": "prompt-v2",
+  "schema_version": "0.1",
+  "scorer_version": "prompt-v0.1",
   "scored_at": "ISO-8601",
   "as_of_date": "ISO-8601-date",
 
@@ -242,7 +242,7 @@ auditability, future extension, and analysis.
 
 ### Controlled vocabularies
 
-Full enumeration lives in `scoring-prompt-v1.md`. Summary:
+Full enumeration lives in `scoring-prompt.md`. Summary:
 
 - **trigger** (what pushed zeitgeist/importance up): 11 tags —
   systemic_risk, regulatory_change, technical_breakthrough, novel_finding,

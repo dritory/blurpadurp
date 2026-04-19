@@ -1,26 +1,10 @@
-# Scoring prompt v2
+# Scoring prompt v0.1
 
-This is the actual prompt used by the scorer. The design rationale is in
-`scoring.md`; the validation methodology is in `backtesting.md`.
+This is the scorer prompt. Design rationale in `scoring.md`; validation in
+`backtesting.md`.
 
-Version tag: `prompt-v2`.
-
-Changes from v1.1:
-- **Mission reframe.** The gate is now "would informed adults discuss this
-  in conversations over the next 1–2 weeks" — not "will this matter in 12
-  months." Long-term structural importance is scored separately but does
-  not gate the publish decision.
-- **Axes renamed/reweighted.** `importance` → `zeitgeist_score`,
-  `durability` → `half_life` (shorter horizon), `significance` → `reach`
-  (tiebreaker). `structural_importance` added as a logged-but-not-gating
-  axis for retrospective analysis.
-- **Hype taxonomy.** Blunt `hype_without_substance` tag replaced with
-  `in_circle_hype`, `manufactured_hype`, `controversy_flash`. New trigger
-  tag `crossover_discussion` for hype that broke into general conversation.
-- **Early-reject narrowed.** "Celebrity personal lives" no longer a blanket
-  reject. Universal-recognition figures at life-stage milestones route
-  through the rubric.
-- **Expected silence rate drops** from 10–30% to 1–10%.
+Version tag: `prompt-v0.1`. Pre-1.0 — schema and behavior may change
+freely, no backward-compatibility concerns. Git history tracks evolution.
 
 # System prompt
 
@@ -63,6 +47,14 @@ actually be discussing this in the next 1–2 weeks?"
    or about to, in general conversation?"
 4. Do NOT invent justifications. Every reasoning field must cite
    something specific from the input story or well-established context.
+5. Do NOT populate the output slots `verification`, `tools_used`,
+   `watchlist_signal`, or `viral_signals_considered`. Leave them null.
+   These are reserved for future pipeline stages and must not be invented
+   (unless `viral_signals` were provided in the input, in which case
+   `viral_signals_considered` may echo them verbatim).
+6. Factor tags describe THIS story's specific features, not its broad
+   class. If `base_rate_per_year < 1`, do NOT use the `high_base_rate`
+   penalty tag.
 
 # Early-reject list
 
@@ -355,8 +347,8 @@ still be filled briefly for forensic logging.
 
 ```json
 {
-  "schema_version": "2.0",
-  "scorer_version": "prompt-v2",
+  "schema_version": "0.1",
+  "scorer_version": "prompt-v0.1",
   "scored_at": "<ISO-8601 timestamp>",
   "as_of_date": "<echo of input as_of_date>",
 
