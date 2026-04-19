@@ -85,6 +85,19 @@ Subscriptions *are* the identity. No user table, no passwords, no login.
 - **Multi-device:** each browser/email is an independent subscription.
   Accepted tradeoff — cross-device sync costs a login.
 
+## Persistence principle
+
+**Every item the scorer touches is stored indefinitely.** Passed, rejected,
+early-rejected — all rows stay. The classified corpus is valuable as
+training data for future surrogate models, as the input to backtesting
+(Mode B), and as the substrate for all analysis queries. There is no
+retention policy in v1; at ~100–300 centroids/day the corpus grows roughly
+100k rows/year, which Postgres on a small VPS handles indefinitely.
+
+The raw input fed to the scorer is stored alongside the score
+(`story.raw_input`). This lets us re-score old items under a new prompt
+version without re-fetching sources.
+
 ## Data model
 
 ```
@@ -100,19 +113,40 @@ description           name                     │     content / summary
                       rolling_importance_30d   │     embedding
                       n_stories_published      │     gdelt_event_id
                       centroid_embedding       │     wikipedia_corroborated
+                                               │     as_of_date
+                                               │     scorer_model_id
+                                               │     scorer_prompt_version
+                                               │     raw_input (jsonb)
+                                               │     raw_output (jsonb)
+                                               │
+                                               │     -- denormalized from raw_output
                                                │     importance, durability,
                                                │     non_obviousness, significance
+                                               │     composite
+                                               │     point_in_time_confidence
+                                               │     theme_relationship
+                                               │     base_rate_per_year
+                                               │
                                                │     scored_at
+                                               │     early_reject (bool)
                                                │     passed_gate (bool)
                                                │     published_to_reader (bool)
                                                │     published_at (to reader)
-                                               │     score_justification
+                                               │     backtest_run_id (null for live)
+                                               │
                                                │     has_video (bool)
                                                │     video_url
                                                │     video_embed_url
                                                │     video_thumbnail_url
                                                │     video_duration_sec
                                                │     video_caption
+
+StoryFactor (many-to-many tag table)
+───────────────────────────────
+story_id           -- FK → Story.id
+kind               -- 'trigger' | 'penalty' | 'uncertainty'
+factor             -- controlled vocabulary value
+PRIMARY KEY (story_id, kind, factor)
 
 Issue                     EmailSubscription              PushSubscription
 ─────────────────         ──────────────────────         ─────────────────────
@@ -138,10 +172,21 @@ dispatched_at
 status
 ```
 
-- **Category:** fixed taxonomy, 10 buckets.
+- **Category:** fixed taxonomy, 10 slugs — `geopolitics`, `policy`,
+  `science`, `technology`, `economy`, `culture`, `internet_culture`,
+  `environment_climate`, `health`, `society`.
 - **Theme:** narrow story-arc. Built by embedding-clustering within a
   category. Merges when centroids converge.
-- **Story:** atomic event, post-clustering.
+- **Story:** atomic event, post-clustering. **Every scored item is
+  persisted — passers, rejects, early-rejects.** `raw_input` and
+  `raw_output` jsonb columns preserve exact scorer input/output for
+  re-scoring under future prompt versions. Denormalized columns
+  (`importance`, `theme_relationship`, `base_rate_per_year`, etc.) support
+  SQL without jsonb digging for common queries.
+- **StoryFactor:** many-to-many tag table; one row per (story, kind,
+  factor) triple from the controlled vocabularies (`trigger`, `penalty`,
+  `uncertainty`). Enables GROUP BY on factors without jsonb array
+  unpacking.
 - **Issue:** persisted published brief; exists only when gate produces ≥1
   item. `is_event_driven` distinguishes mid-cycle from scheduled.
 - **EmailSubscription / PushSubscription:** the entire identity. No User

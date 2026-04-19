@@ -1,9 +1,17 @@
-# Scoring prompt v1
+# Scoring prompt v1.1
 
 This is the actual prompt used by the scorer. The design rationale is in
 `scoring.md`; the validation methodology is in `backtesting.md`.
 
-Version tag: `prompt-v1`.
+Version tag: `prompt-v1.1`.
+
+Changes from v1:
+- Category slugs enumerated in the output schema (v1 produced "entertainment"
+  and "economics" that weren't in our taxonomy).
+- Reasoning block gains structured companions for SQL-queryability: numeric
+  `base_rate_per_year`, `factors` arrays with controlled vocabularies,
+  `theme_relationship` enum.
+- Free-text reasoning fields preserved for auditability.
 
 ## System prompt
 
@@ -243,30 +251,94 @@ trade we accept. Scoring them 5 would require hindsight.
   importance 1, durability 0, significance 2. confidence high.
   Reasoning: routine earnings surprise; no policy or structural change.
 
+# Controlled vocabularies
+
+After writing the free-text steelmans, tag the reasoning with factors from
+the controlled vocabularies below. Use ONLY listed values. Do not invent new
+tags. If none apply, use an empty array.
+
+## `reasoning.factors.trigger` — boosted importance (0..N)
+
+- `systemic_risk` — risk transmission across systems
+- `regulatory_change` — new rule with enforcement
+- `technical_breakthrough` — new capability enabled
+- `novel_finding` — unprecedented empirical result
+- `geopolitical_realignment` — alliance / border / regime shift
+- `cultural_absorption` — reference entering shared vocabulary
+- `market_structure_change` — industry baseline moved
+- `precedent_setting` — legal / political first
+- `scale_of_impact` — affects many people or a large domain
+- `first_of_kind` — no comparable event
+
+## `reasoning.factors.penalty` — dragged importance down (0..N)
+
+- `high_base_rate` — common event class
+- `hindsight_required` — importance only visible later
+- `reversible` — can be undone within months
+- `single_platform` — limited to one venue
+- `unreplicated` — finding not confirmed elsewhere
+- `preclinical_only` — not yet tested in target population
+- `speculative_forecast` — predicted, not observed
+- `hype_without_substance` — attention exceeds content
+- `symbolic_only` — gesture rather than material action
+- `narrow_audience` — affects few people
+
+## `reasoning.factors.uncertainty` — justify `low` or `medium` confidence (0..N)
+
+- `novel_event_type` — no base rate to anchor
+- `insufficient_evidence` — limited information available
+- `contested_interpretation` — experts disagree
+- `long_causal_chain` — many steps until impact
+- `no_precedent` — unprecedented situation
+- `counterfactual_required` — requires judging an alternative world
+
+## `reasoning.theme_relationship` — exactly one
+
+- `new_theme` — no existing theme given; this story opens a candidate arc
+- `continuation_routine` — update in an ongoing arc; similar magnitude to prior
+- `continuation_escalation` — materially elevates the arc
+- `continuation_reversal` — undoes or contradicts prior development
+- `continuation_resolution` — arc concludes
+
 # Output
 
 Return exactly one JSON object matching the schema below. No prose outside
 JSON. Reasoning fields must be completed before numeric scores.
 
+If `classification.early_reject` is true, the reasoning `factors` arrays may
+be empty and `theme_relationship` should be `new_theme`. The other reasoning
+fields may be brief but should still be filled for forensic logging.
+
 ```json
 {
-  "schema_version": "1.0",
-  "scorer_version": "prompt-v1",
+  "schema_version": "1.1",
+  "scorer_version": "prompt-v1.1",
   "scored_at": "<ISO-8601 timestamp>",
   "as_of_date": "<echo of input as_of_date>",
 
   "classification": {
-    "category": "<one of the 10 category slugs>",
+    "category": "<one of: geopolitics, policy, science, technology, economy, culture, internet_culture, environment_climate, health, society>",
     "theme_continuation_of": "<theme_id or null>",
     "early_reject": false,
     "early_reject_reason": null
   },
 
   "reasoning": {
-    "base_rate_estimate": "<how often does this class of event happen per year globally; concrete number>",
+    "base_rate_estimate": "<free text describing how often this class of event happens globally>",
+    "base_rate_per_year": <number, best numeric estimate of events per year; 0.01 for rare-once-per-century, 10000 for daily-occurrence>,
+
     "retrodiction_12mo": "<concrete mechanism by which knowing this changes a reader's decisions, beliefs, or model of the world 12 months from now>",
+
     "steelman_trivial": "<strongest case that this story does NOT matter>",
     "steelman_important": "<strongest case that this story DOES matter>",
+
+    "factors": {
+      "trigger":     [<tags from trigger vocabulary, 0..N>],
+      "penalty":     [<tags from penalty vocabulary, 0..N>],
+      "uncertainty": [<tags from uncertainty vocabulary, 0..N>]
+    },
+
+    "theme_relationship": "<new_theme | continuation_routine | continuation_escalation | continuation_reversal | continuation_resolution>",
     "point_in_time_confidence": "<low|medium|high>"
   },
 

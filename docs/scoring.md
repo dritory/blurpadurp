@@ -164,29 +164,41 @@ injection is the strongest preservative:
 
 The scorer is a **reasoner over evidence**, never a remembrance engine.
 
-## Scoring output schema (v1)
+## Scoring output schema (v1.1)
 
-The scorer returns a single JSON object:
+The scorer returns a single JSON object. Free-text reasoning is paired with
+structured companions so the data is SQL-queryable, not just readable.
 
 ```json
 {
-  "schema_version": "1.0",
-  "scorer_version": "prompt-v1",
+  "schema_version": "1.1",
+  "scorer_version": "prompt-v1.1",
   "scored_at": "ISO-8601",
   "as_of_date": "ISO-8601-date",
 
   "classification": {
-    "category": "technology",
+    "category": "<enum: 10 category slugs>",
     "theme_continuation_of": null,
     "early_reject": false,
     "early_reject_reason": null
   },
 
   "reasoning": {
-    "base_rate_estimate": "...",
-    "retrodiction_12mo": "...",
-    "steelman_trivial": "...",
-    "steelman_important": "...",
+    "base_rate_estimate": "<free text>",
+    "base_rate_per_year": <number>,
+
+    "retrodiction_12mo": "<free text>",
+
+    "steelman_trivial": "<free text>",
+    "steelman_important": "<free text>",
+
+    "factors": {
+      "trigger":     ["<vocab>", ...],
+      "penalty":     ["<vocab>", ...],
+      "uncertainty": ["<vocab>", ...]
+    },
+
+    "theme_relationship": "<enum>",
     "point_in_time_confidence": "low|medium|high"
   },
 
@@ -207,9 +219,66 @@ The scorer returns a single JSON object:
 }
 ```
 
-Reasoning fields are written before score fields. The gate reads `scores`
-and `reasoning.point_in_time_confidence`. Everything else is for
-auditability and future extension.
+Reasoning fields are written before score fields. The gate reads `scores`,
+`reasoning.point_in_time_confidence`, and `reasoning.theme_relationship`
+(the last one feeds repetition-suppression weights). Everything else is for
+auditability, future extension, and analysis.
+
+### Controlled vocabularies
+
+Full enumeration lives in `scoring-prompt-v1.md`. Summary:
+
+- **trigger** (what pushed importance up): 10 tags — systemic_risk,
+  regulatory_change, technical_breakthrough, novel_finding,
+  geopolitical_realignment, cultural_absorption, market_structure_change,
+  precedent_setting, scale_of_impact, first_of_kind.
+- **penalty** (what dragged importance down): 10 tags — high_base_rate,
+  hindsight_required, reversible, single_platform, unreplicated,
+  preclinical_only, speculative_forecast, hype_without_substance,
+  symbolic_only, narrow_audience.
+- **uncertainty** (why confidence is low/medium): 6 tags — novel_event_type,
+  insufficient_evidence, contested_interpretation, long_causal_chain,
+  no_precedent, counterfactual_required.
+- **theme_relationship** (single enum): new_theme, continuation_routine,
+  continuation_escalation, continuation_reversal, continuation_resolution.
+
+Vocabularies are extended by convention (new tag = prompt revision + schema
+migration + backfill). Not extended at inference time.
+
+### Query patterns this enables
+
+```sql
+-- Penalty factors correlated with false positives
+SELECT factor, count(*) AS n
+FROM story_factor sf
+JOIN story s ON s.id = sf.story_id
+JOIN ground_truth gt ON gt.story_id = s.id
+WHERE sf.kind = 'penalty'
+  AND s.passed_gate = true
+  AND gt.ground_truth_score < 2
+GROUP BY factor
+ORDER BY n DESC;
+
+-- Base-rate distribution by category
+SELECT category,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY base_rate_per_year) AS median,
+       percentile_cont(0.9) WITHIN GROUP (ORDER BY base_rate_per_year) AS p90
+FROM story
+GROUP BY category;
+
+-- Confidence calibration — precision by uncertainty tag
+SELECT unnest(uncertainty) AS tag,
+       avg(gt.ground_truth_score) AS avg_gt,
+       count(*) AS n
+FROM story s JOIN ground_truth gt ON gt.story_id = s.id
+WHERE s.passed_gate = true
+GROUP BY tag;
+
+-- Repetition-suppression audit
+SELECT theme_relationship, count(*) FILTER (WHERE passed_gate) AS passed,
+                           count(*) AS total
+FROM story GROUP BY theme_relationship;
+```
 
 ## Minimum viable precision stack
 
