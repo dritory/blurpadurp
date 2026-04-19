@@ -1,3 +1,29 @@
+# editor / os
+.DS_Store
+.vscode/
+.idea/
+
+# deps
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# local env
+.env
+.env.local
+.env.*.local
+
+# bun
+bun.lockb.bak
+
+# data (local docker volumes)
+data/
+
+# legacy jekyll
 _site/
 .sass-cache/
 .jekyll-cache/
