@@ -3,10 +3,22 @@
 ## What this is
 
 An automated, anti-algorithm curated brief. Delivers only the highest-signal
-items from the world's news across all topics. Success metric is the **opposite**
-of engagement: fewer minutes of the reader's time per week = better product.
+items from across news, science, culture, and internet zeitgeist. Success
+metric is the **opposite** of engagement: fewer minutes of the reader's time
+per week = better product.
 
-The operator is also the primary reader. The filter is the product.
+## Mission
+
+**Let readers quit social media for keeping-up.**
+
+Modern social feeds exploit the gap between what the reader wants (dopamine)
+and what they need (durable knowledge). We close that gap by filtering for
+what they need — but with one critical extension: we also cover the *cultural
+zeitgeist* (memes-that-matter, viral moments that enter the shared vocabulary)
+when it has actual staying power. Without that, readers still need social
+media for "what are people talking about," and the promise fails.
+
+The filter is the product. The filter is opinionated and global.
 
 ## Non-negotiable rules
 
@@ -21,18 +33,22 @@ The operator is also the primary reader. The filter is the product.
 5. **Categories on demand, not as layout.** An issue never carries an empty
    "nothing to report in X" section. A category only appears if something in
    it passed the gate this cycle.
-6. **Interruptions are opt-in and rare.** Push notifications and emails are
-   subscribed-to signals that a rare issue arrived, not engagement hooks.
+6. **Interruptions are opt-in, configurable, and rare.** Push and email are
+   subscribed-to signals that a rare issue arrived, delivered at the
+   subscriber's preferred time. Never autoplaying, never badge-counting,
+   never "you missed X items."
+7. **Zero friction to subscribe.** No accounts, no passwords. The
+   subscription itself is the identity. Managing preferences uses signed
+   links from the subscriber's own email/push — no login anywhere.
 
 ## Scope
 
-- **Topics:** all of them. Geopolitics, policy, science, technology, economy,
-  culture, internet culture, environment & climate, health, society.
+- **Topics:** geopolitics, policy, science, technology, economy, culture,
+  internet culture, environment & climate, health, society.
 - **Geography:** global; English-language sources (v1).
-- **Audience:** the operator is reader #1. The product is built for more users
-  from v1 (web + opt-in email + opt-in push), but the rubric stays opinionated
-  and globally applied. The only per-user knob v1 plans for is category mute
-  (schema designed now, UI later).
+- **Audience:** anyone who wants off the social-media treadmill without
+  falling out of the loop. The operator is reader #1. The rubric stays
+  global and opinionated regardless of subscriber count.
 
 ## Explicit non-goals
 
@@ -40,8 +56,8 @@ The operator is also the primary reader. The filter is the product.
 - Not a breaking-news service. Latency of hours-to-days is fine.
 - Not ad-supported. Cost model must stay solo-affordable.
 - Not prediction-driven in v1. Predictive scoring is deferred.
-- Not per-user personalized. The rubric is global. Category mute is the only
-  planned per-user preference (see architecture.md).
+- Not per-user personalized. The rubric is global. Only one per-user knob:
+  category mute (blunt, not smart).
 
 ## Editorial voice
 
@@ -50,19 +66,30 @@ Context only where the reader couldn't reconstruct it themselves. No jokes,
 no cliffhangers, no "as we've reported." Reads like a briefing memo, not a
 magazine column.
 
-## How videos are handled
+## How videos and viral content are handled
 
-Videos are first-class content when they pass the rubric, but the delivery
-pattern refuses the engagement-trap:
+Videos and viral content are first-class because covering them is how the
+product keeps its anti-social-media promise. They're still filtered by the
+rubric — most viral content is high-significance / low-importance and is
+rejected — but the bar for the `internet culture` category is tuned to
+"how out-of-the-loop would a reader feel without knowing this" rather than
+"would this change the world's trajectory."
 
-- Embedded player with **autoplay off, muted by default, no recommended next
-  video, no loop**.
+Signals that boost viral/cultural content importance:
+- Cross-platform spread (not just one platform)
+- Mainstream-media crossover (NYT/Guardian/BBC writes about it)
+- Longevity (still referenced 1–2+ weeks later; Google Trends tail)
+- Derivative production (parodies, remixes, merch — it's entering the
+  vocabulary)
+
+Delivery pattern refuses the engagement trap:
+
+- Embedded player with **autoplay off, muted by default, no recommended
+  next video, no loop**.
 - Every video has a text caption describing what it shows, so a reader can
-  skip the video and still get the information.
+  skip the video and still get the reference.
 - In email, videos become thumbnail + link + text caption.
 - In push notifications, videos are text-only with a "contains video" flag.
 
-Most viral video is high-significance / low-importance and is rejected by
-the rubric. What survives is typically a primary source (a speech, a
-scientific demo, a rare event) where the video adds information beyond what
-text carries.
+The reader "gets" the meme without needing to watch. They aren't lost when
+someone references it — which is the whole point.
