@@ -2,10 +2,9 @@
 // in a new file and add it here. Nothing else in the pipeline changes.
 
 import type { Connector } from "./types.ts";
-import { gdelt } from "./gdelt.ts";
 
 export const connectors: Connector[] = [
-  gdelt,
+  // gdelt,
   // wikipediaCurrentEvents,
   // youtubeTrending,
   // redditTopPosts,
