@@ -1,102 +1,83 @@
-# Open questions
+# Decisions & open questions
 
-Undecided design choices. Each entry lists the question, the leading option,
-and what resolving it unblocks.
+Questions from the initial design conversation. Decisions are locked in the
+docs; remaining open items are flagged below.
 
-## 1. Delivery medium
+## Decided
 
-**Question:** Email, RSS, web page, push notification, SMS, something else?
+### Q1 — Delivery medium ✓
+Web app (primary, public), opt-in email, opt-in web push (VAPID). No native
+mobile app in v1 — PWA covers it. Silence respected across all channels.
+Specified in architecture.md.
 
-**Leading option:** RSS as the primary channel, with optional email digest
-that wraps the RSS entries. Both fit the silence rule natively (empty feed =
-nothing to pull; no email sent if nothing to send). Push notifications are
-ruled out: they're optimized for engagement, the opposite of the product.
+### Q2 — Cadence ✓
+Weekly default, event-driven mid-cycle publication if a single item scores
+`composite ≥ 2 × X`. All thresholds and the cadence interval are config-
+driven, not hardcoded. Specified in architecture.md.
 
-**Unblocks:** composer output format, delivery plumbing, whether to host a
-web archive of past issues.
+### Q3 — Theme granularity ✓
+Narrow story-arcs with automatic merging when centroids converge.
+Specified in architecture.md and scoring.md.
 
-## 2. Cadence target
+### Q4 — Predictive importance
+Deferred from v1. If revisited, the design is a watch list (parked items
+re-scored on new evidence; only publish on retrospective importance
+crossing the threshold). Captured for future work.
 
-**Question:** Daily, weekly, or purely event-driven (publish whenever the
-gate fires)?
+### Q5 — Surrogate / distilled scoring model
+Deferred. LLM scoring is cheap enough at our volume. Log every LLM score
+with its input from day one so distillation is an option later.
 
-**Leading option:** Weekly by default (Sunday run), with event-driven
-publication permitted if a story scores exceptionally high mid-cycle. Silence
-is allowed on any cycle. Weekly is the tuning target for gate calibration
-(aim: 1–5 items clear per average week).
+### Q6 — User configurability ✓
+No per-user rubric tuning, no thumbs up/down learning. One blunt knob
+planned: per-category mute. Schema designed in v1 (`User`,
+`UserCategoryMute`), UI deferred. Default: all categories on.
 
-**Unblocks:** scheduler config, gate threshold calibration, reader
-expectations.
+### Q7 — Product name ✓
+**Blurpadurp.** Matches the domain, refuses to be precious about itself.
 
-## 3. Theme granularity
+### Q8 — Categories ✓
+Ten buckets, locked for v1, revisit after 3 months of data:
 
-**Question:** Broad themes (e.g. "AI") or narrow story-arcs (e.g. "GPT-5
-launch arc")?
+geopolitics, policy, science, technology, economy, culture,
+internet culture, environment & climate, health, society
 
-**Leading option:** Narrow, with LLM-driven merging when two narrow themes
-converge. Broad themes accumulate noise and block everything; narrow themes
-over-fragment without a merge mechanism. Merging is cheap: periodic job that
-checks if two theme centroids have drifted close enough to combine.
+(`business` folded into `economy`; `internet culture` added as distinct
+from traditional culture; `environment` renamed to `environment & climate`.)
 
-**Unblocks:** theme-assignment prompt, repetition-suppression behavior.
+## Still open
 
-## 4. Predictive importance layer
+### O1 — Video source list & vote thresholds
+We're including video content from YouTube Data API, curated YouTube
+channels, and high-upvote-threshold Reddit posts. The specific channel
+whitelist and vote thresholds need to be decided. Start with a small list
+and expand as the pipeline is tuned.
 
-**Question:** Should we score on "might become important" in addition to
-"already is important"?
+**Unblocks:** video ingestion implementation.
 
-**Leading option:** **Out of scope for v1.** Predictive scoring is high-value
-but collides with the zero-false-alarms rule. If revisited, the clean design
-is a watch list (parked items re-scored on new evidence, promoted to publish
-only when retrospective importance crosses the threshold). Not a publishing
-bypass.
+### O2 — Email and push opt-in UX
+Decided the channels exist; the actual sign-up flow, double-opt-in,
+unsubscribe, and PWA install prompts are unspecified. Matters once the
+web app starts being built.
 
-**Unblocks:** nothing right now (deferred).
+**Unblocks:** frontend subscription flow.
 
-## 5. Surrogate / distilled scoring model
+### O3 — Hosting choice
+Vercel / Fly / Railway / self-hosted VPS all work. Pick whichever is
+cheapest and least friction for a solo operator. Not urgent until we ship.
 
-**Question:** Train a cheap classifier on LLM-generated labels, like News
-Minimalist does?
+**Unblocks:** nothing right now.
 
-**Leading option:** **Deferred.** At our volume (~100–300 centroids/day via
-GDELT), LLM scoring is ~$5–10/mo. Distillation solves a cost problem we
-don't have and adds maintenance burden (drift, retraining, rubric rigidity).
-**However:** log every LLM score with its input from day one. If scale or
-latency ever demands a surrogate, we train on accumulated data rather than
-cold-starting.
+### O4 — Gate threshold calibration
+`X` (absolute) and `Δ` (relative) need to be tuned against historical
+GDELT data. Target: 1–5 items pass per average week across all categories,
+with silence ~10–20% of cycles. Requires the scoring prompt to exist first.
 
-**Unblocks:** nothing right now. Logging schema is specified in
-architecture.md.
+**Unblocks:** going live.
 
-## 6. User configurability vs. fixed rubric
+### O5 — Scoring prompt v1
+The rubric design is specified (scoring.md). The actual prompt text, with
+gold anchor examples and structured output fields, is still to be drafted.
+This is where the product really lives.
 
-**Question:** Should the reader be able to tune the rubric (e.g. per-category
-thresholds, topic blocks)?
-
-**Leading option:** No user configuration in v1. The opinionated rubric *is*
-the product. Per-user tuning recreates the filter-bubble problem. Since the
-sole reader is the operator, the operator edits the rubric directly as code,
-not through a UI.
-
-**Unblocks:** UI scope (probably: none beyond a static web archive).
-
-## 7. Product name
-
-**Question:** What is this called?
-
-**Leading option:** Unresolved. Working name: "the brief." Domain on file is
-`blurpadurp.com`. Not committing until the product itself is closer to
-shippable.
-
-**Unblocks:** branding, domain routing, email-from address.
-
-## 8. Categories taxonomy — final list
-
-**Question:** Exact list of top-level categories.
-
-**Leading option:** Ten buckets: geopolitics, policy, science, technology,
-economy, culture, environment, health, business, society. Subject to
-revision after looking at ~3 months of GDELT data to see what clusters
-naturally.
-
-**Unblocks:** category table seed data, per-category calibration targets.
+**Unblocks:** the scorer implementation; everything downstream.
