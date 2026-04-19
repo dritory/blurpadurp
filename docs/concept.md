@@ -11,12 +11,17 @@ per week = better product.
 
 **Let readers quit social media for keeping-up.**
 
-Modern social feeds exploit the gap between what the reader wants (dopamine)
-and what they need (durable knowledge). We close that gap by filtering for
-what they need — but with one critical extension: we also cover the *cultural
-zeitgeist* (memes-that-matter, viral moments that enter the shared vocabulary)
-when it has actual staying power. Without that, readers still need social
-media for "what are people talking about," and the promise fails.
+Most people use social feeds to answer one question: *"What's everyone
+talking about?"* Blurpadurp replaces that function. A reader who follows
+Blurpadurp should be able to hold their own in any interesting
+conversation — at lunch, at a dinner party, at the coffee machine, at
+Easter dinner — without opening TikTok, X, or Reddit.
+
+The gate is **current conversational relevance**, not long-term historical
+weight. We publish what informed adults will actually be discussing over
+the next 1–2 weeks. Long-term "structural" importance is scored separately
+and stored for retrospective curation, but it does not drive the weekly
+publish decision.
 
 The filter is the product. The filter is opinionated and global.
 
@@ -68,19 +73,22 @@ magazine column.
 
 ## How videos and viral content are handled
 
-Videos and viral content are first-class because covering them is how the
-product keeps its anti-social-media promise. They're still filtered by the
-rubric — most viral content is high-significance / low-importance and is
-rejected — but the bar for the `internet culture` category is tuned to
-"how out-of-the-loop would a reader feel without knowing this" rather than
-"would this change the world's trajectory."
+Videos and viral content are first-class. Covering what people are
+discussing is *the mission*, not an edge case. The rubric filters them —
+hype confined to a single platform or vertical press does not pass — but
+hype that has broken through to general conversation does, for the cycle
+or two that conversation lasts.
 
-Signals that boost viral/cultural content importance:
-- Cross-platform spread (not just one platform)
-- Mainstream-media crossover (NYT/Guardian/BBC writes about it)
-- Longevity (still referenced 1–2+ weeks later; Google Trends tail)
-- Derivative production (parodies, remixes, merch — it's entering the
-  vocabulary)
+Signals that boost viral / cultural content zeitgeist scores:
+- Cross-platform spread (3+ platforms)
+- Mainstream-media crossover (NYT / Guardian / BBC writes about it)
+- Sustained attention (Google Trends 14-day tail)
+- Derivative production (parodies, remixes, merch — entering vocabulary)
+
+Signals that keep it out:
+- `in_circle_hype` — tech / crypto / niche press coverage only
+- `manufactured_hype` — PR-driven, no organic discussion
+- `controversy_flash` — 48–72 hour outrage cycles with predictable decay
 
 Delivery pattern refuses the engagement trap:
 

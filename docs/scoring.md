@@ -5,15 +5,19 @@ importance/significance distinction, and the precision bias. This doc
 specifies what the scorer must do, which techniques achieve the precision
 target, and how we maintain calibration over time.
 
-The prompt itself (v1) lives in `scoring-prompt-v1.md`.
+The prompt itself lives in `scoring-prompt.md` (current version: v2).
 
 ## Design target
 
-**Maximize precision. Accept low recall.**
+**Maximize precision on what people discuss now.** Missing a story that
+will matter in 12 months but is currently discussed only by specialists is
+acceptable (it's scored and logged via `structural_importance` for
+retrospective surfacing). Publishing a story nobody discusses is not.
+Silence is cheap.
 
-Missing an important story is tolerable. Publishing a dud is not. Silence is
-the cheapest failure mode. Every technique in this doc trades recall for
-precision.
+The mission is conversational: a subscriber should be able to quit social
+media and still follow every interesting lunch conversation. The gate
+measures that directly.
 
 ## Point-in-time discipline — the master rule
 
@@ -30,40 +34,42 @@ it's also what makes backtesting valid. See `backtesting.md`.
 
 Implication for gold anchors: **they are scored the way a well-calibrated
 observer would have scored them at the time, not the way we know them now.**
-A 2017 transformer paper gets a 3 with low confidence, not a 5. Missing
-future winners is an accepted precision/recall tradeoff.
+A 2017 transformer paper gets a 0 on zeitgeist (no one was discussing it
+in general conversation). Missing that paper is an accepted trade — it is
+an in-circle signal, not zeitgeist.
 
 ## Rubric axes
 
 | Axis | Question | Role |
 |---|---|---|
-| **Importance** (0–5) | Does this change the world's trajectory or the reader's model of it? | Gate (hard threshold) |
-| **Durability** (0–5) | Will this still matter in 12 months? | Multiplies importance |
-| **Non-obviousness** (0–5) | Would the reader learn this anyway? | Penalty: subtracted |
-| **Significance** (0–5) | Raw magnitude / scale / attention | Tiebreaker only; cannot pass the gate alone |
+| **zeitgeist_score** (0–5) | Will informed adults be discussing this in conversations over the next 1–2 weeks? | **Gate** |
+| **half_life** (0–5) | How long before this fades from general conversation? | Multiplier |
+| **reach** (0–5) | How broadly does "discussing this" span demographics? | Tiebreaker |
+| **non_obviousness** (0–5) | Will the reader encounter this in their default channels anyway? | Penalty: subtracted |
+| **structural_importance** (0–5) | Does this change the world's long-term trajectory? | **Logged only — does NOT gate** |
 
-*Significance* (magnitude in the moment) and *importance* (matters to
-world model / decisions) are deliberately separate. A plane crash is highly
-significant but may have low importance. A quiet regulatory change may be
-the reverse. The gate uses importance, not significance.
+The gate is conversational relevance, not world-historical weight.
+`structural_importance` is captured on every story (for retrospective
+curation and future features) but is not part of the publish decision.
 
-### Gate formula (v1)
+### Gate formula
 
 ```
-composite = (importance * durability) - non_obviousness
+composite = (zeitgeist_score * half_life) - non_obviousness
 
-pass_absolute = composite >= X
-pass_relative = composite > (theme.rolling_importance_avg + Δ)
+pass_absolute   = composite >= X
+pass_relative   = composite > (theme.rolling_composite_avg + Δ)
 pass_confidence = (point_in_time_confidence != "low")
-pass          = pass_absolute AND pass_relative AND pass_confidence
+pass            = pass_absolute AND pass_relative AND pass_confidence
 ```
 
 `X` and `Δ` are the two numeric dials. **Low confidence blocks the gate
-regardless of composite.** This is how point-in-time honesty becomes teeth:
-if the scorer can't confidently judge, we don't publish.
+regardless of composite.**
 
 Calibrate `X` and `Δ` against historical GDELT data until the weekly pass
-rate centers on ~1–5 items across all categories.
+rate centers on ~3–10 items. The target silence rate is 1–10% of cycles
+(down from v1's 10–30%) — a weekly "what's happening" feed almost always
+has something worth covering.
 
 ## Precision techniques (inside the scoring prompt)
 
@@ -92,13 +98,19 @@ rate centers on ~1–5 items across all categories.
    High base rate ⇒ importance cap. Low base rate (first-of-kind) ⇒ allowed
    to score high.
 
-5. **Gold anchor examples in the prompt — four buckets.**
-   See `scoring-prompt-v1.md`. Structured as:
-   - **A.** Big-and-recognized-at-the-time (teaches easy 5s)
-   - **B.** Novel-but-uncertain (teaches acceptance of missing future
-     winners — scored 2–3 with low confidence)
-   - **C.** Looked-big-but-fizzled (teaches hype skepticism)
-   - **D.** Correctly-low-at-the-time (teaches the default floor)
+5. **Gold anchor examples in the prompt — seven buckets (v2).**
+   See `scoring-prompt.md`. Structured as:
+   - **A.** Big-and-universally-discussed (easy 5s)
+   - **B.** Novel-specialist at the time — ACCEPTED MISSES (low zeitgeist,
+     low confidence; may have high `structural_importance`)
+   - **C.** Novel-specialist that broke out (publishes once crossover
+     evidence exists, e.g., ChatGPT week 1)
+   - **D.** Cultural / universal-recognition events (Taylor Swift, Prince)
+   - **E.** Hype that broke through (Clubhouse peak, GameStop squeeze —
+     publishes this cycle, decays via half_life)
+   - **F.** In-circle hype that does NOT break through (rejects —
+     `in_circle_hype`, `manufactured_hype`, `controversy_flash`)
+   - **G.** Correctly low (default floor)
 
 6. **Theme-history context injection.**
    For themes with prior stories, the scorer receives the theme's timeline.
@@ -171,8 +183,8 @@ structured companions so the data is SQL-queryable, not just readable.
 
 ```json
 {
-  "schema_version": "1.1",
-  "scorer_version": "prompt-v1.1",
+  "schema_version": "2.0",
+  "scorer_version": "prompt-v2",
   "scored_at": "ISO-8601",
   "as_of_date": "ISO-8601-date",
 
@@ -203,10 +215,11 @@ structured companions so the data is SQL-queryable, not just readable.
   },
 
   "scores": {
-    "importance": 0,
-    "durability": 0,
+    "zeitgeist_score": 0,
+    "half_life": 0,
+    "reach": 0,
     "non_obviousness": 0,
-    "significance": 0,
+    "structural_importance": 0,
     "composite": 0
   },
 
@@ -219,6 +232,9 @@ structured companions so the data is SQL-queryable, not just readable.
 }
 ```
 
+composite = (zeitgeist_score * half_life) - non_obviousness.
+structural_importance is captured but does NOT enter the composite.
+
 Reasoning fields are written before score fields. The gate reads `scores`,
 `reasoning.point_in_time_confidence`, and `reasoning.theme_relationship`
 (the last one feeds repetition-suppression weights). Everything else is for
@@ -228,14 +244,15 @@ auditability, future extension, and analysis.
 
 Full enumeration lives in `scoring-prompt-v1.md`. Summary:
 
-- **trigger** (what pushed importance up): 10 tags — systemic_risk,
-  regulatory_change, technical_breakthrough, novel_finding,
-  geopolitical_realignment, cultural_absorption, market_structure_change,
-  precedent_setting, scale_of_impact, first_of_kind.
-- **penalty** (what dragged importance down): 10 tags — high_base_rate,
+- **trigger** (what pushed zeitgeist/importance up): 11 tags —
+  systemic_risk, regulatory_change, technical_breakthrough, novel_finding,
+  geopolitical_realignment, cultural_absorption, `crossover_discussion`,
+  market_structure_change, precedent_setting, scale_of_impact,
+  first_of_kind.
+- **penalty** (what dragged scores down): 12 tags — high_base_rate,
   hindsight_required, reversible, single_platform, unreplicated,
-  preclinical_only, speculative_forecast, hype_without_substance,
-  symbolic_only, narrow_audience.
+  preclinical_only, speculative_forecast, `in_circle_hype`,
+  `manufactured_hype`, `controversy_flash`, symbolic_only, narrow_audience.
 - **uncertainty** (why confidence is low/medium): 6 tags — novel_event_type,
   insufficient_evidence, contested_interpretation, long_causal_chain,
   no_precedent, counterfactual_required.

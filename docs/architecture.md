@@ -37,8 +37,12 @@ Dispatch layer (runs hourly)
 ```
 
 Two gates must both pass to publish:
-- **Absolute:** `importance × durability − non_obviousness ≥ X`
-- **Relative:** score exceeds the theme's rolling importance average by Δ
+- **Absolute:** `zeitgeist_score × half_life − non_obviousness ≥ X`
+- **Relative:** composite exceeds the theme's rolling composite average by Δ
+- **Confidence:** `point_in_time_confidence != "low"`
+
+`structural_importance` is scored and stored but does NOT enter the gate.
+It feeds retrospective curation later.
 
 Event-driven override: a single item scoring `composite ≥ 2 × X` may publish
 mid-cycle. Subscribers with `urgent_override = true` receive it immediately;
@@ -109,8 +113,8 @@ description           name                     │     content / summary
                       description              │     source_url
                       first_seen_at            │     published_at
                       last_published_at        │     category_id
-                      rolling_importance_avg   │     theme_id ─────────┘
-                      rolling_importance_30d   │     embedding
+                      rolling_composite_avg    │     theme_id ─────────┘
+                      rolling_composite_30d    │     embedding
                       n_stories_published      │     gdelt_event_id
                       centroid_embedding       │     wikipedia_corroborated
                                                │     as_of_date
@@ -120,8 +124,9 @@ description           name                     │     content / summary
                                                │     raw_output (jsonb)
                                                │
                                                │     -- denormalized from raw_output
-                                               │     importance, durability,
-                                               │     non_obviousness, significance
+                                               │     zeitgeist_score, half_life,
+                                               │     reach, non_obviousness,
+                                               │     structural_importance
                                                │     composite
                                                │     point_in_time_confidence
                                                │     theme_relationship
