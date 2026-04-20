@@ -14,6 +14,8 @@ import type {
   ReplayRow,
 } from "../pipeline/fixture.ts";
 import { summarizeReplay } from "../pipeline/fixture.ts";
+import { loadPipelineStatus } from "./status.ts";
+import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { verifyToken } from "../shared/tokens.ts";
@@ -56,7 +58,26 @@ const subscribeLimiter = makeRateLimiter({
 
 export const app = new Hono();
 
-app.get("/health", (c) => c.json({ ok: true }));
+app.get("/health", async (c) => {
+  const s = await loadPipelineStatus();
+  const status = s.db_ok ? 200 : 503;
+  return c.json(
+    {
+      ok: s.db_ok,
+      last_ingest_at: s.last_ingest_at?.toISOString() ?? null,
+      last_ingest_age_sec: s.last_ingest_age_sec,
+      last_score_at: s.last_score_at?.toISOString() ?? null,
+      last_score_age_sec: s.last_score_age_sec,
+      last_issue_at: s.last_issue_at?.toISOString() ?? null,
+      last_issue_age_sec: s.last_issue_age_sec,
+      unscored_backlog: s.unscored_backlog,
+      today_spend_usd: s.today_spend_usd,
+      daily_cap_usd: s.daily_cap_usd,
+      budget_remaining_usd: s.budget_remaining_usd,
+    },
+    status,
+  );
+});
 
 app.get("/", async (c) => {
   const latest = await loadLatestIssue();
@@ -104,6 +125,11 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const data = await loadReview(id);
     if (data === null) return c.notFound();
     return c.html(<AdminReview data={data} />);
+  });
+
+  app.get("/admin/status", async (c) => {
+    const s = await loadPipelineStatus();
+    return c.html(<AdminStatus s={s} />);
   });
 
   app.get("/admin/costs", async (c) => {
