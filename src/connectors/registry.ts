@@ -3,14 +3,15 @@
 
 import type { Connector } from "./types.ts";
 import { gdelt } from "./gdelt.ts";
+import { redditOotl } from "./reddit-ootl.ts";
 import { rss } from "./rss.ts";
 
 export const connectors: Connector[] = [
   gdelt,
   rss,
+  redditOotl,
   // wikipediaCurrentEvents,
   // youtubeTrending,
-  // redditTopPosts,
   // knowYourMeme,
   // googleTrends,
 ];
