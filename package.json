@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "cli": "bun run src/cli.ts",
-    "dev:api": "bun run --watch src/api/index.ts",
+    "dev:api": "bun run --watch src/api/index.tsx",
     "migrate": "bun run src/cli.ts migrate",
     "test": "bun test"
   },
