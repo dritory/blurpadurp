@@ -36,6 +36,11 @@ function readScorerOutput(rawOutput: unknown): {
 const COMPOSER_PROMPT_PATH = "docs/composer-prompt.md";
 const EDITOR_PROMPT_PATH = "docs/editor-prompt.md";
 
+// Only consider stories ingested within this window. Defense-in-depth
+// against stale content leaking through (evergreen RSS items, re-ingested
+// archive URLs). Independent of published_at, which can be NULL.
+const COMPOSE_INGEST_WINDOW_MS = 14 * 24 * 3600_000;
+
 type ConfigMap = {
   "composer.model_id": string;
   "composer.prompt_version": string;
@@ -61,6 +66,7 @@ export async function compose(): Promise<void> {
     maxTokens: cfg["editor.max_tokens"],
   });
 
+  const cutoff = new Date(Date.now() - COMPOSE_INGEST_WINDOW_MS);
   const rows = await db
     .selectFrom("story")
     .leftJoin("theme", "theme.id", "story.theme_id")
@@ -85,6 +91,7 @@ export async function compose(): Promise<void> {
     ])
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
+    .where("story.ingested_at", ">=", cutoff)
     .orderBy("story.composite", "desc")
     .execute();
 

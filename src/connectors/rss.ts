@@ -48,6 +48,13 @@ const PARSER = new Parser({
   },
 });
 
+// Drop RSS items whose pubDate is older than this, and items with no
+// pubDate at all. Quality feeds always date their items; a missing date
+// usually means evergreen or archive content (e.g. the Economist mixes
+// reprints from prior years into its RSS). A 30-day window gives enough
+// slack for mid-pipeline delays without admitting actual archive items.
+const MAX_RSS_AGE_MS = 30 * 24 * 3600_000;
+
 interface RssRaw {
   outlet: string;
   title: string;
@@ -82,14 +89,25 @@ export const rss: Connector = {
     }
 
     const minMs = cursor.last_seen_at?.getTime() ?? 0;
+    const ageFloorMs = Date.now() - MAX_RSS_AGE_MS;
     const fetched_at = new Date();
+    let droppedNoDate = 0;
+    let droppedTooOld = 0;
 
-    return feed.items
+    const items = feed.items
       .filter((i) => typeof i.link === "string" && i.link.length > 0)
       .filter((i) => {
-        if (!i.pubDate) return true;
-        const t = new Date(i.pubDate).getTime();
-        return Number.isFinite(t) ? t > minMs : true;
+        const d = i.pubDate ? safeDate(i.pubDate) : null;
+        if (d === null) {
+          droppedNoDate++;
+          return false;
+        }
+        const t = d.getTime();
+        if (t < ageFloorMs) {
+          droppedTooOld++;
+          return false;
+        }
+        return t > minMs;
       })
       .map((i) => {
         const raw: RssRaw = {
@@ -106,6 +124,13 @@ export const rss: Connector = {
           raw,
         };
       });
+
+    if (droppedNoDate > 0 || droppedTooOld > 0) {
+      console.log(
+        `[rss] ${scope}: dropped ${droppedNoDate} no-date, ${droppedTooOld} too-old`,
+      );
+    }
+    return items;
   },
 
   normalize(item: RawSourceItem): NormalizedStoryInput {
