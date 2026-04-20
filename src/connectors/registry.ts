@@ -3,9 +3,11 @@
 
 import type { Connector } from "./types.ts";
 import { gdelt } from "./gdelt.ts";
+import { rss } from "./rss.ts";
 
 export const connectors: Connector[] = [
   gdelt,
+  rss,
   // wikipediaCurrentEvents,
   // youtubeTrending,
   // redditTopPosts,
