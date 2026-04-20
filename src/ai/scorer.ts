@@ -15,6 +15,7 @@ import {
 } from "../shared/scoring-schema.ts";
 import type { AIStage } from "./types.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
+import { checkBudget } from "./budget.ts";
 
 const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 
@@ -60,6 +61,10 @@ export function makeScorer(config: {
         });
         return ScorerOutputSchema.parse(cached);
       }
+
+      // Guard against runaway spend. Throws BudgetExceededError if today's
+      // accumulated ai_call_log cost has passed config.budget.daily_usd_cap.
+      await checkBudget();
 
       const startedAt = Date.now();
       let output: unknown;
