@@ -5,12 +5,15 @@
 // containing every currently-passing, unpublished story.
 
 import { makeComposer } from "../ai/composer.ts";
+import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
 import type {
   ComposerInput,
   ComposerOutput,
 } from "../shared/composer-schema.ts";
+import type { EditorInput } from "../shared/editor-schema.ts";
+import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
 // Read scorer fields from raw_output jsonb. Old rows (v0.1) stored
 // `one_line_summary` and `reasoning.retrodiction_12mo`; newer rows store
@@ -31,12 +34,16 @@ function readScorerOutput(rawOutput: unknown): {
 }
 
 const COMPOSER_PROMPT_PATH = "docs/composer-prompt.md";
+const EDITOR_PROMPT_PATH = "docs/editor-prompt.md";
 
 type ConfigMap = {
   "composer.model_id": string;
   "composer.prompt_version": string;
   "composer.max_tokens": number;
-  "composer.max_stories": number;
+  "editor.model_id": string;
+  "editor.prompt_version": string;
+  "editor.max_tokens": number;
+  "editor.pool_size": number;
 };
 
 export async function compose(): Promise<void> {
@@ -46,6 +53,12 @@ export async function compose(): Promise<void> {
     modelId: cfg["composer.model_id"],
     promptPath: COMPOSER_PROMPT_PATH,
     maxTokens: cfg["composer.max_tokens"],
+  });
+  const editor = makeEditor({
+    version: cfg["editor.prompt_version"],
+    modelId: cfg["editor.model_id"],
+    promptPath: EDITOR_PROMPT_PATH,
+    maxTokens: cfg["editor.max_tokens"],
   });
 
   const rows = await db
@@ -65,7 +78,9 @@ export async function compose(): Promise<void> {
       "story.zeitgeist_score",
       "story.half_life",
       "story.reach",
+      "story.non_obviousness",
       "story.composite",
+      "story.point_in_time_confidence",
       "story.raw_output",
     ])
     .where("story.passed_gate", "=", true)
@@ -78,30 +93,52 @@ export async function compose(): Promise<void> {
     return;
   }
 
-  // Cap the issue at composer.max_stories. Re-rank passers primarily by
-  // tier-1 source coverage (reputable outlets beat regional aggregators)
-  // and secondarily by composite — keeps the precision story but prefers
-  // events that professional newsrooms actually reported.
+  // Editor picks the shortlist from the top-N passers. Pool is ranked by
+  // tier-1 coverage then composite — gives the editor the highest-quality
+  // slice to curate rather than raw NumMentions leaders.
   const ranked = rows
-    .map((r) => ({
-      row: r,
-      tier1: countTier1([
+    .map((r) => {
+      const allUrls = [
         ...(r.source_url ? [r.source_url] : []),
         ...(r.additional_source_urls ?? []),
-      ]),
-    }))
+      ];
+      return {
+        row: r,
+        tier1: countTier1(allUrls),
+        total: allUrls.length,
+      };
+    })
     .sort((a, b) => {
       if (b.tier1 !== a.tier1) return b.tier1 - a.tier1;
       const ca = a.row.composite !== null ? Number(a.row.composite) : 0;
       const cb = b.row.composite !== null ? Number(b.row.composite) : 0;
       return cb - ca;
     });
-  const capped = ranked
-    .slice(0, cfg["composer.max_stories"])
-    .map((x) => x.row);
-  if (capped.length < rows.length) {
-    console.log(
-      `[compose] ${rows.length} passers → capping issue at ${capped.length} (composer.max_stories)`,
+
+  const poolSize = Math.min(cfg["editor.pool_size"], ranked.length);
+  const pool = ranked.slice(0, poolSize);
+  console.log(
+    `[compose] ${rows.length} passers → editor pool of ${poolSize}`,
+  );
+
+  const picks = await curateViaEditor(editor, pool);
+  const pickIds = new Set(picks.map((p) => p.story_id));
+  const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
+
+  // Order stories by editor-assigned rank (1 = headline). Skip picks that
+  // name an unknown story_id — the tool schema doesn't prevent that.
+  const capped = picks
+    .sort((a, b) => a.rank - b.rank)
+    .map((p) => byId.get(p.story_id))
+    .filter((r): r is NonNullable<typeof r> => r !== undefined);
+
+  if (capped.length === 0) {
+    console.log("[compose] editor returned no valid picks — aborting");
+    return;
+  }
+  if (capped.length !== pickIds.size) {
+    console.warn(
+      `[compose] editor picked ${pickIds.size} ids but only ${capped.length} matched the pool`,
     );
   }
 
@@ -146,6 +183,116 @@ export async function compose(): Promise<void> {
   console.log(
     `[compose] issue ${issueId} published: ${storyIds.length} stories, ${output.markdown.length} md chars`,
   );
+}
+
+// Build an EditorInput from the ranked pool (tier-1 count pre-computed
+// so we can surface it to the editor) and call the editor stage. Returns
+// the editor's picks array (story_id + rank + reason).
+async function curateViaEditor(
+  editor: ReturnType<typeof makeEditor>,
+  pool: Array<{
+    row: Awaited<
+      ReturnType<typeof rowsForEditor>
+    >[number];
+    tier1: number;
+    total: number;
+  }>,
+): Promise<Array<{ story_id: number; rank: number; reason: string }>> {
+  const storyIds = pool.map((p) => Number(p.row.story_id));
+  const factorsByStory = await loadFactorsByStory(storyIds);
+
+  const input: EditorInput = {
+    as_of_date: new Date().toISOString().slice(0, 10),
+    stories: pool.map((p) => {
+      const out = p.row.raw_output as ScorerOutput | null;
+      const factors = factorsByStory.get(Number(p.row.story_id)) ?? {
+        trigger: [],
+        penalty: [],
+      };
+      return {
+        story_id: Number(p.row.story_id),
+        title: p.row.title,
+        category:
+          (p.row.category_slug as EditorInput["stories"][number]["category"]) ??
+          null,
+        theme_name: p.row.theme_name,
+        composite: p.row.composite !== null ? Number(p.row.composite) : 0,
+        zeitgeist: p.row.zeitgeist_score ?? 0,
+        half_life: p.row.half_life ?? 0,
+        reach: p.row.reach ?? 0,
+        non_obviousness: p.row.non_obviousness ?? 0,
+        confidence:
+          (p.row.point_in_time_confidence as
+            | EditorInput["stories"][number]["confidence"]) ?? null,
+        tier1_sources: p.tier1,
+        total_sources: p.total,
+        theme_relationship:
+          (p.row.theme_relationship as
+            | EditorInput["stories"][number]["theme_relationship"]) ?? null,
+        scorer_one_liner: out?.summary ?? "",
+        retrodiction_12mo: out?.reasoning?.retrodiction_12mo ?? "",
+        factors_trigger: factors.trigger,
+        factors_penalty: factors.penalty,
+      };
+    }),
+  };
+
+  const result = await editor.run(input);
+  console.log(
+    `[compose] editor picked ${result.picks.length} stories; cuts: ${result.cuts_summary}`,
+  );
+  return result.picks;
+}
+
+// Typed helper so curateViaEditor's pool parameter can reference the shape.
+async function rowsForEditor() {
+  return db
+    .selectFrom("story")
+    .leftJoin("theme", "theme.id", "story.theme_id")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      "story.id as story_id",
+      "story.title",
+      "story.summary",
+      "story.source_url",
+      "story.additional_source_urls",
+      "category.slug as category_slug",
+      "theme.name as theme_name",
+      "story.theme_id",
+      "story.theme_relationship",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.reach",
+      "story.non_obviousness",
+      "story.composite",
+      "story.point_in_time_confidence",
+      "story.raw_output",
+    ])
+    .where("story.passed_gate", "=", true)
+    .where("story.published_to_reader", "=", false)
+    .orderBy("story.composite", "desc")
+    .execute();
+}
+
+async function loadFactorsByStory(
+  storyIds: number[],
+): Promise<Map<number, { trigger: string[]; penalty: string[] }>> {
+  const out = new Map<number, { trigger: string[]; penalty: string[] }>();
+  if (storyIds.length === 0) return out;
+  const rows = await db
+    .selectFrom("story_factor")
+    .select(["story_id", "kind", "factor"])
+    .where("story_id", "in", storyIds)
+    .where("kind", "in", ["trigger", "penalty"])
+    .execute();
+  for (const r of rows) {
+    const id = Number(r.story_id);
+    const bucket = out.get(id) ?? { trigger: [], penalty: [] };
+    if (r.kind === "trigger") bucket.trigger.push(r.factor);
+    else if (r.kind === "penalty") bucket.penalty.push(r.factor);
+    out.set(id, bucket);
+  }
+  return out;
 }
 
 async function loadPriorThemeContext(
@@ -225,7 +372,10 @@ async function loadConfig(): Promise<ConfigMap> {
     "composer.model_id",
     "composer.prompt_version",
     "composer.max_tokens",
-    "composer.max_stories",
+    "editor.model_id",
+    "editor.prompt_version",
+    "editor.max_tokens",
+    "editor.pool_size",
   ] as const;
   for (const k of required) {
     if (map[k] === undefined) throw new Error(`missing config key: ${k}`);
