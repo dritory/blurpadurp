@@ -24,9 +24,14 @@ gate             (absolute threshold AND relative-to-theme threshold)
  passes         rejected
    │               │
    ↓               ↓
-compose        log + discard
+editor         log + discard
+   │  (LLM curator: picks 10–15 from 30–80 passers —
+   │   topic balance, under-covered-angle preference,
+   │   duplicate collapse; see docs/editor-prompt.md)
    ↓
-persist issue
+compose        (renders four functional sections — Conversation /
+   ↓            Worth knowing / Worth watching / Worth a shrug;
+persist issue   see docs/concept.md#section-scheme)
            ↓
 Dispatch layer (runs hourly)
   For each opted-in subscription:

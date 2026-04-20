@@ -159,6 +159,28 @@ function renderUserMessage(input: ComposerInput): string {
     lines.push(`    retrodiction_12mo: ${s.retrodiction_12mo}`);
     lines.push("");
   }
+  if (input.watch_candidate_ids.length > 0) {
+    lines.push(
+      "watch_candidate_ids (render these ONLY in the Worth watching section, never in Conversation or Worth knowing):",
+    );
+    for (const id of input.watch_candidate_ids) lines.push(`  - ${id}`);
+    lines.push("");
+  }
+  if (input.shrug_candidates.length > 0) {
+    lines.push(
+      "shrug_candidates (separate pool — noise the algorithm pushed this week; one wry line each in Worth a shrug, name the hype, do not elevate):",
+    );
+    for (const s of input.shrug_candidates) {
+      lines.push(`  - story_id: ${s.story_id}`);
+      lines.push(`    title: ${s.title}`);
+      lines.push(`    source_url: ${s.source_url ?? "-"}`);
+      lines.push(`    category: ${s.category ?? "-"}`);
+      lines.push(`    penalty_factors: [${s.penalty_factors.join(", ")}]`);
+      lines.push(`    source_count: ${s.source_count}`);
+      lines.push(`    scorer_one_liner: ${s.scorer_one_liner}`);
+      lines.push("");
+    }
+  }
   if (input.prior_theme_context.length > 0) {
     lines.push(
       "prior_theme_context (most recent item per theme currently being continued):",

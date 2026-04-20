@@ -15,6 +15,24 @@ import type {
 import type { EditorInput } from "../shared/editor-schema.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
+// Penalty factors that push an otherwise-picked story into the Worth
+// watching section rather than the main-body tiers. Mirrors the
+// scoring rubric vocabulary — keep in sync with scoring-schema.ts.
+const WATCH_PENALTY_FACTORS = new Set([
+  "unreplicated",
+  "preclinical_only",
+  "insufficient_evidence",
+]);
+
+// Penalty factors that qualify a scored, failed-gate story for the Worth
+// a shrug section. These are the "hype" markers from the scorer rubric:
+// items the algorithm pushed that this brief refuses.
+const SHRUG_PENALTY_FACTORS = [
+  "in_circle_hype",
+  "manufactured_hype",
+  "controversy_flash",
+] as const;
+
 // Read scorer fields from raw_output jsonb. Old rows (v0.1) stored
 // `one_line_summary` and `reasoning.retrodiction_12mo`; newer rows store
 // `summary` with the reasoning block unchanged for retrodiction.
@@ -174,14 +192,30 @@ export async function compose(): Promise<void> {
     capped.map((r) => r.theme_id).filter((id): id is number => id !== null),
   );
 
+  const cappedIds = capped.map((r) => Number(r.story_id));
+  const cappedFactors = await loadFactorsByStory(cappedIds);
+  const watch_candidate_ids = capped
+    .filter((r) => {
+      const id = Number(r.story_id);
+      const conf = r.point_in_time_confidence;
+      const penalty = cappedFactors.get(id)?.penalty ?? [];
+      const matchesFactor = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
+      return conf === "low" || conf === "medium" || matchesFactor;
+    })
+    .map((r) => Number(r.story_id));
+
+  const shrug_candidates = await loadShrugCandidates(cutoff);
+
   const input: ComposerInput = {
     week_of: new Date().toISOString().slice(0, 10),
     stories,
+    watch_candidate_ids,
+    shrug_candidates,
     prior_theme_context,
   };
 
   console.log(
-    `[compose] composing ${stories.length} stories; prior_theme_context=${prior_theme_context.length}`,
+    `[compose] composing ${stories.length} stories; watch=${watch_candidate_ids.length} shrug=${shrug_candidates.length} prior_theme_context=${prior_theme_context.length}`,
   );
   const output = await composer.run(input);
   const storyIds = stories.map((s) => s.story_id);
@@ -279,6 +313,81 @@ async function rowsForEditor() {
     .where("story.published_to_reader", "=", false)
     .orderBy("story.composite", "desc")
     .execute();
+}
+
+// Worth a shrug: scored-but-failed-gate items in the compose window
+// whose penalty factors include in_circle_hype / manufactured_hype /
+// controversy_flash. Ranked by how many sources carried it (higher =
+// more the algorithm pushed it = better shrug candidate). Capped at 5.
+async function loadShrugCandidates(
+  cutoff: Date,
+): Promise<ComposerInput["shrug_candidates"]> {
+  const rows = await db
+    .selectFrom("story_factor")
+    .innerJoin("story", "story.id", "story_factor.story_id")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      "story.id as story_id",
+      "story.title",
+      "story.source_url",
+      "story.additional_source_urls",
+      "category.slug as category_slug",
+      "story.raw_output",
+      "story_factor.factor as penalty_factor",
+      "story.passed_gate",
+      "story.scored_at",
+    ])
+    .where("story_factor.kind", "=", "penalty")
+    .where("story_factor.factor", "in", [...SHRUG_PENALTY_FACTORS])
+    .where("story.ingested_at", ">=", cutoff)
+    .where("story.scored_at", "is not", null)
+    .where("story.passed_gate", "=", false)
+    .where("story.published_to_reader", "=", false)
+    .execute();
+
+  type Agg = {
+    title: string;
+    source_url: string | null;
+    category: string | null;
+    penalty_factors: Set<string>;
+    source_count: number;
+    scorer_one_liner: string;
+  };
+  const byStory = new Map<number, Agg>();
+  for (const r of rows) {
+    const id = Number(r.story_id);
+    const existing = byStory.get(id);
+    if (existing) {
+      existing.penalty_factors.add(r.penalty_factor);
+      continue;
+    }
+    const out = readScorerOutput(r.raw_output);
+    const urls = [
+      ...(r.source_url ? [r.source_url] : []),
+      ...(r.additional_source_urls ?? []),
+    ];
+    byStory.set(id, {
+      title: r.title,
+      source_url: r.source_url,
+      category: r.category_slug ?? null,
+      penalty_factors: new Set([r.penalty_factor]),
+      source_count: Math.max(urls.length, 1),
+      scorer_one_liner: out.summary,
+    });
+  }
+
+  return [...byStory.entries()]
+    .sort((a, b) => b[1].source_count - a[1].source_count)
+    .slice(0, 5)
+    .map(([story_id, v]) => ({
+      story_id,
+      title: v.title,
+      source_url: v.source_url,
+      category: v.category as ComposerInput["shrug_candidates"][number]["category"],
+      penalty_factors: [...v.penalty_factors],
+      source_count: v.source_count,
+      scorer_one_liner: v.scorer_one_liner,
+    }));
 }
 
 async function loadFactorsByStory(

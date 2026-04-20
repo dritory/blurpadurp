@@ -66,10 +66,53 @@ The filter is the product. The filter is opinionated and global.
 
 ## Editorial voice
 
-Declarative, compressed, factual. Assumes a curious, literate adult reader.
-Context only where the reader couldn't reconstruct it themselves. No jokes,
-no cliffhangers, no "as we've reported." Reads like a briefing memo, not a
-magazine column.
+Wry, dry, observant. A sharp-eyed friend recapping the week — not a wire
+service, not a press release, not an anchor reading a teleprompter. The
+register is consistent across hard news and cultural items: understatement
+and one sharp observation per story. Wit lives in word choice and
+observation, never in jokes at the subject's expense. Assumes a curious,
+literate adult reader. Context only where the reader couldn't reconstruct
+it themselves. No cliffhangers, no "as we've reported," no
+click-to-read-more. Closer to *The Economist*'s Espresso or Matt Levine's
+Money Stuff than to a digest.
+
+## Editorial principles
+
+- **Consequential only.** No cherry-picked quotes, no motive attribution,
+  no "this could turn into something." Enforced mechanically by the
+  scorer's confidence gate and the 12-month retrodiction field.
+- **Context, not interpretation.** Opinionated on *what belongs in the
+  brief*, neutral on *what to think of it*. We give readers enough context
+  to connect dots themselves; we do not tell them the conclusion.
+- **Ride for the generalists.** Ten categories, no specialization. A reader
+  should leave each issue with a wider surface area, not a deeper trench.
+- **Silence is a feature.** Already stated above as a rule; restated here
+  so it reads alongside the others.
+
+## What we refuse
+
+- Sports results (unless civic-scale — Olympics, World Cup finals).
+- Routine product launches, earnings beats, and horse-race polling.
+- Individual crime without a systemic angle.
+- Weather without unprecedented scale.
+- Award ceremonies (unless the outcome is the story).
+- Viral content trapped on a single platform.
+- Celebrity personal lives (unless universally-known subject at a life
+  milestone, or a public-interest legal matter).
+- In-circle hype, manufactured hype, and controversy-flashes — named and
+  dismissed in the *Worth a shrug* section rather than covered.
+
+## Section scheme
+
+Every issue is organized into the same four functional sections. Any
+section may be empty; missing sections are simply omitted.
+
+| Section | What it holds |
+|---|---|
+| **This week's conversation** | The items a reader will be asked about. Highest-signal gate-passers, full paragraphs. |
+| **Worth knowing** | Gate-passers that matter even if nobody's talking about them yet. Tight one-paragraph items. |
+| **Worth watching** | Items on emerging or uncertain threads — passed the gate but still developing. One sentence each. |
+| **Worth a shrug** | The anti-FOMO section. Hype the algorithm pushed this week that didn't clear our gate — named, one wry line, dismissed. |
 
 ## How videos and viral content are handled
 

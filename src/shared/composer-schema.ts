@@ -3,6 +3,17 @@
 import { z } from "zod";
 import { categorySlug, themeRelationship } from "./scoring-schema.ts";
 
+export const ShrugCandidateSchema = z.object({
+  story_id: z.number(),
+  title: z.string(),
+  source_url: z.string().nullable(),
+  category: z.enum(categorySlug).nullable(),
+  penalty_factors: z.array(z.string()),
+  source_count: z.number(),
+  scorer_one_liner: z.string(),
+});
+export type ShrugCandidate = z.infer<typeof ShrugCandidateSchema>;
+
 export const ComposerInputSchema = z.object({
   week_of: z.string(),
   stories: z.array(
@@ -23,6 +34,8 @@ export const ComposerInputSchema = z.object({
       retrodiction_12mo: z.string(),
     }),
   ),
+  watch_candidate_ids: z.array(z.number()),
+  shrug_candidates: z.array(ShrugCandidateSchema),
   prior_theme_context: z.array(
     z.object({
       theme_name: z.string(),
