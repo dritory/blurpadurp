@@ -66,6 +66,10 @@ export interface Database {
     video_duration_sec: number | null;
     video_caption: string | null;
     additional_source_urls: Generated<string[]>;
+    first_pass_composite: string | null;
+    first_pass_model_id: string | null;
+    first_pass_prompt_version: string | null;
+    first_pass_scored_at: Date | null;
   };
 
   story_factor: {

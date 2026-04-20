@@ -34,6 +34,10 @@ type ConfigMap = {
   "scorer.prompt_path": string;
   "scorer.max_tokens": number;
   "scorer.temperature": number;
+  "scorer.prefilter_model_id": string | null;
+  "scorer.prefilter_prompt_version": string;
+  "scorer.prefilter_top_fraction": number;
+  "scorer.prefilter_max_tokens": number;
   "gate.x_threshold": number;
   "gate.delta": number;
   "gate.confidence_floor": "low" | "medium" | "high";
@@ -49,7 +53,7 @@ export async function score(): Promise<void> {
     temperature: cfg["scorer.temperature"],
   });
 
-  const stories = await db
+  const prefilterCandidates = await db
     .selectFrom("story")
     .selectAll()
     .where("scored_at", "is", null)
@@ -57,18 +61,50 @@ export async function score(): Promise<void> {
     .orderBy("ingested_at", "asc")
     .execute();
 
-  console.log(`[score] ${stories.length} unscored stories`);
+  // Progressive scoring phase A: cheap-model prefilter on everything that
+  // hasn't been looked at yet. Populates first_pass_* columns but does
+  // not touch theme attach, embeddings, or the main scored fields.
+  const prefilterModel = cfg["scorer.prefilter_model_id"];
+  if (prefilterModel !== null) {
+    const needsPrefilter = prefilterCandidates.filter(
+      (s) => s.first_pass_scored_at === null,
+    );
+    if (needsPrefilter.length > 0) {
+      await runPrefilterPass(needsPrefilter, cfg);
+    }
+  }
+
+  // Select the cohort for the full (expensive) pass. When prefilter is
+  // active, that's the top-fraction by first_pass_composite. When it's
+  // disabled, we fall back to everything unscored + non-rejected.
+  const stories =
+    prefilterModel === null
+      ? prefilterCandidates
+      : selectTopByPrefilter(
+          prefilterCandidates,
+          cfg["scorer.prefilter_top_fraction"],
+        );
+
+  console.log(
+    `[score] ${stories.length} stories for full scoring` +
+      (prefilterModel !== null
+        ? ` (prefilter picked top ${Math.round(cfg["scorer.prefilter_top_fraction"] * 100)}% of ${prefilterCandidates.length})`
+        : ""),
+  );
   await preEmbedStories(stories);
 
-  const refreshed = await db
-    .selectFrom("story")
-    .selectAll()
-    .where(
-      "id",
-      "in",
-      stories.map((s) => s.id),
-    )
-    .execute();
+  const refreshed =
+    stories.length === 0
+      ? []
+      : await db
+          .selectFrom("story")
+          .selectAll()
+          .where(
+            "id",
+            "in",
+            stories.map((s) => s.id),
+          )
+          .execute();
 
   const total = refreshed.length;
   const runStart = Date.now();
@@ -99,6 +135,83 @@ export async function score(): Promise<void> {
     }
   });
   console.log(`[score] done ok=${ok} fail=${fail}`);
+}
+
+// Progressive scoring phase A. Runs every unscored story through the
+// cheap prefilter model. Skips theme_context / embeddings — prefilter
+// scores on title + summary alone. Writes only first_pass_* columns.
+async function runPrefilterPass(
+  stories: Array<Selectable<Database["story"]>>,
+  cfg: ConfigMap,
+): Promise<void> {
+  const modelId = cfg["scorer.prefilter_model_id"];
+  if (modelId === null) return;
+  const scorer = makeScorer({
+    version: cfg["scorer.prefilter_prompt_version"],
+    modelId,
+    promptPath: cfg["scorer.prompt_path"],
+    maxTokens: cfg["scorer.prefilter_max_tokens"],
+    temperature: 0,
+  });
+
+  console.log(
+    `[score] prefilter: ${stories.length} stories with ${modelId}`,
+  );
+  let done = 0;
+  await mapLimit(stories, SCORING_CONCURRENCY, async (story) => {
+    try {
+      const input: ScorerInput = buildScorerInput(story, {
+        existing_theme: null,
+        nearby_recent_stories: [],
+      });
+      const output = await scorer.run(input);
+      await db
+        .updateTable("story")
+        .set({
+          first_pass_composite: String(output.scores.composite),
+          first_pass_model_id: modelId,
+          first_pass_prompt_version: cfg["scorer.prefilter_prompt_version"],
+          first_pass_scored_at: new Date(),
+          // Early-reject from prefilter should still flag the row so the
+          // final pass skips it — saves a full-model call on obvious junk.
+          early_reject: output.classification.early_reject
+            ? true
+            : (story.early_reject as unknown as boolean),
+        })
+        .where("id", "=", story.id)
+        .execute();
+      done++;
+      if (done % 20 === 0) {
+        console.log(`[score] prefilter ${done}/${stories.length}`);
+      }
+    } catch (err) {
+      done++;
+      console.error(
+        `[score] prefilter id=${story.id} failed:`,
+        err,
+      );
+    }
+  });
+  console.log(`[score] prefilter done`);
+}
+
+// Given the full candidate pool with (possibly) populated first_pass_composite,
+// return the top-fraction by prefilter composite. Stories without a
+// prefilter score (shouldn't happen in practice but defensive) rank last.
+function selectTopByPrefilter<
+  T extends { id: number; first_pass_composite: string | null; early_reject: boolean },
+>(all: T[], topFraction: number): T[] {
+  const eligible = all.filter((s) => !s.early_reject);
+  if (eligible.length === 0) return [];
+  const sorted = [...eligible].sort((a, b) => {
+    const ca =
+      a.first_pass_composite !== null ? Number(a.first_pass_composite) : -1;
+    const cb =
+      b.first_pass_composite !== null ? Number(b.first_pass_composite) : -1;
+    return cb - ca;
+  });
+  const cut = Math.max(1, Math.ceil(sorted.length * topFraction));
+  return sorted.slice(0, cut);
 }
 
 type StoryRow = Selectable<Database["story"]>;
@@ -576,5 +689,11 @@ async function loadConfig(): Promise<ConfigMap> {
   for (const k of required) {
     if (map[k] === undefined) throw new Error(`missing config key: ${k}`);
   }
+  // Optional prefilter knobs default gracefully so a repo without
+  // migration 011 still scores single-pass.
+  map["scorer.prefilter_model_id"] ??= null;
+  map["scorer.prefilter_prompt_version"] ??= map["scorer.prompt_version"];
+  map["scorer.prefilter_top_fraction"] ??= 0.3;
+  map["scorer.prefilter_max_tokens"] ??= 1500;
   return map as ConfigMap;
 }
