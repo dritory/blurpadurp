@@ -39,6 +39,7 @@ import {
   type EditorReviewData,
 } from "../views/admin-review.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
+import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
@@ -679,6 +680,19 @@ function parseFlash(
   }
   return null;
 }
+
+app.notFound((c) => c.html(<NotFoundPage />, 404));
+
+app.onError((err, c) => {
+  console.error("[api]", err);
+  const detail =
+    getEnvOptional("NODE_ENV") === "production"
+      ? undefined
+      : err instanceof Error
+        ? err.stack ?? err.message
+        : String(err);
+  return c.html(<ServerErrorPage detail={detail} />, 500);
+});
 
 // Run directly: `bun run src/api/index.ts`
 if (import.meta.main) {
