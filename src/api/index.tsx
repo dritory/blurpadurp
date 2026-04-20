@@ -29,6 +29,11 @@ import {
   type CostDashboardData,
 } from "../views/admin-costs.tsx";
 import {
+  AdminEval,
+  type EvalCandidate,
+  type EvalStats,
+} from "../views/admin-eval.tsx";
+import {
   AdminCaptureView,
   AdminFixturesList,
   AdminReplayView,
@@ -136,6 +141,46 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   app.get("/admin/costs", async (c) => {
     const data = await loadCostData();
     return c.html(<AdminCosts data={data} />);
+  });
+
+  app.get("/admin/eval", async (c) => {
+    const stats = await loadEvalStats();
+    const candidate = await loadNextEvalCandidate();
+    const flash =
+      c.req.query("saved") !== undefined ? "Labeled. Next:" : null;
+    return c.html(<AdminEval stats={stats} candidate={candidate} flash={flash} />);
+  });
+
+  app.post("/admin/eval", async (c) => {
+    const body = await c.req.parseBody();
+    const storyId = Number(body.story_id);
+    const label = String(body.label ?? "");
+    const notes =
+      typeof body.notes === "string" && body.notes.trim().length > 0
+        ? body.notes.trim().slice(0, 400)
+        : null;
+    if (!Number.isFinite(storyId) || storyId <= 0) {
+      return c.redirect("/admin/eval", 303);
+    }
+    if (!["yes", "maybe", "no", "skip"].includes(label)) {
+      return c.redirect("/admin/eval", 303);
+    }
+    await db
+      .insertInto("eval_label")
+      .values({
+        story_id: storyId,
+        label: label as "yes" | "maybe" | "no" | "skip",
+        notes,
+      })
+      .onConflict((oc) =>
+        oc.column("story_id").doUpdateSet({
+          label: label as "yes" | "maybe" | "no" | "skip",
+          notes,
+          labeled_at: new Date(),
+        }),
+      )
+      .execute();
+    return c.redirect("/admin/eval?saved=1", 303);
   });
 
   app.get("/admin/config", async (c) => {
@@ -490,6 +535,73 @@ async function loadCostData(): Promise<CostDashboardData> {
     todaySpend,
     dailyCap: cap !== null && Number.isFinite(cap) ? cap : null,
     knownStages: [...knownStages].sort(),
+  };
+}
+
+async function loadEvalStats(): Promise<EvalStats> {
+  const countsRow = await db
+    .selectFrom("eval_label")
+    .select(["label", sql<string>`count(*)`.as("n")])
+    .groupBy("label")
+    .execute();
+  const counts: Record<string, number> = {};
+  for (const r of countsRow) counts[r.label] = Number(r.n);
+  const labeled = Object.values(counts).reduce((a, b) => a + b, 0);
+  const totalRow = await db
+    .selectFrom("story")
+    .select(sql<string>`count(*)`.as("n"))
+    .where("scored_at", "is not", null)
+    .where("early_reject", "=", false)
+    .executeTakeFirst();
+  return {
+    total: Number(totalRow?.n ?? 0),
+    labeled,
+    yes: counts["yes"] ?? 0,
+    maybe: counts["maybe"] ?? 0,
+    no: counts["no"] ?? 0,
+    skip: counts["skip"] ?? 0,
+  };
+}
+
+// Next unlabeled story: any scored, non-early-rejected story not yet in
+// eval_label. Orders by composite DESC so we hit the interesting items
+// first — the scorer's top picks are the ones that most need a second
+// opinion.
+async function loadNextEvalCandidate(): Promise<EvalCandidate | null> {
+  const row = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .leftJoin("eval_label", "eval_label.story_id", "story.id")
+    .select([
+      "story.id",
+      "story.title",
+      "story.source_url",
+      "category.slug as category_slug",
+      "story.composite",
+      "story.point_in_time_confidence",
+      "story.raw_output",
+      "story.ingested_at",
+    ])
+    .where("story.scored_at", "is not", null)
+    .where("story.early_reject", "=", false)
+    .where("eval_label.story_id", "is", null)
+    .orderBy("story.composite", "desc")
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) return null;
+  const r = row.raw_output as
+    | { summary?: string; reasoning?: { retrodiction_12mo?: string } }
+    | null;
+  return {
+    story_id: Number(row.id),
+    title: row.title,
+    source_url: row.source_url,
+    category: row.category_slug,
+    composite: row.composite !== null ? Number(row.composite) : null,
+    confidence: row.point_in_time_confidence,
+    scorerOneLiner: r?.summary ?? "",
+    retrodiction: r?.reasoning?.retrodiction_12mo ?? "",
+    ingestedAt: row.ingested_at,
   };
 }
 

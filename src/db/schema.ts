@@ -184,4 +184,11 @@ export interface Database {
     name: string;
     applied_at: Created;
   };
+
+  eval_label: {
+    story_id: number;
+    label: "yes" | "maybe" | "no" | "skip";
+    notes: string | null;
+    labeled_at: Created;
+  };
 }

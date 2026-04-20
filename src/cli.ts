@@ -16,6 +16,7 @@ const SUBCOMMANDS = [
   "retag",
   "fixture-capture",
   "fixture-replay",
+  "eval",
 ] as const;
 
 type Sub = (typeof SUBCOMMANDS)[number];
@@ -71,6 +72,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       });
       return;
     }
+    case "eval":
+      await (await import("./pipeline/eval.ts")).evalSummary();
+      return;
   }
 }
 
