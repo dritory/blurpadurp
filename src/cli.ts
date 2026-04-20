@@ -11,6 +11,7 @@ const SUBCOMMANDS = [
   "score",
   "compose",
   "dispatch",
+  "urgent",
   "reembed",
   "retag",
 ] as const;
@@ -33,6 +34,9 @@ async function run(sub: Sub): Promise<void> {
       return;
     case "dispatch":
       await (await import("./pipeline/dispatch.ts")).dispatch();
+      return;
+    case "urgent":
+      await (await import("./pipeline/urgent.ts")).urgent();
       return;
     case "reembed":
       await (await import("./pipeline/reembed.ts")).reembed();
