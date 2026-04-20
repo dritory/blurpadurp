@@ -18,6 +18,7 @@ import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
+import { ThemePage, type ThemeViewData } from "../views/theme.tsx";
 import { TokenResultPage } from "../views/token-result.tsx";
 
 const PUBLIC_URL =
@@ -55,6 +56,14 @@ app.get("/issue/:id", async (c) => {
 });
 
 app.get("/about", (c) => c.html(<About />));
+
+app.get("/theme/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id) || id <= 0) return c.notFound();
+  const data = await loadTheme(id);
+  if (data === null) return c.notFound();
+  return c.html(<ThemePage data={data} />);
+});
 
 // --- admin (basic auth via ADMIN_USER / ADMIN_PASSWORD) ---
 
@@ -236,6 +245,84 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
     html: row.composed_html,
+  };
+}
+
+async function loadTheme(id: number): Promise<ThemeViewData | null> {
+  const theme = await db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "theme.description",
+      "theme.first_seen_at",
+      "theme.n_stories_published",
+      "category.slug as category_slug",
+    ])
+    .where("theme.id", "=", id)
+    .executeTakeFirst();
+  if (!theme) return null;
+
+  const stories = await db
+    .selectFrom("story")
+    .select([
+      "id",
+      "title",
+      "published_at",
+      "published_to_reader",
+      "source_url",
+      "raw_output",
+    ])
+    .where("theme_id", "=", id)
+    .where((eb) =>
+      eb.or([
+        eb("passed_gate", "=", true),
+        eb("published_to_reader", "=", true),
+      ]),
+    )
+    .orderBy("published_at", "desc")
+    .limit(100)
+    .execute();
+
+  // Resolve issue_id per story via issue.story_ids. Cheap full-scan:
+  // weekly cadence puts an upper bound around ~50 issues/year, so we
+  // skip the ANY/&& array indexing dance for now.
+  const storyIdSet = new Set(stories.map((s) => Number(s.id)));
+  const issueOf = new Map<number, number>();
+  if (storyIdSet.size > 0) {
+    const issueRows = await db
+      .selectFrom("issue")
+      .select(["id", "story_ids"])
+      .orderBy("published_at", "desc")
+      .execute();
+    for (const iss of issueRows) {
+      for (const sid of iss.story_ids ?? []) {
+        const n = Number(sid);
+        if (storyIdSet.has(n) && !issueOf.has(n)) issueOf.set(n, Number(iss.id));
+      }
+    }
+  }
+
+  return {
+    id: Number(theme.id),
+    name: theme.name,
+    description: theme.description,
+    category: theme.category_slug,
+    firstSeenAt: theme.first_seen_at,
+    nStoriesPublished: theme.n_stories_published,
+    stories: stories.map((s) => {
+      const r = s.raw_output as { summary?: string; one_line_summary?: string } | null;
+      return {
+        id: Number(s.id),
+        title: s.title,
+        publishedAt: s.published_at,
+        publishedToReader: s.published_to_reader,
+        sourceUrl: s.source_url,
+        oneLiner: r?.summary ?? r?.one_line_summary ?? "",
+        issueId: issueOf.get(Number(s.id)) ?? null,
+      };
+    }),
   };
 }
 
