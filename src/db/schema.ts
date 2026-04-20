@@ -83,6 +83,8 @@ export interface Database {
     story_ids: number[];
     composer_prompt_version: string | null;
     composer_model_id: string | null;
+    editor_output_jsonb: JSONColumnType<unknown> | null;
+    shrug_candidates_jsonb: JSONColumnType<unknown> | null;
   };
 
   email_subscription: {

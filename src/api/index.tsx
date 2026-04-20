@@ -2,12 +2,17 @@
 // No accounts — subscription is the identity. All routes are public.
 
 import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
 import { z } from "zod";
 
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
+import {
+  AdminReview,
+  type EditorReviewData,
+} from "../views/admin-review.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
@@ -42,6 +47,33 @@ app.get("/issue/:id", async (c) => {
 });
 
 app.get("/about", (c) => c.html(<About />));
+
+// --- admin (basic auth via ADMIN_USER / ADMIN_PASSWORD) ---
+
+const adminUser = getEnvOptional("ADMIN_USER") ?? "admin";
+const adminPassword = getEnvOptional("ADMIN_PASSWORD");
+
+if (adminPassword !== undefined && adminPassword.length > 0) {
+  app.use(
+    "/admin/*",
+    basicAuth({ username: adminUser, password: adminPassword }),
+  );
+
+  app.get("/admin/review/:id", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const data = await loadReview(id);
+    if (data === null) return c.notFound();
+    return c.html(<AdminReview data={data} />);
+  });
+} else {
+  app.all("/admin/*", (c) =>
+    c.text(
+      "Admin disabled. Set ADMIN_PASSWORD in the environment to enable.",
+      503,
+    ),
+  );
+}
 
 app.get("/feed.xml", async (c) => {
   const rows = await db
@@ -151,6 +183,49 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
     html: row.composed_html,
+  };
+}
+
+async function loadReview(id: number): Promise<EditorReviewData | null> {
+  const iss = await db
+    .selectFrom("issue")
+    .select([
+      "id",
+      "published_at",
+      "is_event_driven",
+      "composer_prompt_version",
+      "composer_model_id",
+      "story_ids",
+      "editor_output_jsonb",
+      "shrug_candidates_jsonb",
+    ])
+    .where("id", "=", id)
+    .executeTakeFirst();
+  if (!iss) return null;
+
+  const storyIds = iss.story_ids ?? [];
+  const titleRows = storyIds.length
+    ? await db
+        .selectFrom("story")
+        .select(["id", "title"])
+        .where("id", "in", storyIds)
+        .execute()
+    : [];
+  const storyTitles = new Map<number, string>(
+    titleRows.map((r) => [Number(r.id), r.title]),
+  );
+
+  return {
+    issue: {
+      id: Number(iss.id),
+      publishedAt: iss.published_at,
+      isEventDriven: iss.is_event_driven,
+      composerPromptVersion: iss.composer_prompt_version,
+      composerModelId: iss.composer_model_id,
+    },
+    editor: iss.editor_output_jsonb as EditorReviewData["editor"],
+    storyTitles,
+    shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
   };
 }
 

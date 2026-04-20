@@ -146,7 +146,8 @@ export async function compose(): Promise<void> {
     `[compose] ${rows.length} passers → editor pool of ${poolSize}`,
   );
 
-  const picks = await curateViaEditor(editor, pool);
+  const editorResult = await curateViaEditor(editor, pool);
+  const picks = editorResult.picks;
   const pickIds = new Set(picks.map((p) => p.story_id));
   const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
 
@@ -220,7 +221,13 @@ export async function compose(): Promise<void> {
   const output = await composer.run(input);
   const storyIds = stories.map((s) => s.story_id);
 
-  const issueId = await persistIssue(output, storyIds, cfg);
+  const issueId = await persistIssue(
+    output,
+    storyIds,
+    cfg,
+    editorResult,
+    shrug_candidates,
+  );
   console.log(
     `[compose] issue ${issueId} published: ${storyIds.length} stories, ${output.markdown.length} md chars`,
   );
@@ -228,7 +235,8 @@ export async function compose(): Promise<void> {
 
 // Build an EditorInput from the ranked pool (tier-1 count pre-computed
 // so we can surface it to the editor) and call the editor stage. Returns
-// the editor's picks array (story_id + rank + reason).
+// the editor's full output so compose can persist cuts_summary onto the
+// issue for the admin review page.
 async function curateViaEditor(
   editor: ReturnType<typeof makeEditor>,
   pool: Array<{
@@ -238,7 +246,10 @@ async function curateViaEditor(
     tier1: number;
     total: number;
   }>,
-): Promise<Array<{ story_id: number; rank: number; reason: string }>> {
+): Promise<{
+  picks: Array<{ story_id: number; rank: number; reason: string }>;
+  cuts_summary: string;
+}> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
 
@@ -282,7 +293,7 @@ async function curateViaEditor(
   console.log(
     `[compose] editor picked ${result.picks.length} stories; cuts: ${result.cuts_summary}`,
   );
-  return result.picks;
+  return { picks: result.picks, cuts_summary: result.cuts_summary };
 }
 
 // Typed helper so curateViaEditor's pool parameter can reference the shape.
@@ -448,6 +459,11 @@ async function persistIssue(
   output: ComposerOutput,
   storyIds: number[],
   cfg: ConfigMap,
+  editorResult: {
+    picks: Array<{ story_id: number; rank: number; reason: string }>;
+    cuts_summary: string;
+  },
+  shrugCandidates: ComposerInput["shrug_candidates"],
 ): Promise<number> {
   return db.transaction().execute(async (tx) => {
     const issue = await tx
@@ -459,6 +475,8 @@ async function persistIssue(
         story_ids: storyIds,
         composer_prompt_version: cfg["composer.prompt_version"],
         composer_model_id: cfg["composer.model_id"],
+        editor_output_jsonb: JSON.stringify(editorResult) as never,
+        shrug_candidates_jsonb: JSON.stringify(shrugCandidates) as never,
       })
       .returning("id")
       .executeTakeFirstOrThrow();
