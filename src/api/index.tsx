@@ -34,6 +34,25 @@ import {
   type EvalStats,
 } from "../views/admin-eval.tsx";
 import {
+  AdminExplore,
+  type ExplorerData,
+} from "../views/admin-explore.tsx";
+import {
+  AdminExploreGate,
+  type GateSandboxData,
+} from "../views/admin-explore-gate.tsx";
+import {
+  AdminExploreStories,
+  type StoriesData,
+  type StoryFilter,
+  type GateFilter,
+  type SortKey,
+} from "../views/admin-explore-stories.tsx";
+import {
+  AdminExploreStory,
+  type StoryDrilldown,
+} from "../views/admin-explore-story.tsx";
+import {
   AdminCaptureView,
   AdminFixturesList,
   AdminReplayView,
@@ -141,6 +160,40 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   app.get("/admin/costs", async (c) => {
     const data = await loadCostData();
     return c.html(<AdminCosts data={data} />);
+  });
+
+  app.get("/admin/explore", async (c) => {
+    const data = await loadExplorerData();
+    return c.html(<AdminExplore data={data} />);
+  });
+
+  app.get("/admin/explore/stories", async (c) => {
+    const filter = parseStoryFilter(c.req.query());
+    const data = await loadStoriesData(filter);
+    return c.html(<AdminExploreStories data={data} />);
+  });
+
+  app.get("/admin/explore/story/:id", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const d = await loadStoryDrilldown(id);
+    if (d === null) return c.notFound();
+    return c.html(<AdminExploreStory d={d} />);
+  });
+
+  app.get("/admin/explore/gate", async (c) => {
+    const q = c.req.query();
+    const lookback = clampInt(q.days, 7, 365, 30);
+    const x = clampInt(q.x, 0, 25, -1);
+    const cf = (q.cf === "low" || q.cf === "medium" || q.cf === "high")
+      ? q.cf
+      : null;
+    const data = await loadGateSandboxData({
+      lookbackDays: lookback,
+      xThreshold: x,
+      confidenceFloor: cf,
+    });
+    return c.html(<AdminExploreGate d={data} />);
   });
 
   app.get("/admin/eval", async (c) => {
@@ -535,6 +588,606 @@ async function loadCostData(): Promise<CostDashboardData> {
     todaySpend,
     dailyCap: cap !== null && Number.isFinite(cap) ? cap : null,
     knownStages: [...knownStages].sort(),
+  };
+}
+
+// --- Explorer loaders ---
+
+function clampInt(
+  raw: string | undefined,
+  lo: number,
+  hi: number,
+  fallback: number,
+): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+async function loadExplorerData(): Promise<ExplorerData> {
+  const since30 = new Date(Date.now() - 30 * 24 * 3600_000);
+
+  // Corpus counts — scalar subqueries are cheaper than multiple round-trips.
+  const corpusRow = await db
+    .selectNoFrom([
+      sql<string>`(select count(*) from story)`.as("total"),
+      sql<string>`(select count(*) from story where ingested_at >= ${since30})`.as(
+        "ingested_30",
+      ),
+      sql<string>`(select count(*) from story where scored_at is not null)`.as(
+        "scored",
+      ),
+      sql<string>`(select count(*) from story where scored_at >= ${since30})`.as(
+        "scored_30",
+      ),
+      sql<string>`(select count(*) from story where passed_gate = true)`.as(
+        "passed",
+      ),
+      sql<string>`(select count(*) from story where passed_gate = true and scored_at >= ${since30})`.as(
+        "passed_30",
+      ),
+      sql<string>`(select count(*) from story where early_reject = true)`.as(
+        "rejected",
+      ),
+      sql<string>`(select count(*) from story where published_to_reader = true)`.as(
+        "published",
+      ),
+      sql<string>`(select count(*) from theme)`.as("themes"),
+      sql<string>`(select count(*) from issue)`.as("issues"),
+    ])
+    .executeTakeFirstOrThrow();
+
+  // Score vectors over the last 30d.
+  const scored = await db
+    .selectFrom("story")
+    .select([
+      "composite",
+      "zeitgeist_score",
+      "half_life",
+      "reach",
+      "non_obviousness",
+      "structural_importance",
+    ])
+    .where("scored_at", ">=", since30)
+    .where("early_reject", "=", false)
+    .execute();
+
+  const composites = scored
+    .map((r) => (r.composite !== null ? Number(r.composite) : null))
+    .filter((v): v is number => v !== null);
+  const zeitgeist = scored
+    .map((r) => r.zeitgeist_score)
+    .filter((v): v is number => v !== null);
+  const halfLife = scored
+    .map((r) => r.half_life)
+    .filter((v): v is number => v !== null);
+  const reach = scored
+    .map((r) => r.reach)
+    .filter((v): v is number => v !== null);
+  const nonObviousness = scored
+    .map((r) => r.non_obviousness)
+    .filter((v): v is number => v !== null);
+  const structural = scored
+    .map((r) => r.structural_importance)
+    .filter((v): v is number => v !== null);
+
+  // Per-day timeline (scored + passed) for the last 30 days.
+  const perDayRaw = await db
+    .selectFrom("story")
+    .select([
+      sql<string>`to_char(date_trunc('day', scored_at at time zone 'UTC'), 'YYYY-MM-DD')`.as(
+        "day",
+      ),
+      sql<string>`count(*)`.as("count"),
+      sql<string>`count(*) filter (where passed_gate = true)`.as("passed"),
+    ])
+    .where("scored_at", ">=", since30)
+    .groupBy("day")
+    .orderBy("day", "asc")
+    .execute();
+  const perDayMap = new Map<string, { count: number; passed: number }>();
+  for (const r of perDayRaw)
+    perDayMap.set(r.day, {
+      count: Number(r.count),
+      passed: Number(r.passed),
+    });
+  const perDay: ExplorerData["perDay"] = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 24 * 3600_000)
+      .toISOString()
+      .slice(0, 10);
+    const b = perDayMap.get(d) ?? { count: 0, passed: 0 };
+    perDay.push({ day: d, count: b.count, passed: b.passed });
+  }
+
+  // Factor frequencies (top 10 per kind, last 30d).
+  const factorRows = await db
+    .selectFrom("story_factor")
+    .innerJoin("story", "story.id", "story_factor.story_id")
+    .select([
+      "story_factor.kind",
+      "story_factor.factor",
+      sql<string>`count(*)`.as("n"),
+    ])
+    .where("story.scored_at", ">=", since30)
+    .groupBy(["story_factor.kind", "story_factor.factor"])
+    .execute();
+  const byKind: Record<string, Array<{ label: string; value: number }>> = {
+    trigger: [],
+    penalty: [],
+    uncertainty: [],
+  };
+  for (const r of factorRows) {
+    (byKind[r.kind] ?? byKind["uncertainty"]!).push({
+      label: r.factor,
+      value: Number(r.n),
+    });
+  }
+  const triggers = (byKind["trigger"] ?? [])
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
+  const penalties = (byKind["penalty"] ?? [])
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
+  const uncertainties = (byKind["uncertainty"] ?? [])
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
+
+  // Per-category (total + passed within last 30d).
+  const catRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      sql<string | null>`category.slug`.as("slug"),
+      sql<string>`count(*)`.as("n"),
+      sql<string>`count(*) filter (where passed_gate = true)`.as("passed"),
+    ])
+    .where("story.scored_at", ">=", since30)
+    .groupBy(sql`category.slug`)
+    .execute();
+  const byCategory = catRows
+    .map((r) => ({
+      label: r.slug ?? "—",
+      value: Number(r.n),
+      sublabel: Number(r.passed) > 0 ? `▸ ${r.passed}` : undefined,
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  // Confidence breakdown (last 30d).
+  const confRows = await db
+    .selectFrom("story")
+    .select([
+      "point_in_time_confidence",
+      sql<string>`count(*)`.as("n"),
+    ])
+    .where("scored_at", ">=", since30)
+    .where("point_in_time_confidence", "is not", null)
+    .groupBy("point_in_time_confidence")
+    .execute();
+  const byConfidence = confRows
+    .map((r) => ({
+      label: r.point_in_time_confidence ?? "—",
+      value: Number(r.n),
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  // Per-source (last 30d, by ingest).
+  const sourceRows = await db
+    .selectFrom("story")
+    .select(["source_name", sql<string>`count(*)`.as("n")])
+    .where("ingested_at", ">=", since30)
+    .groupBy("source_name")
+    .execute();
+  const bySource = sourceRows
+    .map((r) => ({ label: r.source_name, value: Number(r.n) }))
+    .sort((a, b) => b.value - a.value);
+
+  return {
+    corpus: {
+      total: Number(corpusRow.total),
+      ingested_last_30d: Number(corpusRow.ingested_30),
+      scored: Number(corpusRow.scored),
+      scored_last_30d: Number(corpusRow.scored_30),
+      passed: Number(corpusRow.passed),
+      passed_last_30d: Number(corpusRow.passed_30),
+      early_rejected: Number(corpusRow.rejected),
+      published: Number(corpusRow.published),
+      themes: Number(corpusRow.themes),
+      issues: Number(corpusRow.issues),
+    },
+    composites,
+    zeitgeist,
+    halfLife,
+    reach,
+    nonObviousness,
+    structural,
+    perDay,
+    triggers,
+    penalties,
+    uncertainties,
+    byCategory,
+    byConfidence,
+    bySource,
+  };
+}
+
+function parseStoryFilter(q: Record<string, string>): StoryFilter {
+  const gate = (["pass", "fail", "reject", "any"] as const).includes(
+    q.gate as GateFilter,
+  )
+    ? (q.gate as GateFilter)
+    : undefined;
+  const sort = (["composite", "published", "scored", "ingested"] as const).includes(
+    q.sort as SortKey,
+  )
+    ? (q.sort as SortKey)
+    : undefined;
+  const page = Math.max(1, Number(q.page) || 1);
+  const minComposite = q.min !== undefined && q.min !== "" ? Number(q.min) : undefined;
+  const maxComposite = q.max !== undefined && q.max !== "" ? Number(q.max) : undefined;
+  return {
+    q: q.q || undefined,
+    category: q.category || undefined,
+    source: q.source || undefined,
+    confidence: q.conf || undefined,
+    factor: q.factor || undefined,
+    gate,
+    sort,
+    page,
+    minComposite:
+      minComposite !== undefined && Number.isFinite(minComposite)
+        ? minComposite
+        : undefined,
+    maxComposite:
+      maxComposite !== undefined && Number.isFinite(maxComposite)
+        ? maxComposite
+        : undefined,
+  };
+}
+
+async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
+  const pageSize = 50;
+  const page = Math.max(1, filter.page ?? 1);
+
+  let q = db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .leftJoin("theme", "theme.id", "story.theme_id");
+
+  if (filter.q && filter.q.length > 0) {
+    q = q.where("story.title", "ilike", `%${filter.q}%`);
+  }
+  if (filter.category) {
+    q = q.where("category.slug", "=", filter.category);
+  }
+  if (filter.source) {
+    q = q.where("story.source_name", "=", filter.source);
+  }
+  if (filter.confidence) {
+    q = q.where("story.point_in_time_confidence", "=", filter.confidence);
+  }
+  if (filter.gate === "pass") {
+    q = q.where("story.passed_gate", "=", true);
+  } else if (filter.gate === "fail") {
+    q = q
+      .where("story.passed_gate", "=", false)
+      .where("story.early_reject", "=", false)
+      .where("story.scored_at", "is not", null);
+  } else if (filter.gate === "reject") {
+    q = q.where("story.early_reject", "=", true);
+  }
+  if (filter.minComposite !== undefined) {
+    q = q.where("story.composite", ">=", String(filter.minComposite));
+  }
+  if (filter.maxComposite !== undefined) {
+    q = q.where("story.composite", "<=", String(filter.maxComposite));
+  }
+  if (filter.factor) {
+    q = q.where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom("story_factor")
+          .select("story_id")
+          .whereRef("story_factor.story_id", "=", "story.id")
+          .where("story_factor.factor", "=", filter.factor!),
+      ),
+    );
+  }
+
+  const countRow = await q
+    .select(sql<string>`count(*)`.as("n"))
+    .executeTakeFirstOrThrow();
+  const total = Number(countRow.n);
+
+  const sort: SortKey = filter.sort ?? "composite";
+  const sortCol =
+    sort === "composite"
+      ? ("story.composite" as const)
+      : sort === "published"
+        ? ("story.published_at" as const)
+        : sort === "scored"
+          ? ("story.scored_at" as const)
+          : ("story.ingested_at" as const);
+
+  const rawRows = await q
+    .select([
+      "story.id",
+      "story.title",
+      "story.source_name as source",
+      "category.slug as category_slug",
+      "theme.id as theme_id",
+      "theme.name as theme_name",
+      "story.composite",
+      "story.point_in_time_confidence",
+      "story.passed_gate",
+      "story.early_reject",
+      "story.published_at",
+      "story.scored_at",
+    ])
+    .orderBy(sortCol, "desc")
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)
+    .execute();
+
+  const ids = rawRows.map((r) => Number(r.id));
+  const factorMap = new Map<number, string[]>();
+  if (ids.length > 0) {
+    const fRows = await db
+      .selectFrom("story_factor")
+      .select(["story_id", "factor"])
+      .where("story_id", "in", ids)
+      .execute();
+    for (const r of fRows) {
+      const k = Number(r.story_id);
+      const list = factorMap.get(k) ?? [];
+      list.push(r.factor);
+      factorMap.set(k, list);
+    }
+  }
+
+  const [cats, srcs, facs] = await Promise.all([
+    db.selectFrom("category").select("slug").orderBy("slug").execute(),
+    db
+      .selectFrom("story")
+      .select("source_name")
+      .distinct()
+      .orderBy("source_name")
+      .execute(),
+    db
+      .selectFrom("story_factor")
+      .select("factor")
+      .distinct()
+      .orderBy("factor")
+      .execute(),
+  ]);
+
+  return {
+    filter,
+    total,
+    page,
+    pageSize,
+    categories: cats.map((r) => r.slug),
+    sources: srcs.map((r) => r.source_name),
+    factors: facs.map((r) => r.factor),
+    rows: rawRows.map((r) => ({
+      id: Number(r.id),
+      title: r.title,
+      source: r.source,
+      category: r.category_slug,
+      themeId: r.theme_id !== null ? Number(r.theme_id) : null,
+      themeName: r.theme_name,
+      composite: r.composite !== null ? Number(r.composite) : null,
+      confidence: r.point_in_time_confidence,
+      passedGate: r.passed_gate,
+      earlyReject: r.early_reject,
+      publishedAt: r.published_at,
+      scoredAt: r.scored_at,
+      factors: factorMap.get(Number(r.id)) ?? [],
+    })),
+  };
+}
+
+async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
+  const row = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .leftJoin("theme", "theme.id", "story.theme_id")
+    .selectAll("story")
+    .select(["category.slug as category_slug", "theme.name as theme_name"])
+    .where("story.id", "=", id)
+    .executeTakeFirst();
+  if (!row) return null;
+
+  const factorRows = await db
+    .selectFrom("story_factor")
+    .select(["kind", "factor"])
+    .where("story_id", "=", id)
+    .execute();
+  const factors = { trigger: [] as string[], penalty: [] as string[], uncertainty: [] as string[] };
+  for (const r of factorRows) {
+    (factors as Record<string, string[]>)[r.kind]?.push(r.factor);
+  }
+
+  return {
+    id: Number(row.id),
+    title: row.title,
+    summary: row.summary,
+    sourceName: row.source_name,
+    sourceUrl: row.source_url,
+    additionalSourceUrls: row.additional_source_urls ?? [],
+    publishedAt: row.published_at,
+    ingestedAt: row.ingested_at,
+    scoredAt: row.scored_at,
+    category: row.category_slug,
+    themeId: row.theme_id !== null ? Number(row.theme_id) : null,
+    themeName: row.theme_name,
+    themeRelationship: row.theme_relationship,
+    composite: row.composite !== null ? Number(row.composite) : null,
+    zeitgeist: row.zeitgeist_score,
+    halfLife: row.half_life,
+    reach: row.reach,
+    nonObviousness: row.non_obviousness,
+    structural: row.structural_importance,
+    confidence: row.point_in_time_confidence,
+    baseRatePerYear:
+      row.base_rate_per_year !== null ? Number(row.base_rate_per_year) : null,
+    firstPassComposite:
+      row.first_pass_composite !== null
+        ? Number(row.first_pass_composite)
+        : null,
+    firstPassModel: row.first_pass_model_id,
+    passedGate: row.passed_gate,
+    earlyReject: row.early_reject,
+    publishedToReader: row.published_to_reader,
+    publishedToReaderAt: row.published_to_reader_at,
+    scorerModel: row.scorer_model_id,
+    scorerPromptVersion: row.scorer_prompt_version,
+    factors,
+    rawInput: row.raw_input,
+    rawOutput: row.raw_output,
+  };
+}
+
+async function loadGateSandboxData(params: {
+  lookbackDays: number;
+  xThreshold: number; // -1 means "use current"
+  confidenceFloor: "low" | "medium" | "high" | null;
+}): Promise<GateSandboxData> {
+  // Load current gate config.
+  const cfgRows = await db
+    .selectFrom("config")
+    .select(["key", "value"])
+    .where("key", "in", ["gate.x_threshold", "gate.confidence_floor"])
+    .execute();
+  const cfgMap = new Map(cfgRows.map((r) => [r.key, r.value]));
+  const currentX = Number(cfgMap.get("gate.x_threshold") ?? 5);
+  const currentCF = (cfgMap.get("gate.confidence_floor") as
+    | "low"
+    | "medium"
+    | "high"
+    | undefined) ?? "medium";
+  const proposedX = params.xThreshold >= 0 ? params.xThreshold : currentX;
+  const proposedCF = params.confidenceFloor ?? currentCF;
+
+  const since = new Date(Date.now() - params.lookbackDays * 24 * 3600_000);
+
+  const rows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      "story.id",
+      "story.title",
+      "story.composite",
+      "story.point_in_time_confidence",
+      "story.passed_gate",
+      "category.slug as category_slug",
+    ])
+    .where("story.scored_at", ">=", since)
+    .where("story.early_reject", "=", false)
+    .execute();
+
+  const rank = (c: "low" | "medium" | "high" | null): number =>
+    c === "high" ? 2 : c === "medium" ? 1 : c === "low" ? 0 : -1;
+
+  const meetsProposed = (
+    c: number | null,
+    conf: "low" | "medium" | "high" | null,
+  ) => c !== null && c >= proposedX && rank(conf) >= rank(proposedCF);
+
+  const hypotheticalIds = new Set<number>();
+  const currentPassers = rows.filter((r) => r.passed_gate).length;
+
+  const catMap = new Map<string, number>();
+  const newPass: typeof rows = [];
+  const newFail: typeof rows = [];
+
+  for (const r of rows) {
+    const comp = r.composite !== null ? Number(r.composite) : null;
+    const pass = meetsProposed(
+      comp,
+      r.point_in_time_confidence as "low" | "medium" | "high" | null,
+    );
+    if (pass) {
+      hypotheticalIds.add(Number(r.id));
+      const key = r.category_slug ?? "—";
+      catMap.set(key, (catMap.get(key) ?? 0) + 1);
+    }
+    if (pass && !r.passed_gate) newPass.push(r);
+    if (!pass && r.passed_gate) newFail.push(r);
+  }
+
+  // Eval set comparison if any labels exist for stories in this window.
+  const labeled = await db
+    .selectFrom("eval_label")
+    .innerJoin("story", "story.id", "eval_label.story_id")
+    .select([
+      "eval_label.label",
+      "story.id",
+      "story.composite",
+      "story.point_in_time_confidence",
+    ])
+    .where("story.scored_at", ">=", since)
+    .execute();
+  let evalSummary: GateSandboxData["evalSummary"] = null;
+  if (labeled.length > 0) {
+    let tp = 0;
+    let fp = 0;
+    let fn = 0;
+    for (const r of labeled) {
+      const comp = r.composite !== null ? Number(r.composite) : null;
+      const pass = meetsProposed(
+        comp,
+        r.point_in_time_confidence as "low" | "medium" | "high" | null,
+      );
+      if (r.label === "yes" && pass) tp++;
+      if (r.label === "no" && pass) fp++;
+      if (r.label === "yes" && !pass) fn++;
+    }
+    evalSummary = {
+      labeled: labeled.length,
+      truePositives: tp,
+      falsePositives: fp,
+      falseNegatives: fn,
+      precision: tp + fp > 0 ? tp / (tp + fp) : 0,
+      recall: tp + fn > 0 ? tp / (tp + fn) : 0,
+    };
+  }
+
+  return {
+    lookbackDays: params.lookbackDays,
+    current: {
+      xThreshold: currentX,
+      confidenceFloor: currentCF,
+      passers: currentPassers,
+    },
+    proposed: { xThreshold: proposedX, confidenceFloor: proposedCF },
+    total: rows.length,
+    hypotheticalPassers: hypotheticalIds.size,
+    wouldNewlyPass: newPass
+      .sort(
+        (a, b) => Number(b.composite ?? 0) - Number(a.composite ?? 0),
+      )
+      .slice(0, 12)
+      .map((r) => ({
+        id: Number(r.id),
+        title: r.title,
+        composite: Number(r.composite ?? 0),
+      })),
+    wouldNewlyFail: newFail
+      .sort(
+        (a, b) => Number(b.composite ?? 0) - Number(a.composite ?? 0),
+      )
+      .slice(0, 12)
+      .map((r) => ({
+        id: Number(r.id),
+        title: r.title,
+        composite: Number(r.composite ?? 0),
+      })),
+    passersByCategory: [...catMap.entries()]
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value),
+    evalSummary,
   };
 }
 
