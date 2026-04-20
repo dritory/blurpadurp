@@ -6,11 +6,13 @@ import { z } from "zod";
 
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
+import { verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
+import { TokenResultPage } from "../views/token-result.tsx";
 
 const PUBLIC_URL =
   getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
@@ -61,6 +63,43 @@ app.get("/feed.xml", async (c) => {
 
 const SubscribeSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
+});
+
+// Signed-token magic links. No login — the token IS the authorization.
+// Scaffolded ahead of dispatch: once dispatch lands, the transactional
+// emails will link here. Until then, links can be minted by hand via
+// signToken() for testing.
+
+app.get("/confirm/:token", async (c) => {
+  const res = verifyToken(c.req.param("token"));
+  if (!res.ok || res.payload.kind !== "confirm-email") {
+    return c.html(<TokenResultPage title="Link invalid" body="That link is invalid or expired. Subscribe again from the homepage." error />, 400);
+  }
+  const row = await db
+    .updateTable("email_subscription")
+    .set({ confirmed_at: new Date() })
+    .where("id", "=", res.payload.subscriptionId)
+    .where("confirmed_at", "is", null)
+    .returning("email")
+    .executeTakeFirst();
+  const msg = row
+    ? `Confirmed — ${row.email}. You'll get the next issue when the gate fires.`
+    : "Already confirmed. Nothing to do.";
+  return c.html(<TokenResultPage title="Confirmed" body={msg} />);
+});
+
+app.get("/unsubscribe/:token", async (c) => {
+  const res = verifyToken(c.req.param("token"));
+  if (!res.ok || res.payload.kind !== "unsubscribe-email") {
+    return c.html(<TokenResultPage title="Link invalid" body="That link is invalid or expired." error />, 400);
+  }
+  await db
+    .updateTable("email_subscription")
+    .set({ unsubscribed_at: new Date() })
+    .where("id", "=", res.payload.subscriptionId)
+    .where("unsubscribed_at", "is", null)
+    .execute();
+  return c.html(<TokenResultPage title="Unsubscribed" body="Unsubscribed. No more issues will be sent to this address." />);
 });
 
 app.post("/subscribe", async (c) => {
