@@ -11,6 +11,7 @@ const SUBCOMMANDS = [
   "score",
   "compose",
   "dispatch",
+  "reembed",
 ] as const;
 
 type Sub = (typeof SUBCOMMANDS)[number];
@@ -31,6 +32,9 @@ async function run(sub: Sub): Promise<void> {
       return;
     case "dispatch":
       await (await import("./pipeline/dispatch.ts")).dispatch();
+      return;
+    case "reembed":
+      await (await import("./pipeline/reembed.ts")).reembed();
       return;
   }
 }

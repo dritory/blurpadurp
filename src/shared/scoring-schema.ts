@@ -51,8 +51,7 @@ export const themeRelationship = [
 ] as const;
 
 export const categorySlug = [
-  "geopolitics",
-  "policy",
+  "politics",
   "science",
   "technology",
   "economy",
@@ -63,36 +62,60 @@ export const categorySlug = [
   "society",
 ] as const;
 
-export const ScorerOutputSchema = z.object({
-  schema_version: z.string(),
-  scorer_version: z.string(),
-  scored_at: z.string(),
-  as_of_date: z.string(),
+// Drop out-of-vocab tags from LLM output rather than failing the whole
+// scoring call. The prompt enumerates the allowed set; models occasionally
+// invent new tags.
+function filteredEnumArray<T extends readonly string[]>(allowed: T) {
+  const set = new Set<string>(allowed);
+  return z
+    .array(z.string())
+    .transform((arr) => arr.filter((s): s is T[number] => set.has(s)));
+}
 
+// Coerce null/undefined/missing string fields to "". Haiku sometimes
+// nulls or omits reasoning free-text on early-rejects despite prompt
+// instructions. nullish() accepts both null and undefined.
+function nullableString() {
+  return z
+    .string()
+    .nullish()
+    .transform((s) => s ?? "");
+}
+
+// Coerce an unknown enum value to null rather than failing the whole call.
+// Raw value is still preserved in ai_call_log.output_jsonb.
+function filteredEnumOrNull<T extends readonly string[]>(allowed: T) {
+  const set = new Set<string>(allowed);
+  return z
+    .string()
+    .nullable()
+    .transform((s) => (s !== null && set.has(s) ? (s as T[number]) : null));
+}
+
+export const ScorerOutputSchema = z.object({
   classification: z.object({
-    category: z.enum(categorySlug),
+    category: filteredEnumOrNull(categorySlug),
     theme_continuation_of: z.string().nullable(),
     early_reject: z.boolean(),
-    early_reject_reason: z.string().nullable(),
+    reject_reason: z.string().nullable(),
   }),
 
   reasoning: z.object({
-    base_rate_estimate: z.string(),
-    base_rate_per_year: z.number(),
-    retrodiction_12mo: z.string(),
-    steelman_trivial: z.string(),
-    steelman_important: z.string(),
+    base_rate_per_year: z.number().nullish().transform((n) => n ?? 0),
+    retrodiction_12mo: nullableString(),
+    steelman_trivial: nullableString(),
+    steelman_important: nullableString(),
     factors: z.object({
-      trigger: z.array(z.enum(triggerFactors)),
-      penalty: z.array(z.enum(penaltyFactors)),
-      uncertainty: z.array(z.enum(uncertaintyFactors)),
+      trigger: filteredEnumArray(triggerFactors),
+      penalty: filteredEnumArray(penaltyFactors),
+      uncertainty: filteredEnumArray(uncertaintyFactors),
     }),
     theme_relationship: z.enum(themeRelationship),
-    point_in_time_confidence: z.enum(["low", "medium", "high"]),
+    confidence: z.enum(["low", "medium", "high"]),
   }),
 
   scores: z.object({
-    zeitgeist_score: z.number().int().min(0).max(5),
+    zeitgeist: z.number().int().min(0).max(5),
     half_life: z.number().int().min(0).max(5),
     reach: z.number().int().min(0).max(5),
     non_obviousness: z.number().int().min(0).max(5),
@@ -100,12 +123,7 @@ export const ScorerOutputSchema = z.object({
     composite: z.number(),
   }),
 
-  verification: z.unknown().nullable(),
-  tools_used: z.unknown().nullable(),
-  watchlist_signal: z.unknown().nullable(),
-  viral_signals_considered: z.unknown().nullable(),
-
-  one_line_summary: z.string().max(140),
+  summary: nullableString(),
 });
 
 export type ScorerOutput = z.infer<typeof ScorerOutputSchema>;

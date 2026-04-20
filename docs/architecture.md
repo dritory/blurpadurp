@@ -177,8 +177,8 @@ dispatched_at
 status
 ```
 
-- **Category:** fixed taxonomy, 10 slugs — `geopolitics`, `policy`,
-  `science`, `technology`, `economy`, `culture`, `internet_culture`,
+- **Category:** fixed taxonomy, 9 slugs — `politics`, `science`,
+  `technology`, `economy`, `culture`, `internet_culture`,
   `environment_climate`, `health`, `society`.
 - **Theme:** narrow story-arc. Built by embedding-clustering within a
   category. Merges when centroids converge.

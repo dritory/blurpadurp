@@ -15,8 +15,7 @@ CREATE TABLE category (
 );
 
 INSERT INTO category (slug, name) VALUES
-  ('geopolitics',         'Geopolitics'),
-  ('policy',              'Policy'),
+  ('politics',            'Politics'),
   ('science',             'Science'),
   ('technology',          'Technology'),
   ('economy',             'Economy'),
@@ -226,7 +225,7 @@ CREATE TABLE config (
 
 INSERT INTO config (key, value) VALUES
   ('scorer.model_id',              '"claude-haiku-4-5-20251001"'::jsonb),
-  ('scorer.prompt_version',        '"prompt-v0.1"'::jsonb),
+  ('scorer.prompt_version',        '"prompt-v0.2"'::jsonb),
   ('scorer.prompt_path',           '"docs/scoring-prompt.md"'::jsonb),
   ('scorer.max_tokens',            '2000'::jsonb),
   ('scorer.temperature',           '0'::jsonb),
