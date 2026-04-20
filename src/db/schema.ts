@@ -65,6 +65,7 @@ export interface Database {
     video_thumbnail_url: string | null;
     video_duration_sec: number | null;
     video_caption: string | null;
+    additional_source_urls: Generated<string[]>;
   };
 
   story_factor: {

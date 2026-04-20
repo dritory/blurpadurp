@@ -19,6 +19,11 @@ export interface NormalizedStoryInput {
   source_name: string;
   source_event_id: string;
   source_url: string | null;
+  // Additional URLs where the same underlying event was reported.
+  // The canonical source_url stays the primary; the composer cites the
+  // full set. GDELT populates this from eventmentions; other connectors
+  // typically leave it empty.
+  additional_source_urls?: string[];
   title: string;
   summary: string | null;
   published_at: Date | null;
@@ -52,6 +57,10 @@ export interface NormalizedStoryInput {
 
 export interface Connector {
   name: string;
+  // Optional: list of scope keys this connector wants to maintain cursors
+  // for (e.g. one per RSS feed). If omitted, ingest treats the connector
+  // as single-scope ("global"). Each scope gets its own source_cursor row.
+  scopes?(): Promise<string[]> | string[];
   fetchSince(cursor: Cursor): Promise<RawSourceItem[]>;
   normalize(raw: RawSourceItem): NormalizedStoryInput;
 }
