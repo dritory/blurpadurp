@@ -3,9 +3,16 @@
 
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { readdir, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { z } from "zod";
 
 import { db } from "../db/index.ts";
+import type {
+  CapturedRow,
+  ReplayRow,
+} from "../pipeline/fixture.ts";
+import { summarizeReplay } from "../pipeline/fixture.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { verifyToken } from "../shared/tokens.ts";
@@ -14,6 +21,12 @@ import {
   AdminConfig,
   type ConfigRow,
 } from "../views/admin-config.tsx";
+import {
+  AdminCaptureView,
+  AdminFixturesList,
+  AdminReplayView,
+  type FixtureFile,
+} from "../views/admin-fixtures.tsx";
 import {
   AdminReview,
   type EditorReviewData,
@@ -96,6 +109,43 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       c.req.query("key"),
     );
     return c.html(<AdminConfig rows={rows} flash={flash} />);
+  });
+
+  app.get("/admin/fixtures", async (c) => {
+    const files = await listFixtures();
+    return c.html(<AdminFixturesList files={files} />);
+  });
+
+  app.get("/admin/fixtures/:name", async (c) => {
+    const name = c.req.param("name");
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) return c.notFound();
+    const path = resolve("fixtures", name);
+    const text = await Bun.file(path)
+      .text()
+      .catch(() => null);
+    if (text === null) return c.notFound();
+    const rows = text
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as unknown);
+    if (rows.length === 0) return c.text("(empty fixture)", 200);
+    const first = rows[0] as Record<string, unknown>;
+    if ("replay_output" in first || "replay_prompt_version" in first) {
+      const replayRows = rows as ReplayRow[];
+      return c.html(
+        <AdminReplayView
+          name={name}
+          rows={replayRows}
+          summary={summarizeReplay(replayRows)}
+        />,
+      );
+    }
+    if ("raw_input" in first && "raw_output" in first) {
+      return c.html(
+        <AdminCaptureView name={name} rows={rows as CapturedRow[]} />,
+      );
+    }
+    return c.text("(unknown fixture format)", 200);
   });
 
   app.post("/admin/config", async (c) => {
@@ -296,6 +346,30 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     isEventDriven: row.is_event_driven,
     html: row.composed_html,
   };
+}
+
+async function listFixtures(): Promise<FixtureFile[]> {
+  const dir = resolve("fixtures");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const out: FixtureFile[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".jsonl")) continue;
+    const st = await stat(resolve(dir, name)).catch(() => null);
+    if (st === null) continue;
+    const kind: FixtureFile["kind"] = name.startsWith("capture-")
+      ? "capture"
+      : name.startsWith("replay-")
+        ? "replay"
+        : "unknown";
+    out.push({
+      name,
+      sizeBytes: st.size,
+      mtime: st.mtime,
+      kind,
+    });
+  }
+  out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  return out;
 }
 
 async function loadConfigRows(): Promise<ConfigRow[]> {

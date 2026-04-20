@@ -32,7 +32,7 @@ import {
 const FIXTURES_DIR = "fixtures";
 const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 
-interface CapturedRow {
+export interface CapturedRow {
   story_id: number;
   title: string;
   source_name: string;
@@ -43,7 +43,7 @@ interface CapturedRow {
   captured_at: string;
 }
 
-interface ReplayRow {
+export interface ReplayRow {
   story_id: number;
   source_prompt_version: string | null;
   source_model_id: string | null;
@@ -53,6 +53,45 @@ interface ReplayRow {
   replay_output: ScorerOutput | null;
   error: string | null;
   latency_ms: number;
+}
+
+export interface ReplaySummary {
+  total: number;
+  parsed: number;
+  errors: number;
+  compositeMeanDelta: number;
+  categoryShifts: number;
+  earlyRejectFlips: number;
+  confidenceShifts: number;
+  latencyMeanMs: number;
+}
+
+export function summarizeReplay(rows: ReplayRow[]): ReplaySummary {
+  const ok = rows.filter((r) => r.error === null && r.replay_output !== null);
+  return {
+    total: rows.length,
+    parsed: ok.length,
+    errors: rows.length - ok.length,
+    compositeMeanDelta: mean(
+      ok.map((r) => scoreOf(r.replay_output!) - scoreOf(r.captured_output)),
+    ),
+    categoryShifts: ok.filter(
+      (r) =>
+        r.replay_output!.classification.category !==
+        r.captured_output.classification.category,
+    ).length,
+    earlyRejectFlips: ok.filter(
+      (r) =>
+        r.replay_output!.classification.early_reject !==
+        r.captured_output.classification.early_reject,
+    ).length,
+    confidenceShifts: ok.filter(
+      (r) =>
+        r.replay_output!.reasoning.point_in_time_confidence !==
+        r.captured_output.reasoning.point_in_time_confidence,
+    ).length,
+    latencyMeanMs: mean(ok.map((r) => r.latency_ms)),
+  };
 }
 
 export async function captureScorerFixture(limit = 50): Promise<void> {
@@ -186,40 +225,18 @@ export async function replayScorerFixture(params: {
 }
 
 function printDiffSummary(rows: ReplayRow[]): void {
-  const ok = rows.filter((r) => r.error === null && r.replay_output !== null);
-  const errors = rows.length - ok.length;
+  const s = summarizeReplay(rows);
   console.log("");
   console.log("=== diff summary ===");
-  console.log(`  parsed:       ${ok.length}/${rows.length}`);
-  if (errors > 0) console.log(`  errors:       ${errors}`);
-  if (ok.length === 0) return;
-
-  const compDelta = mean(ok.map((r) => scoreOf(r.replay_output!) - scoreOf(r.captured_output)));
-  console.log(`  composite mean Δ: ${compDelta >= 0 ? "+" : ""}${compDelta.toFixed(2)}`);
-
-  const categoryShifts = ok.filter(
-    (r) =>
-      r.replay_output!.classification.category !==
-      r.captured_output.classification.category,
-  );
-  console.log(`  category shifts: ${categoryShifts.length}`);
-
-  const earlyRejectFlips = ok.filter(
-    (r) =>
-      r.replay_output!.classification.early_reject !==
-      r.captured_output.classification.early_reject,
-  );
-  console.log(`  early-reject flips: ${earlyRejectFlips.length}`);
-
-  const confidenceShifts = ok.filter(
-    (r) =>
-      r.replay_output!.reasoning.point_in_time_confidence !==
-      r.captured_output.reasoning.point_in_time_confidence,
-  );
-  console.log(`  confidence shifts: ${confidenceShifts.length}`);
-
-  const latencyMean = mean(ok.map((r) => r.latency_ms));
-  console.log(`  mean latency: ${Math.round(latencyMean)}ms`);
+  console.log(`  parsed:       ${s.parsed}/${s.total}`);
+  if (s.errors > 0) console.log(`  errors:       ${s.errors}`);
+  if (s.parsed === 0) return;
+  const signed = `${s.compositeMeanDelta >= 0 ? "+" : ""}${s.compositeMeanDelta.toFixed(2)}`;
+  console.log(`  composite mean Δ:  ${signed}`);
+  console.log(`  category shifts:   ${s.categoryShifts}`);
+  console.log(`  early-reject flips: ${s.earlyRejectFlips}`);
+  console.log(`  confidence shifts: ${s.confidenceShifts}`);
+  console.log(`  mean latency:      ${Math.round(s.latencyMeanMs)}ms`);
 }
 
 function scoreOf(o: ScorerOutput): number {
