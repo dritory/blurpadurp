@@ -75,6 +75,47 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   );
 }
 
+app.get("/robots.txt", (c) => {
+  // Default: open to crawlers, point at the sitemap. Flip Allow to
+  // Disallow during stage-2 (hidden deploy) via env override.
+  const blocked = getEnvOptional("BLURPADURP_BLOCK_CRAWLERS") === "1";
+  const body = blocked
+    ? `User-agent: *\nDisallow: /\n`
+    : `User-agent: *\nAllow: /\n\nSitemap: ${PUBLIC_URL}/sitemap.xml\n`;
+  return c.body(body, 200, { "Content-Type": "text/plain; charset=utf-8" });
+});
+
+app.get("/sitemap.xml", async (c) => {
+  const issues = await db
+    .selectFrom("issue")
+    .select(["id", "published_at"])
+    .orderBy("published_at", "desc")
+    .limit(1000)
+    .execute();
+  const urls: Array<{ loc: string; lastmod?: string }> = [
+    { loc: `${PUBLIC_URL}/` },
+    { loc: `${PUBLIC_URL}/archive` },
+    { loc: `${PUBLIC_URL}/about` },
+  ];
+  for (const iss of issues) {
+    urls.push({
+      loc: `${PUBLIC_URL}/issue/${Number(iss.id)}`,
+      lastmod: iss.published_at.toISOString().slice(0, 10),
+    });
+  }
+  const xml =
+    `<?xml version="1.0" encoding="utf-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    urls
+      .map(
+        (u) =>
+          `  <url><loc>${u.loc}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ""}</url>`,
+      )
+      .join("\n") +
+    `\n</urlset>\n`;
+  return c.body(xml, 200, { "Content-Type": "application/xml; charset=utf-8" });
+});
+
 app.get("/feed.xml", async (c) => {
   const rows = await db
     .selectFrom("issue")
