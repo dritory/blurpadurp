@@ -11,6 +11,10 @@ import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import {
+  AdminConfig,
+  type ConfigRow,
+} from "../views/admin-config.tsx";
+import {
   AdminReview,
   type EditorReviewData,
 } from "../views/admin-review.tsx";
@@ -82,6 +86,52 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const data = await loadReview(id);
     if (data === null) return c.notFound();
     return c.html(<AdminReview data={data} />);
+  });
+
+  app.get("/admin/config", async (c) => {
+    const rows = await loadConfigRows();
+    const flash = parseConfigFlash(
+      c.req.query("saved"),
+      c.req.query("error"),
+      c.req.query("key"),
+    );
+    return c.html(<AdminConfig rows={rows} flash={flash} />);
+  });
+
+  app.post("/admin/config", async (c) => {
+    const body = await c.req.parseBody();
+    const key = typeof body.key === "string" ? body.key : "";
+    const rawValue = typeof body.value === "string" ? body.value : "";
+    if (key === "") {
+      return c.redirect("/admin/config?error=missing_key", 303);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch {
+      return c.redirect(
+        `/admin/config?error=bad_json&key=${encodeURIComponent(key)}`,
+        303,
+      );
+    }
+    const res = await db
+      .updateTable("config")
+      .set({
+        value: JSON.stringify(parsed) as never,
+        updated_at: new Date(),
+      })
+      .where("key", "=", key)
+      .executeTakeFirst();
+    if (res.numUpdatedRows === BigInt(0)) {
+      return c.redirect(
+        `/admin/config?error=unknown_key&key=${encodeURIComponent(key)}`,
+        303,
+      );
+    }
+    return c.redirect(
+      `/admin/config?saved=1&key=${encodeURIComponent(key)}`,
+      303,
+    );
   });
 } else {
   app.all("/admin/*", (c) =>
@@ -246,6 +296,38 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     isEventDriven: row.is_event_driven,
     html: row.composed_html,
   };
+}
+
+async function loadConfigRows(): Promise<ConfigRow[]> {
+  const rows = await db
+    .selectFrom("config")
+    .select(["key", "value", "updated_at"])
+    .orderBy("key", "asc")
+    .execute();
+  return rows.map((r) => ({
+    key: r.key,
+    value: r.value,
+    updatedAt: r.updated_at,
+  }));
+}
+
+function parseConfigFlash(
+  saved: string | undefined,
+  error: string | undefined,
+  key: string | undefined,
+): { kind: "ok" | "error"; msg: string } | null {
+  const label = key !== undefined && key.length > 0 ? ` (${key})` : "";
+  if (saved) return { kind: "ok", msg: `Saved${label}.` };
+  if (error === "bad_json") {
+    return { kind: "error", msg: `Value is not valid JSON${label}.` };
+  }
+  if (error === "unknown_key") {
+    return { kind: "error", msg: `Unknown config key${label}.` };
+  }
+  if (error === "missing_key") {
+    return { kind: "error", msg: "Missing key in form submission." };
+  }
+  return null;
 }
 
 async function loadTheme(id: number): Promise<ThemeViewData | null> {
