@@ -43,20 +43,27 @@ export const Layout: FC<{
         <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       </head>
       <body>
+        <a href="#main" class="skip-link">Skip to content</a>
         <div class="wrap">
-          <header>
+          <header role="banner">
             <h1>
               <a href="/">Blurpadurp</a>
             </h1>
             <p class="tag">The anti-social-media zeitgeist brief.</p>
-            <nav>
-              <a href="/" class={cls("home")}>Latest</a>
-              <a href="/archive" class={cls("archive")}>Archive</a>
-              <a href="/about" class={cls("about")}>About</a>
+            <nav aria-label="Primary">
+              <a href="/" class={cls("home")} aria-current={nav === "home" ? "page" : undefined}>
+                Latest
+              </a>
+              <a href="/archive" class={cls("archive")} aria-current={nav === "archive" ? "page" : undefined}>
+                Archive
+              </a>
+              <a href="/about" class={cls("about")} aria-current={nav === "about" ? "page" : undefined}>
+                About
+              </a>
             </nav>
           </header>
-          {children}
-          <footer>
+          <main id="main" role="main">{children}</main>
+          <footer role="contentinfo">
             <p>Silence is a feature. If nothing clears the bar, nothing publishes.</p>
           </footer>
         </div>

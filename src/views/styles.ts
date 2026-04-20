@@ -17,6 +17,21 @@ export const STYLES = `
 }
 html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); }
 body { font-family: var(--serif); font-size: 18px; line-height: 1.55; }
+
+/* Skip-to-content link: invisible until focused, jumps past the header. */
+.skip-link {
+  position: absolute; top: -40px; left: 12px; padding: 8px 14px;
+  background: var(--ink); color: var(--paper); font-family: var(--sans);
+  font-size: 14px; text-decoration: none; z-index: 10;
+}
+.skip-link:focus { top: 12px; }
+
+/* Visible focus ring for keyboard users. Consistent across all links/buttons. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .wrap { max-width: 680px; margin: 0 auto; padding: 56px 24px 96px; }
 
 header { border-bottom: 1px solid var(--rule); padding-bottom: 18px; margin-bottom: 40px; }
