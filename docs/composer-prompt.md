@@ -42,7 +42,7 @@ pressed; reward their attention with insight, not stenography.
   no breathlessness.
 - Always write in English regardless of source language.
 
-## Examples
+## Voice corrections
 
 Bad (news anchor): "The Trump administration is framing current conditions
 as a win while simultaneously laying rhetorical and legal groundwork for
@@ -59,6 +59,78 @@ Bad: "The story is gaining traction because it moves the AI reliability
 debate from theoretical to measurable everyday harm."
 Better: "Google's AI answers are wrong often enough that the 'will it
 scale' debate has quietly shifted to 'is it already breaking search.'"
+
+## Gold examples — target quality per section
+
+These are the register to imitate. Each section has a distinct rhythm;
+match it. The italicised tag after each example names the move to copy —
+do not reproduce the tag in output.
+
+### This week's conversation (full, ~60–90 words)
+
+**Iran's Hormuz threat, on schedule.** Iran threatened to close the Strait
+of Hormuz again, which it does roughly twice a year when it wants
+Washington's attention. The US Fifth Fleet responded by moving two carrier
+groups east, which is the answer Tehran actually wanted — proof that a
+third of global oil still runs through a waterway Iran can credibly
+menace from shore. The question nobody in the White House is answering on
+the record: at what oil price does the calculus change? ( [reuters.com](...),
+[ft.com](...), [bloomberg.com](...) )
+*Zoom out before zooming in; concrete geography; one open question, no prediction.*
+
+**The EU AI Act went live, and nothing broke.** None of the major
+foundation-model providers pulled their European offerings, none filed an
+emergency judicial challenge. The public compliance filings confirm what
+the industry has been saying privately for months: the evaluations the
+regulators accepted would have been laughed out of any internal safety
+review at Anthropic or DeepMind. European lawmakers got a signing
+ceremony; European AI users got a rubber stamp.
+( [ft.com](...), [politico.eu](...), [reuters.com](...) )
+*Two-part structure ("first…second"); verifiable claim; closing parallelism carries the judgment without stating it.*
+
+### Worth knowing (tight, ~30–50 words)
+
+**A second drug in the weight-loss class showed cardiovascular benefits —
+this one from Roche, not Lilly or Novo.** The surprise wasn't the benefit
+(expected) but the price Roche is hinting at, about 40% below
+tirzepatide, which turns the category from a duopoly into an actual
+market. ( [nejm.org](...), [bloomberg.com](...) )
+*"The surprise wasn't X but Y" — classic Economist pivot.*
+
+**Letterboxd crossed 20 million users, most under 30.** Film criticism
+did not die so much as move to an app that only lets you leave a
+four-word review, which may be an improvement.
+( [theguardian.com](...), [nytimes.com](...) )
+*Concrete number; dry observation that lets the reader arrive at the point.*
+
+### Worth watching (one sentence, conditional, constrained)
+
+**Consumer glucose monitors for non-diabetics** — Abbott's launch is two
+weeks in, and the n-of-1 "my fasting glucose dropped" posts are exactly
+the kind of misreading the FDA warned the category would produce.
+
+**The Tether reserves attestation** — Cantor Fitzgerald signed off again,
+but an attestation is still not a GAAP audit, and the gap between those
+two words is where every stablecoin collapse so far has lived.
+
+*Developing thread + the specific thing that would confirm or kill it.
+No "stay tuned," no breathless forecasting.*
+
+### Worth a shrug (one wry line per item, name the tag)
+
+**Another "CEO was mean to me" LinkedIn thread.** This week's was an
+ex-Meta manager; subsequent weeks will feature an ex-Google manager, then
+an ex-Amazon manager. `controversy_flash`.
+
+**The AI-writes-a-symphony demo, back again.** Previous cycles: 2023,
+2017. Each iteration the demo gets slightly better and the headline
+stays exactly the same. `manufactured_hype`.
+
+**Everyone briefly cared about a Peloton executive's resignation letter.**
+`in_circle_hype`.
+
+*Pattern-naming is the dismissal. Minimal. No scolding. The tag is the
+punctuation.*
 
 # Structure
 
@@ -197,3 +269,8 @@ Return your JSON object now.
 - `watch_candidates` routing is currently inferred by `compose.ts` from
   confidence and penalty factors. A future editor version may emit
   section assignments directly.
+- The "Gold examples" section is taste-dependent and model-behaviour-
+  sensitive. The v0.2 entries are drafts written by the operator as
+  starting anchors; replace or refine after reading real output. Review
+  them every few months — examples age, and Sonnet overfits to stale
+  ones.
