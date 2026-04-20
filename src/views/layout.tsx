@@ -16,6 +16,7 @@ export const Layout: FC<{ title: string; nav?: NavKey }> = ({
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title}</title>
         <meta name="description" content="The anti-social-media zeitgeist brief. Subscribe once, quit social media." />
+        <link rel="alternate" type="application/atom+xml" title="Blurpadurp" href="/feed.xml" />
         <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       </head>
       <body>

@@ -5,10 +5,16 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { db } from "../db/index.ts";
+import { getEnvOptional } from "../shared/env.ts";
 import { About } from "../views/about.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
+import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
+
+const PUBLIC_URL =
+  getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
+const FEED_MAX_ENTRIES = 20;
 
 export const app = new Hono();
 
@@ -34,6 +40,24 @@ app.get("/issue/:id", async (c) => {
 });
 
 app.get("/about", (c) => c.html(<About />));
+
+app.get("/feed.xml", async (c) => {
+  const rows = await db
+    .selectFrom("issue")
+    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .orderBy("published_at", "desc")
+    .limit(FEED_MAX_ENTRIES)
+    .execute();
+  const entries = rows.map((r) => ({
+    id: Number(r.id),
+    publishedAt: r.published_at,
+    html: r.composed_html,
+    isEventDriven: r.is_event_driven,
+  }));
+  const updated = entries[0]?.publishedAt ?? new Date();
+  const xml = renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
+  return c.body(xml, 200, { "Content-Type": "application/atom+xml; charset=utf-8" });
+});
 
 const SubscribeSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
