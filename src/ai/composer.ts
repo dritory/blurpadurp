@@ -14,6 +14,7 @@ import {
 } from "../shared/composer-schema.ts";
 import type { AIStage } from "./types.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
+import { checkBudget } from "./budget.ts";
 
 const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 
@@ -60,6 +61,8 @@ export function makeComposer(config: {
         });
         return ComposerOutputSchema.parse(cached);
       }
+
+      await checkBudget();
 
       const startedAt = Date.now();
       let output: unknown;

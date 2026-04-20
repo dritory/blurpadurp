@@ -15,6 +15,7 @@ import {
 } from "../shared/editor-schema.ts";
 import type { AIStage } from "./types.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
+import { checkBudget } from "./budget.ts";
 
 const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 
@@ -61,6 +62,8 @@ export function makeEditor(config: {
         });
         return EditorOutputSchema.parse(cached);
       }
+
+      await checkBudget();
 
       const startedAt = Date.now();
       let output: unknown;

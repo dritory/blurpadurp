@@ -1,7 +1,11 @@
 // Daily USD spend guard. Reads `config.budget.daily_usd_cap` and sums
 // `ai_call_log.cost_estimate_usd` since UTC midnight. Throws if the cap
-// is exceeded. Call at the top of each AI stage's run() — scaffolded
-// in scorer for now; composer/editor/theme-confirm adopt as they land.
+// is exceeded. Applied at the top of every Anthropic AI stage's run()
+// (scorer, composer, editor, theme-confirm).
+//
+// Scope: Anthropic only. Voyage embeddings (src/ai/embed.ts) go through
+// a different provider and are not tracked in ai_call_log. If Voyage
+// spend ever becomes material, extend the logging before gating here.
 //
 // NOT a perfect barrier: a single in-flight call whose cost pushes over
 // the cap still completes. Good enough for the "runaway scorer" failure

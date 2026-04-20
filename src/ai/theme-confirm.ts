@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { getEnv } from "../shared/env.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
+import { checkBudget } from "./budget.ts";
 
 const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 
@@ -64,6 +65,8 @@ export async function confirmThemeContinuation(
     });
     return ThemeConfirmOutputSchema.parse(cached);
   }
+
+  await checkBudget();
 
   const startedAt = Date.now();
   let output: unknown;
