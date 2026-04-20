@@ -3,6 +3,7 @@
 
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { sql } from "kysely";
 import { readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
@@ -21,6 +22,10 @@ import {
   AdminConfig,
   type ConfigRow,
 } from "../views/admin-config.tsx";
+import {
+  AdminCosts,
+  type CostDashboardData,
+} from "../views/admin-costs.tsx";
 import {
   AdminCaptureView,
   AdminFixturesList,
@@ -99,6 +104,11 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const data = await loadReview(id);
     if (data === null) return c.notFound();
     return c.html(<AdminReview data={data} />);
+  });
+
+  app.get("/admin/costs", async (c) => {
+    const data = await loadCostData();
+    return c.html(<AdminCosts data={data} />);
   });
 
   app.get("/admin/config", async (c) => {
@@ -370,6 +380,90 @@ async function listFixtures(): Promise<FixtureFile[]> {
   }
   out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
   return out;
+}
+
+async function loadCostData(): Promise<CostDashboardData> {
+  const since = new Date(Date.now() - 14 * 24 * 3600_000);
+  const dayStart = new Date(
+    Date.UTC(since.getUTCFullYear(), since.getUTCMonth(), since.getUTCDate()),
+  );
+
+  const rows = await db
+    .selectFrom("ai_call_log")
+    .select([
+      sql<string>`to_char(date_trunc('day', started_at at time zone 'UTC'), 'YYYY-MM-DD')`.as(
+        "day",
+      ),
+      "stage_name",
+      sql<string>`count(*)`.as("calls"),
+      sql<string | null>`coalesce(sum(cost_estimate_usd), 0)`.as("cost"),
+    ])
+    .where("started_at", ">=", dayStart)
+    .groupBy(["day", "stage_name"])
+    .orderBy("day", "desc")
+    .execute();
+
+  // Bucket by day
+  const byDay = new Map<string, {
+    calls: number;
+    cost: number;
+    byStage: Record<string, number>;
+  }>();
+  const stageTotalsMap = new Map<string, { calls: number; cost: number }>();
+  const knownStages = new Set<string>();
+  for (const r of rows) {
+    const calls = Number(r.calls);
+    const cost = Number(r.cost ?? 0);
+    knownStages.add(r.stage_name);
+    const bucket = byDay.get(r.day) ?? { calls: 0, cost: 0, byStage: {} };
+    bucket.calls += calls;
+    bucket.cost += cost;
+    bucket.byStage[r.stage_name] = (bucket.byStage[r.stage_name] ?? 0) + cost;
+    byDay.set(r.day, bucket);
+
+    const s = stageTotalsMap.get(r.stage_name) ?? { calls: 0, cost: 0 };
+    s.calls += calls;
+    s.cost += cost;
+    stageTotalsMap.set(r.stage_name, s);
+  }
+
+  // Fill in missing days (zero-spend) so the chart has a continuous x-axis.
+  const daily: CostDashboardData["daily"] = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(Date.now() - i * 24 * 3600_000);
+    const key = d.toISOString().slice(0, 10);
+    const b = byDay.get(key) ?? { calls: 0, cost: 0, byStage: {} };
+    daily.push({
+      day: key,
+      calls: b.calls,
+      costUsd: b.cost,
+      byStage: b.byStage,
+    });
+  }
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const todaySpend = byDay.get(todayKey)?.cost ?? 0;
+
+  const capRow = await db
+    .selectFrom("config")
+    .select("value")
+    .where("key", "=", "budget.daily_usd_cap")
+    .executeTakeFirst();
+  const cap = capRow
+    ? Number(typeof capRow.value === "number" ? capRow.value : capRow.value)
+    : null;
+
+  const stageTotals = [...stageTotalsMap.entries()]
+    .map(([stage, v]) => ({ stage, calls: v.calls, costUsd: v.cost }))
+    .sort((a, b) => b.costUsd - a.costUsd);
+
+  return {
+    daily,
+    stageTotals,
+    todaySpend,
+    dailyCap: cap !== null && Number.isFinite(cap) ? cap : null,
+    knownStages: [...knownStages].sort(),
+  };
 }
 
 async function loadConfigRows(): Promise<ConfigRow[]> {
