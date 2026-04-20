@@ -23,6 +23,9 @@ bun.lockb.bak
 # data (local docker volumes)
 data/
 
+# captured scorer fixtures (may contain raw source payloads)
+fixtures/
+
 # legacy jekyll
 _site/
 .sass-cache/
