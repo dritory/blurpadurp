@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
+import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import {
@@ -22,6 +23,13 @@ import { TokenResultPage } from "../views/token-result.tsx";
 const PUBLIC_URL =
   getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
 const FEED_MAX_ENTRIES = 20;
+
+// 5 attempts burst, refill at 1 per 30s (= 120/hour sustained). Plenty
+// for a human; noisy for a script.
+const subscribeLimiter = makeRateLimiter({
+  capacity: 5,
+  refillPerMs: 1 / 30_000,
+});
 
 export const app = new Hono();
 
@@ -176,6 +184,10 @@ app.get("/unsubscribe/:token", async (c) => {
 });
 
 app.post("/subscribe", async (c) => {
+  const ip = clientIp(c.req.raw.headers, null);
+  if (!subscribeLimiter.take(ip)) {
+    return c.redirect("/?error=rate_limited", 303);
+  }
   const body = await c.req.parseBody();
   // Honeypot: bots fill every field; humans leave this hidden one empty.
   // Silently redirect as if it succeeded — no signal to the bot.
@@ -295,6 +307,12 @@ function parseFlash(
   }
   if (error === "invalid_email") {
     return { kind: "error", msg: "That email didn't parse. Try again." };
+  }
+  if (error === "rate_limited") {
+    return {
+      kind: "error",
+      msg: "Too many attempts. Give it a minute and try again.",
+    };
   }
   return null;
 }
