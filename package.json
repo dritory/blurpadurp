@@ -1,0 +1,28 @@
+{
+  "name": "blurpadurp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cli": "bun run src/cli.ts",
+    "dev:api": "bun run --watch src/api/index.tsx",
+    "migrate": "bun run src/cli.ts migrate",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "@google-cloud/bigquery": "^8.1.1",
+    "hono": "latest",
+    "kysely": "latest",
+    "pg": "latest",
+    "resend": "latest",
+    "rss-parser": "^3.13.0",
+    "web-push": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pg": "latest",
+    "@types/web-push": "latest"
+  }
+}
