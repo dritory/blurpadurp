@@ -62,6 +62,12 @@ import {
   AdminReview,
   type EditorReviewData,
 } from "../views/admin-review.tsx";
+import {
+  AdminThemes,
+  type ThemeRow,
+  type ThemesData,
+  type ThemeFilter,
+} from "../views/admin-themes.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
@@ -194,6 +200,33 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       confidenceFloor: cf,
     });
     return c.html(<AdminExploreGate d={data} />);
+  });
+
+  app.get("/admin/themes", async (c) => {
+    const filter = parseThemeFilter(c.req.query("filter"));
+    const data = await loadThemesData(
+      filter,
+      parseFlashGeneric(c.req.query("saved"), c.req.query("error")),
+    );
+    return c.html(<AdminThemes data={data} />);
+  });
+
+  app.post("/admin/themes/toggle", async (c) => {
+    const body = await c.req.parseBody();
+    const themeId = Number(body.theme_id);
+    const next = body.next === "on";
+    const filter = parseThemeFilter(
+      typeof body.filter === "string" ? body.filter : undefined,
+    );
+    if (!Number.isFinite(themeId) || themeId <= 0) {
+      return c.redirect(`/admin/themes?filter=${filter}&error=bad_id`, 303);
+    }
+    await db
+      .updateTable("theme")
+      .set({ is_long_running: next })
+      .where("id", "=", themeId)
+      .execute();
+    return c.redirect(`/admin/themes?filter=${filter}&saved=1`, 303);
   });
 
   app.get("/admin/eval", async (c) => {
@@ -1255,6 +1288,100 @@ async function loadNextEvalCandidate(): Promise<EvalCandidate | null> {
     scorerOneLiner: r?.summary ?? "",
     retrodiction: r?.reasoning?.retrodiction_12mo ?? "",
     ingestedAt: row.ingested_at,
+  };
+}
+
+function parseThemeFilter(raw: string | undefined): ThemeFilter {
+  if (raw === "long_running" || raw === "rising" || raw === "active") {
+    return raw;
+  }
+  return "all";
+}
+
+function parseFlashGeneric(
+  saved: string | undefined,
+  error: string | undefined,
+): ThemesData["flash"] {
+  if (saved) return { kind: "ok", msg: "Saved." };
+  if (error === "bad_id") return { kind: "error", msg: "Bad theme id." };
+  return null;
+}
+
+async function loadThemesData(
+  filter: ThemeFilter,
+  flash: ThemesData["flash"],
+): Promise<ThemesData> {
+  const totalRow = await db
+    .selectFrom("theme")
+    .select(sql<string>`count(*)`.as("n"))
+    .executeTakeFirstOrThrow();
+
+  let q = db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "category.slug as category_slug",
+      "theme.first_seen_at",
+      "theme.last_published_at",
+      "theme.n_stories_published",
+      "theme.rolling_composite_avg",
+      "theme.rolling_composite_30d",
+      "theme.is_long_running",
+    ]);
+
+  if (filter === "long_running") {
+    q = q.where("theme.is_long_running", "=", true);
+  }
+  if (filter === "active") {
+    const since = new Date(Date.now() - 30 * 24 * 3600_000);
+    q = q.where("theme.last_published_at", ">=", since);
+  }
+
+  const rows = await q.orderBy("theme.last_published_at", "desc").limit(500).execute();
+
+  // Trajectory is computed in-memory (same formula as loadThemeMeta in
+  // compose.ts). Could be shared if we refactor, but themes page is
+  // read-only and the math is trivial.
+  let mapped: ThemeRow[] = rows.map((r) => {
+    const avg =
+      r.rolling_composite_avg !== null ? Number(r.rolling_composite_avg) : null;
+    const d30 =
+      r.rolling_composite_30d !== null ? Number(r.rolling_composite_30d) : null;
+    const n = r.n_stories_published;
+    let trajectory: ThemeRow["trajectory"];
+    if (n < 3 || avg === null || d30 === null) trajectory = "new";
+    else if (avg === 0) trajectory = "stable";
+    else {
+      const ratio = d30 / avg;
+      if (ratio > 1.1) trajectory = "rising";
+      else if (ratio < 0.9) trajectory = "falling";
+      else trajectory = "stable";
+    }
+    return {
+      id: Number(r.id),
+      name: r.name,
+      category: r.category_slug,
+      firstSeenAt: r.first_seen_at,
+      lastPublishedAt: r.last_published_at,
+      nStoriesPublished: r.n_stories_published,
+      rollingAvg: avg,
+      rolling30d: d30,
+      trajectory,
+      isLongRunning: r.is_long_running,
+    };
+  });
+
+  if (filter === "rising") {
+    mapped = mapped.filter((t) => t.trajectory === "rising");
+  }
+
+  return {
+    rows: mapped,
+    filter,
+    total: Number(totalRow.n),
+    flash,
   };
 }
 
