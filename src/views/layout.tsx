@@ -1,4 +1,4 @@
-import type { FC } from "hono/jsx";
+import type { Child, FC } from "hono/jsx";
 import { STYLES } from "./styles.ts";
 
 export type NavKey = "home" | "archive" | "about" | null;
@@ -11,6 +11,7 @@ export const Layout: FC<{
   nav?: NavKey;
   description?: string;
   canonicalPath?: string;
+  children?: Child;
 }> = ({
   title,
   nav = null,

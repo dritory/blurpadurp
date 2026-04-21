@@ -4,6 +4,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 
 export interface EditorReviewData {
@@ -15,10 +16,22 @@ export interface EditorReviewData {
     composerModelId: string | null;
   };
   editor: {
-    picks: Array<{ story_id: number; rank: number; reason: string }>;
+    picks: Array<
+      | { story_id: number; rank: number; reason: string }
+      | {
+          story_ids: number[];
+          lead_story_id: number;
+          rank: number;
+          reason: string;
+        }
+    >;
     cuts_summary: string;
   } | null;
   storyTitles: Map<number, string>;
+  storyThemes: Map<
+    number,
+    { theme_id: number | null; theme_name: string | null }
+  >;
   shrug: Array<{
     story_id: number;
     title: string;
@@ -32,6 +45,7 @@ export interface EditorReviewData {
 
 export const AdminReview: FC<{ data: EditorReviewData }> = ({ data }) => (
   <Layout title={`Review #${data.issue.id} — Blurpadurp`}>
+    <AdminNav current={null} />
     <div class="issue-meta">
       Issue #{data.issue.id} · {formatIssueDate(data.issue.publishedAt)}
       {data.issue.isEventDriven ? " · event-driven" : ""}
@@ -49,19 +63,65 @@ export const AdminReview: FC<{ data: EditorReviewData }> = ({ data }) => (
           {data.editor.picks
             .slice()
             .sort((a, b) => a.rank - b.rank)
-            .map((p) => (
-              <li>
-                <strong>
-                  <a href={`/issue/${data.issue.id}`}>
-                    {data.storyTitles.get(p.story_id) ?? `story #${p.story_id}`}
-                  </a>
-                </strong>
-                <br />
-                <span style="color: var(--ink-soft); font-size: 14px;">
-                  rank {p.rank} — {p.reason}
-                </span>
-              </li>
-            ))}
+            .map((p) => {
+              const isArc = "story_ids" in p;
+              const ids = isArc ? p.story_ids : [p.story_id];
+              const lead = isArc ? p.lead_story_id : p.story_id;
+              const leadTheme = data.storyThemes.get(lead);
+              return (
+                <li>
+                  <strong>
+                    <a href={`/issue/${data.issue.id}`}>
+                      {data.storyTitles.get(lead) ?? `story #${lead}`}
+                    </a>
+                  </strong>
+                  {isArc ? (
+                    <span
+                      style="font-family: var(--sans); font-size: 11px; background: rgba(74, 107, 74, 0.15); color: #2b4f2b; padding: 1px 6px; border-radius: 2px; margin-left: 8px;"
+                    >
+                      arc · {ids.length} stories
+                    </span>
+                  ) : null}
+                  <br />
+                  <span style="color: var(--ink-soft); font-size: 14px;">
+                    rank {p.rank} — {p.reason}
+                  </span>
+                  <br />
+                  <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
+                    theme:{" "}
+                    {leadTheme?.theme_name !== null && leadTheme?.theme_name !== undefined ? (
+                      <>
+                        <a href={`/theme/${leadTheme.theme_id}`}>
+                          {leadTheme.theme_name}
+                        </a>{" "}
+                        <span style="opacity: 0.6;">#{leadTheme.theme_id}</span>
+                      </>
+                    ) : (
+                      <em>none</em>
+                    )}
+                  </span>
+                  {isArc && ids.length > 1 ? (
+                    <ul
+                      style="font-family: var(--sans); font-size: 12px; color: var(--ink-soft); margin: 4px 0 0 20px; padding: 0; list-style: disc;"
+                    >
+                      {ids.map((sid) => {
+                        const t = data.storyThemes.get(sid);
+                        return (
+                          <li>
+                            #{sid} — {data.storyTitles.get(sid) ?? "(missing title)"}{" "}
+                            {t?.theme_name !== null && t?.theme_name !== undefined ? (
+                              <span style="opacity: 0.8;">
+                                · theme {t.theme_name} (#{t.theme_id})
+                              </span>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            })}
         </ol>
         <h3>What the editor cut</h3>
         <p>{data.editor.cuts_summary || <em>— no cuts summary —</em>}</p>

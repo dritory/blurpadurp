@@ -5,6 +5,7 @@ import type {
   ReplaySummary,
 } from "../pipeline/fixture.ts";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 export interface FixtureFile {
   name: string;
@@ -28,6 +29,7 @@ const ADMIN_STYLES = `
 export const AdminFixturesList: FC<{ files: FixtureFile[] }> = ({ files }) => (
   <Layout title="Fixtures — Blurpadurp admin">
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="fixtures" />
     <h2>Fixtures</h2>
     {files.length === 0 ? (
       <p>
@@ -71,6 +73,7 @@ export const AdminCaptureView: FC<{
 }> = ({ name, rows }) => (
   <Layout title={`${name} — fixture`}>
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="fixtures" />
     <h2>{name}</h2>
     <p class="issue-meta">capture · {rows.length} stories</p>
     <table class="fx">
@@ -95,7 +98,7 @@ export const AdminCaptureView: FC<{
             <td class="num">
               {String(r.raw_output.scores.composite ?? "")}
             </td>
-            <td>{r.raw_output.reasoning.point_in_time_confidence}</td>
+            <td>{r.raw_output.reasoning.confidence}</td>
             <td>{r.raw_output.classification.early_reject ? "yes" : ""}</td>
           </tr>
         ))}
@@ -116,6 +119,7 @@ export const AdminReplayView: FC<{
   return (
     <Layout title={`${name} — replay`}>
       <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+      <AdminNav current="fixtures" />
       <h2>{name}</h2>
       {first !== undefined ? (
         <p class="issue-meta">
@@ -191,11 +195,11 @@ export const AdminReplayView: FC<{
                     : ""}
                 </td>
                 <td>
-                  {cap.reasoning.point_in_time_confidence}
+                  {cap.reasoning.confidence}
                   {rep !== null &&
-                  rep.reasoning.point_in_time_confidence !==
-                    cap.reasoning.point_in_time_confidence
-                    ? ` → ${rep.reasoning.point_in_time_confidence}`
+                  rep.reasoning.confidence !==
+                    cap.reasoning.confidence
+                    ? ` → ${rep.reasoning.confidence}`
                     : ""}
                 </td>
                 <td>{r.error ?? ""}</td>
@@ -215,8 +219,8 @@ function diffsFrom(
   return (
     cap.classification.category !== rep.classification.category ||
     cap.classification.early_reject !== rep.classification.early_reject ||
-    cap.reasoning.point_in_time_confidence !==
-      rep.reasoning.point_in_time_confidence ||
+    cap.reasoning.confidence !==
+      rep.reasoning.confidence ||
     cap.scores.composite !== rep.scores.composite
   );
 }

@@ -1,6 +1,7 @@
 import type { FC } from "hono/jsx";
 import type { PipelineStatus } from "../api/status.ts";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 const ADMIN_STYLES = `
   table.fx { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -27,6 +28,7 @@ function freshnessClass(sec: number | null, warnAtSec: number): string {
 export const AdminStatus: FC<{ s: PipelineStatus }> = ({ s }) => (
   <Layout title="Status — Blurpadurp admin">
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="status" />
     <h2>Pipeline status</h2>
     <table class="fx">
       <tbody>

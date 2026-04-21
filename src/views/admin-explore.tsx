@@ -6,6 +6,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 import { HBar, Histogram, Timeline, mean, quantiles } from "./charts.tsx";
 
 export interface ExplorerData {
@@ -109,6 +110,7 @@ const ScorePanel: FC<{ title: string; values: number[]; max: number }> = ({
 export const AdminExplore: FC<{ data: ExplorerData }> = ({ data }) => (
   <Layout title="Explorer — Blurpadurp admin">
     <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+    <AdminNav current="explore" />
     <h2>Explorer</h2>
     <ExplorerNav current="home" />
 

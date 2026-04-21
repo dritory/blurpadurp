@@ -136,42 +136,56 @@ punctuation.*
 
 ## Synthesis opener
 
-When the input's `synthesis_themes` array has 2 or more entries, the
-brief opens with ONE short paragraph BEFORE the first H2 heading.
-That paragraph names each theme and its week-shape in flowing prose —
-it's the reader's map of the week, their "what to expect" in two
-sentences.
+When `synthesis_themes` has 2+ entries, the brief opens with ONE short
+paragraph BEFORE the first H2. When it has fewer, OMIT the opener
+entirely — no heading, no placeholder, just start with the first section.
 
-When `synthesis_themes` has fewer than 2 entries (single-theme issue,
-or nothing in conversation + worth_knowing), OMIT the opener. No
-heading, no placeholder. Just start with the first section.
+The opener is the single hardest paragraph to write. It tempts you into
+meta-framing. Resist.
 
-The opener:
-- Is 2–3 sentences, ~50–90 words.
-- Names each theme by its familiar handle ("the Middle East", "the AI
-  bill") not by internal IDs or category slugs.
-- States the week's shape per theme, drawn from the `shape` field.
-- Does NOT duplicate the sections below — it's orientation, not a
-  table of contents. No "we'll cover…" meta-talk.
-- Ends pointing forward, not backward. Not "this week saw three
-  developments"; instead "three developments pulling in different
-  directions, starting with…" or similar.
+**Hard bans (do not use these words or constructions):**
+- "threads," "arcs," "developments to track," "items worth following"
+- "N things worth knowing / tracking / watching" as an opening count
+- "this week's conversation" or any paraphrase thereof
+- "let's start with…" / "we'll cover…" / any reading-guide framing
+- Bulleted structure in prose; numbered enumeration
 
-### Synthesis gold example
+**The opener does:**
+- Lead with the single most concrete fact of the week. A specific event,
+  a specific number, a specific move — not a summary of "the news."
+- Pivot from that fact into the quieter story the reader would have
+  missed by watching only the loud one. "Elsewhere, less visibly…" /
+  "Meanwhile, barely covered…" / "In the shadow of…" are fine framings.
+- Land on ONE observation that orients the reader — not a preview of
+  sections, but a claim about the week.
 
-*When `synthesis_themes` names three themes — Middle East (arc,
-rising), AI policy (arc), drug pricing (single, rising) — a good
-opener reads:*
+**Length: 1–3 sentences, 20–50 words. Shorter is always better.** If
+it's 60 words, cut one sentence. If it's 30 words, stop. The opener
+is a sign the week has shape, not a summary of it. One sharp sentence
+beats three smooth ones.
 
-> Three arcs to track this week, pulling in different directions.
-> The Middle East's de-escalation talks quietly widened even as the
-> Hormuz standoff reached its sharpest point so far. The AI bill's
-> path through Congress got rockier, not smoother. And a second
-> GLP-1 drug posted cardiovascular benefits, which turns the
-> category from a duopoly into an actual market.
+### Synthesis gold examples
 
-*Three themes, three clauses, zero TOC energy, ends pointing into
-the first section.*
+*Short is the target. Each of these is under 40 words.*
+
+*Week with Middle East (arc), AI policy (arc), drug pricing (single):*
+
+> Oil moved 10% each way in five days while nobody watched Congress gut
+> the AI bill's reporting requirements. A second GLP-1 drug quietly
+> broke the duopoly.
+
+*Week with Japan (single, rising), UK politics (arc), corporate (single):*
+
+> Japan ended 70 years of postwar pacifism on page four. The UK spent
+> the week re-litigating its ambassador's Epstein file.
+
+*Week with Middle East (arc), Apple (single), AI (single):*
+
+> The Hormuz standoff opened and closed four times. Tim Cook announced
+> he's leaving. Any one of these would normally be the top story.
+
+*All three: one or two concrete facts, one sharp observation, under 40
+words. Zero TOC energy. Zero "threads." No count in the lede.*
 
 ---
 
@@ -197,8 +211,19 @@ next." No "what to expect." Single tight paragraph.
 
 ### `worth_watching[]` → `## Worth watching`
 
-One sentence per item. No headline, no paragraph. Just the development
-and what would confirm or kill it. No citations.
+**Hard budget: 15–25 words per item. No trailing clauses. No "the specific
+thing to watch is…" / "worth watching whether…" meta-framing. Just name
+the thing, then the single falsification signal.** If you can't fit the
+thought in 25 words, the item belongs in `worth_knowing` and the editor
+made a mistake — still write it as one sentence anyway, not as a
+paragraph. No headline, no prose. No citations.
+
+Good:
+- "**IMF Iran-war growth downgrade** — the inflation revision is the number to watch; $95 Brent is already past the rate-cut threshold."
+- "**Trump's Lebanon-strike ban contradicts the ceasefire text** — watch whether Israel tests the line in the next two weeks."
+
+Bad (too long, meta-framed):
+- "The IMF says the Iran war 'halted' global economic momentum — the inflation forecast revision is the number to watch when the full report drops; $95 Brent is already above the threshold where central banks start revising rate-cut timelines."
 
 ### `shrug[]` → `## Worth a shrug`
 

@@ -87,8 +87,8 @@ export function summarizeReplay(rows: ReplayRow[]): ReplaySummary {
     ).length,
     confidenceShifts: ok.filter(
       (r) =>
-        r.replay_output!.reasoning.point_in_time_confidence !==
-        r.captured_output.reasoning.point_in_time_confidence,
+        r.replay_output!.reasoning.confidence !==
+        r.captured_output.reasoning.confidence,
     ).length,
     latencyMeanMs: mean(ok.map((r) => r.latency_ms)),
   };

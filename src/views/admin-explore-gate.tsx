@@ -4,6 +4,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 import { HBar } from "./charts.tsx";
 
@@ -92,6 +93,7 @@ export const AdminExploreGate: FC<{ d: GateSandboxData }> = ({ d }) => {
   return (
     <Layout title="Gate sandbox — Explorer">
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+      <AdminNav current="explore" />
       <h2>Explorer</h2>
       <ExplorerNav current="gate" />
 

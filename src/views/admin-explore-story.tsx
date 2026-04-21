@@ -3,6 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 
 export interface StoryDrilldown {
@@ -101,6 +102,7 @@ export const AdminExploreStory: FC<{ d: StoryDrilldown }> = ({ d }) => {
   return (
     <Layout title={`Story #${d.id} — Explorer`}>
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+      <AdminNav current="explore" />
       <h2>Story #{d.id}</h2>
       <ExplorerNav current="stories" />
 

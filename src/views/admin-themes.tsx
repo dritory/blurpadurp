@@ -4,6 +4,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 export interface ThemeRow {
   id: number;
@@ -54,6 +55,7 @@ export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
   return (
     <Layout title="Themes — Blurpadurp admin">
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+      <AdminNav current="themes" />
       <h2>Themes</h2>
       <p style="color: var(--ink-soft); font-size: 14px; font-family: var(--sans);">
         {data.total.toLocaleString()} themes total. Toggle "Long-running"

@@ -642,35 +642,73 @@ function clampInt(
 async function loadExplorerData(): Promise<ExplorerData> {
   const since30 = new Date(Date.now() - 30 * 24 * 3600_000);
 
-  // Corpus counts — scalar subqueries are cheaper than multiple round-trips.
-  const corpusRow = await db
-    .selectNoFrom([
-      sql<string>`(select count(*) from story)`.as("total"),
-      sql<string>`(select count(*) from story where ingested_at >= ${since30})`.as(
-        "ingested_30",
-      ),
-      sql<string>`(select count(*) from story where scored_at is not null)`.as(
-        "scored",
-      ),
-      sql<string>`(select count(*) from story where scored_at >= ${since30})`.as(
-        "scored_30",
-      ),
-      sql<string>`(select count(*) from story where passed_gate = true)`.as(
-        "passed",
-      ),
-      sql<string>`(select count(*) from story where passed_gate = true and scored_at >= ${since30})`.as(
-        "passed_30",
-      ),
-      sql<string>`(select count(*) from story where early_reject = true)`.as(
-        "rejected",
-      ),
-      sql<string>`(select count(*) from story where published_to_reader = true)`.as(
-        "published",
-      ),
-      sql<string>`(select count(*) from theme)`.as("themes"),
-      sql<string>`(select count(*) from issue)`.as("issues"),
-    ])
-    .executeTakeFirstOrThrow();
+  // Corpus counts — plain queries, one per metric. Not hot, keep simple.
+  const n = (v: string | number | bigint | null | undefined): number =>
+    v === null || v === undefined ? 0 : Number(v);
+  const [
+    totalRow,
+    ingested30Row,
+    scoredRow,
+    scored30Row,
+    passedRow,
+    passed30Row,
+    rejectedRow,
+    publishedRow,
+    themesRow,
+    issuesRow,
+  ] = await Promise.all([
+    db.selectFrom("story").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("ingested_at", ">=", since30)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("scored_at", "is not", null)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("scored_at", ">=", since30)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("passed_gate", "=", true)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("passed_gate", "=", true)
+      .where("scored_at", ">=", since30)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("early_reject", "=", true)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("published_to_reader", "=", true)
+      .executeTakeFirstOrThrow(),
+    db.selectFrom("theme").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+    db.selectFrom("issue").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+  ]);
+  const corpusRow = {
+    total: n(totalRow.n),
+    ingested_30: n(ingested30Row.n),
+    scored: n(scoredRow.n),
+    scored_30: n(scored30Row.n),
+    passed: n(passedRow.n),
+    passed_30: n(passed30Row.n),
+    rejected: n(rejectedRow.n),
+    published: n(publishedRow.n),
+    themes: n(themesRow.n),
+    issues: n(issuesRow.n),
+  };
 
   // Score vectors over the last 30d.
   const scored = await db
@@ -1517,12 +1555,30 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
   const titleRows = storyIds.length
     ? await db
         .selectFrom("story")
-        .select(["id", "title"])
-        .where("id", "in", storyIds)
+        .leftJoin("theme", "theme.id", "story.theme_id")
+        .select([
+          "story.id",
+          "story.title",
+          "story.theme_id",
+          "theme.name as theme_name",
+        ])
+        .where("story.id", "in", storyIds)
         .execute()
     : [];
   const storyTitles = new Map<number, string>(
     titleRows.map((r) => [Number(r.id), r.title]),
+  );
+  const storyThemes = new Map<
+    number,
+    { theme_id: number | null; theme_name: string | null }
+  >(
+    titleRows.map((r) => [
+      Number(r.id),
+      {
+        theme_id: r.theme_id !== null ? Number(r.theme_id) : null,
+        theme_name: r.theme_name,
+      },
+    ]),
   );
 
   return {
@@ -1535,6 +1591,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
     },
     editor: iss.editor_output_jsonb as EditorReviewData["editor"],
     storyTitles,
+    storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
   };
 }

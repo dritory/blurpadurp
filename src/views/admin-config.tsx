@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 export interface ConfigRow {
   key: string;
@@ -31,6 +32,7 @@ export const AdminConfig: FC<{
 }> = ({ rows, flash }) => (
   <Layout title="Config — Blurpadurp admin">
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="config" />
     <h2>Config</h2>
     <p>
       <em>

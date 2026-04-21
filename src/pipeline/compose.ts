@@ -496,19 +496,13 @@ function buildThemesDigest(
   >();
   for (const s of stories) {
     if (s.theme_id === null || s.theme_name === null) continue;
-    const entry =
-      grouped.get(s.theme_id) ??
-      ({
-        theme_name: s.theme_name,
-        category: s.category,
-        storyIds: [],
-      } as const);
+    const entry = grouped.get(s.theme_id) ?? {
+      theme_name: s.theme_name,
+      category: s.category,
+      storyIds: [] as number[],
+    };
     entry.storyIds.push(s.story_id);
-    grouped.set(s.theme_id, {
-      theme_name: entry.theme_name,
-      category: entry.category,
-      storyIds: entry.storyIds,
-    });
+    grouped.set(s.theme_id, entry);
   }
 
   const digest: EditorInput["themes"] = [];
@@ -615,7 +609,7 @@ async function rowsForEditor() {
 // more the algorithm pushed it = better shrug candidate). Capped at 5.
 async function loadShrugCandidates(
   cutoff: Date,
-): Promise<ComposerInput["shrug_candidates"]> {
+): Promise<ComposerInput["shrug"]> {
   const rows = await db
     .selectFrom("story_factor")
     .innerJoin("story", "story.id", "story_factor.story_id")
@@ -677,7 +671,7 @@ async function loadShrugCandidates(
       story_id,
       title: v.title,
       source_url: v.source_url,
-      category: v.category as ComposerInput["shrug_candidates"][number]["category"],
+      category: v.category as ComposerInput["shrug"][number]["category"],
       penalty_factors: [...v.penalty_factors],
       source_count: v.source_count,
       scorer_one_liner: v.scorer_one_liner,
@@ -881,7 +875,7 @@ async function persistIssue(
   storyIds: number[],
   cfg: ConfigMap,
   editorResult: EditorOutput,
-  shrugCandidates: ComposerInput["shrug_candidates"],
+  shrugCandidates: ComposerInput["shrug"],
 ): Promise<number> {
   return db.transaction().execute(async (tx) => {
     const issue = await tx
