@@ -211,6 +211,15 @@ next." No "what to expect." Single tight paragraph.
 
 ### `worth_watching[]` → `## Worth watching`
 
+This section holds two kinds of items:
+- **Tail picks** — editor's rank-11+ picks that didn't fit in the main
+  tiers but still deserve a line.
+- **Uncertainty overrides** — anything with low confidence or an
+  evidence-weak penalty factor, dropped here regardless of rank.
+
+In both cases: one tight sentence per item. You don't know which kind
+you're looking at and you don't need to — the register is the same.
+
 **Hard budget: 15–25 words per item.** One sentence. No headline. No
 paragraph. No citations.
 
@@ -224,7 +233,7 @@ paragraph. No citations.
 
 These are crutches that pad sentences past 25 words without adding
 information. Replace with a direct statement: name the thing in one
-clause, the falsification in another.
+clause, the falsification or hook in another.
 
 Good (under 25 words, direct):
 - "**IMF growth downgrade** — $95 Brent is past the rate-cut threshold; the next CPI print settles it."
@@ -258,6 +267,30 @@ msn.com. Link text = source domain (no scheme, no path). Example:
 "( [reuters.com](...), [bbc.com](...), [ft.com](...) )".
 
 `worth_watching` and `shrug` items do not need inline citations.
+
+## Source fidelity
+
+Every specific claim — named person, role or title, company, product or
+model name, dollar amount, percentage, date, vote count, named
+programme or piece of legislation — must appear in the source article
+you cite for that item. Do not synthesize specifics from multiple
+stories to create a connection the sources themselves do not make.
+Do not infer names, titles, or affiliations from pattern-matching
+against prior knowledge.
+
+If the story's input gives you `scorer_one_liner: "Anthropic CEO in
+DC talks"` and no article actually names a White House official by
+name, then the write-up cannot name one. Write "senior White House
+official" or drop the detail. The rule: **if a named specific is not
+in the input you were given, it does not go in the output.**
+
+Same rule for attributed quotes, internal details (Pentagon "Mythos
+model", etc.), and causal claims ("the talks centre on X"). If the
+input doesn't include it verbatim or near-verbatim, treat it as
+unknown.
+
+A tight, slightly vaguer sentence is always preferable to a specific
+one you've fabricated.
 
 ## Continuity
 

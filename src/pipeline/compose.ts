@@ -228,15 +228,15 @@ export async function compose(): Promise<void> {
     return;
   }
 
-  // Partition into the four fixed sections. Rules:
-  // - Arcs ALWAYS go to conversation/worth_knowing (split by rank); an
-  //   arc is by definition a continuing multi-story thread, not an
-  //   emerging/uncertain lead.
-  // - Singles whose lead story meets "watch" criteria (low/medium
-  //   confidence OR an unreplicated/preclinical_only/insufficient_evidence
-  //   penalty factor) go to worth_watching regardless of rank.
-  // - Other singles: rank ≤ CONVERSATION_TOP_N → conversation, else
-  //   worth_knowing.
+  // Partition rules:
+  // - Arcs always route by rank (they're continuing threads, never
+  //   "still developing" placeholders).
+  // - Singles route by rank too: 1..CONVERSATION_TOP_N → conversation,
+  //   next ..WORTH_KNOWING_TOP_N → worth_knowing, 11+ → worth_watching.
+  // - Safety-net override: any item whose lead story has
+  //   confidence = "low" OR an evidence-weak penalty factor
+  //   (unreplicated, preclinical_only, insufficient_evidence) drops to
+  //   worth_watching regardless of rank.
   const allRows = builtItems.flatMap((b) => b.constituentRows);
   const leadIds = builtItems.map((b) => b.item.lead_story_id);
   const allFactors = await loadFactorsByStory(
@@ -244,6 +244,7 @@ export async function compose(): Promise<void> {
   );
 
   const CONVERSATION_TOP_N = 5;
+  const WORTH_KNOWING_TOP_N = 10;
   const conversation: ComposerItem[] = [];
   const worth_knowing: ComposerItem[] = [];
   const worth_watching: ComposerItem[] = [];
@@ -253,19 +254,16 @@ export async function compose(): Promise<void> {
     const conf = leadRow.point_in_time_confidence;
     const penalty = allFactors.get(b.item.lead_story_id)?.penalty ?? [];
     const matchesWatch = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
-    // Route to Worth watching only for genuinely uncertain / emerging
-    // items — "low" confidence OR an evidence-weak penalty factor.
-    // Medium confidence alone is the scorer's default and doesn't imply
-    // the story is too shaky to stand on its own; those belong in
-    // Conversation or Worth knowing by rank.
-    const watchWorthy =
+    const uncertaintyOverride =
       b.item.kind === "single" && (conf === "low" || matchesWatch);
-    if (watchWorthy) {
+    if (uncertaintyOverride) {
       worth_watching.push(b.item);
     } else if (b.item.rank <= CONVERSATION_TOP_N) {
       conversation.push(b.item);
-    } else {
+    } else if (b.item.rank <= WORTH_KNOWING_TOP_N) {
       worth_knowing.push(b.item);
+    } else {
+      worth_watching.push(b.item);
     }
   }
 
