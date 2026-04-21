@@ -159,38 +159,33 @@ meta-framing. Resist.
 - Land on ONE observation that orients the reader — not a preview of
   sections, but a claim about the week.
 
-**Length:** 2–3 sentences, 40–80 words. Shorter is better. If it feels
-like a table of contents, cut it in half and try again.
+**Length: 1–3 sentences, 20–50 words. Shorter is always better.** If
+it's 60 words, cut one sentence. If it's 30 words, stop. The opener
+is a sign the week has shape, not a summary of it. One sharp sentence
+beats three smooth ones.
 
 ### Synthesis gold examples
 
-*When `synthesis_themes` names Middle East (arc, rising), AI policy
-(arc), drug pricing (single, rising) — a good opener reads:*
+*Short is the target. Each of these is under 40 words.*
 
-> Oil jumped 10% and fell 8% inside five days as Hormuz opened, closed,
-> and opened again. Meanwhile, less loudly, Congress reshuffled the AI
-> bill for the third time and a second GLP-1 drug posted cardiovascular
-> benefits. The geopolitical furniture rearranges while everyone watches
-> one waterway.
+*Week with Middle East (arc), AI policy (arc), drug pricing (single):*
 
-*Or, for the same input:*
+> Oil moved 10% each way in five days while nobody watched Congress gut
+> the AI bill's reporting requirements. A second GLP-1 drug quietly
+> broke the duopoly.
 
-> The week's loudest hour was Friday's Brent close at $95. Its most
-> consequential was Tuesday's House amendment gutting the AI bill's
-> reporting requirements, and almost nobody noticed.
+*Week with Japan (single, rising), UK politics (arc), corporate (single):*
 
-*Or, for a different week with Japan (single, rising), UK politics
-(arc), corporate earnings (single, stable):*
+> Japan ended 70 years of postwar pacifism on page four. The UK spent
+> the week re-litigating its ambassador's Epstein file.
 
-> Japan scrapped its postwar ban on arms exports this week — the biggest
-> rewrite of Asian security architecture since 1952, covered on page
-> four of most papers. The US, meanwhile, spent the week re-litigating
-> whether the Prime Minister of the UK had properly vetted his Epstein-
-> era ambassador.
+*Week with Middle East (arc), Apple (single), AI (single):*
 
-*All three lead with a concrete event or number, pivot to the
-under-covered angle, end on an observation. Zero TOC energy. Zero
-"threads." No count in the lede.*
+> The Hormuz standoff opened and closed four times. Tim Cook announced
+> he's leaving. Any one of these would normally be the top story.
+
+*All three: one or two concrete facts, one sharp observation, under 40
+words. Zero TOC energy. Zero "threads." No count in the lede.*
 
 ---
 
