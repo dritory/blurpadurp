@@ -8,5 +8,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./data/pg:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
+
+volumes:
+  pgdata:

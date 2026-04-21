@@ -1615,9 +1615,6 @@ function parseFlash(
 app.notFound((c) => c.html(<NotFoundPage />, 404));
 
 app.onError((err, c) => {
-  // Hono's own exceptions (auth, notFound, validation) carry their own
-  // status + response and should pass through unchanged — not get
-  // rewritten as a generic 500.
   if (err instanceof HTTPException) {
     return err.getResponse();
   }
