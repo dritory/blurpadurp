@@ -3,6 +3,7 @@
 
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { HTTPException } from "hono/http-exception";
 import { sql } from "kysely";
 import { readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -641,35 +642,73 @@ function clampInt(
 async function loadExplorerData(): Promise<ExplorerData> {
   const since30 = new Date(Date.now() - 30 * 24 * 3600_000);
 
-  // Corpus counts — scalar subqueries are cheaper than multiple round-trips.
-  const corpusRow = await db
-    .selectNoFrom([
-      sql<string>`(select count(*) from story)`.as("total"),
-      sql<string>`(select count(*) from story where ingested_at >= ${since30})`.as(
-        "ingested_30",
-      ),
-      sql<string>`(select count(*) from story where scored_at is not null)`.as(
-        "scored",
-      ),
-      sql<string>`(select count(*) from story where scored_at >= ${since30})`.as(
-        "scored_30",
-      ),
-      sql<string>`(select count(*) from story where passed_gate = true)`.as(
-        "passed",
-      ),
-      sql<string>`(select count(*) from story where passed_gate = true and scored_at >= ${since30})`.as(
-        "passed_30",
-      ),
-      sql<string>`(select count(*) from story where early_reject = true)`.as(
-        "rejected",
-      ),
-      sql<string>`(select count(*) from story where published_to_reader = true)`.as(
-        "published",
-      ),
-      sql<string>`(select count(*) from theme)`.as("themes"),
-      sql<string>`(select count(*) from issue)`.as("issues"),
-    ])
-    .executeTakeFirstOrThrow();
+  // Corpus counts — plain queries, one per metric. Not hot, keep simple.
+  const n = (v: string | number | bigint | null | undefined): number =>
+    v === null || v === undefined ? 0 : Number(v);
+  const [
+    totalRow,
+    ingested30Row,
+    scoredRow,
+    scored30Row,
+    passedRow,
+    passed30Row,
+    rejectedRow,
+    publishedRow,
+    themesRow,
+    issuesRow,
+  ] = await Promise.all([
+    db.selectFrom("story").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("ingested_at", ">=", since30)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("scored_at", "is not", null)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("scored_at", ">=", since30)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("passed_gate", "=", true)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("passed_gate", "=", true)
+      .where("scored_at", ">=", since30)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("early_reject", "=", true)
+      .executeTakeFirstOrThrow(),
+    db
+      .selectFrom("story")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("published_to_reader", "=", true)
+      .executeTakeFirstOrThrow(),
+    db.selectFrom("theme").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+    db.selectFrom("issue").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+  ]);
+  const corpusRow = {
+    total: n(totalRow.n),
+    ingested_30: n(ingested30Row.n),
+    scored: n(scoredRow.n),
+    scored_30: n(scored30Row.n),
+    passed: n(passedRow.n),
+    passed_30: n(passed30Row.n),
+    rejected: n(rejectedRow.n),
+    published: n(publishedRow.n),
+    themes: n(themesRow.n),
+    issues: n(issuesRow.n),
+  };
 
   // Score vectors over the last 30d.
   const scored = await db
@@ -1576,6 +1615,12 @@ function parseFlash(
 app.notFound((c) => c.html(<NotFoundPage />, 404));
 
 app.onError((err, c) => {
+  // Hono's own exceptions (auth, notFound, validation) carry their own
+  // status + response and should pass through unchanged — not get
+  // rewritten as a generic 500.
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
   console.error("[api]", err);
   const detail =
     getEnvOptional("NODE_ENV") === "production"

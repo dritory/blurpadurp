@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 export interface DayStageRow {
   day: string; // YYYY-MM-DD (UTC)
@@ -60,6 +61,7 @@ export const AdminCosts: FC<{ data: CostDashboardData }> = ({ data }) => {
   return (
     <Layout title="Costs — Blurpadurp admin">
       <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+      <AdminNav current="costs" />
       <h2>Costs</h2>
 
       <div class="headline-row">

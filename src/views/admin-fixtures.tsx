@@ -5,6 +5,7 @@ import type {
   ReplaySummary,
 } from "../pipeline/fixture.ts";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 export interface FixtureFile {
   name: string;
@@ -28,6 +29,7 @@ const ADMIN_STYLES = `
 export const AdminFixturesList: FC<{ files: FixtureFile[] }> = ({ files }) => (
   <Layout title="Fixtures — Blurpadurp admin">
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="fixtures" />
     <h2>Fixtures</h2>
     {files.length === 0 ? (
       <p>
@@ -71,6 +73,7 @@ export const AdminCaptureView: FC<{
 }> = ({ name, rows }) => (
   <Layout title={`${name} — fixture`}>
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="fixtures" />
     <h2>{name}</h2>
     <p class="issue-meta">capture · {rows.length} stories</p>
     <table class="fx">
@@ -116,6 +119,7 @@ export const AdminReplayView: FC<{
   return (
     <Layout title={`${name} — replay`}>
       <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+      <AdminNav current="fixtures" />
       <h2>{name}</h2>
       {first !== undefined ? (
         <p class="issue-meta">

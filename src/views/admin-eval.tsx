@@ -5,6 +5,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 
 export interface EvalCandidate {
   story_id: number;
@@ -53,6 +54,7 @@ export const AdminEval: FC<{
 }> = ({ stats, candidate, flash }) => (
   <Layout title="Eval — Blurpadurp admin">
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="eval" />
     <h2>Eval labeling</h2>
     <p style="color: var(--ink-soft); font-size: 14px; font-family: var(--sans);">
       Label whether this story belongs in a brief. <strong>Yes</strong> = if

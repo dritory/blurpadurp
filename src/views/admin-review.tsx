@@ -4,6 +4,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 
 export interface EditorReviewData {
@@ -32,6 +33,7 @@ export interface EditorReviewData {
 
 export const AdminReview: FC<{ data: EditorReviewData }> = ({ data }) => (
   <Layout title={`Review #${data.issue.id} — Blurpadurp`}>
+    <AdminNav current={null} />
     <div class="issue-meta">
       Issue #{data.issue.id} · {formatIssueDate(data.issue.publishedAt)}
       {data.issue.isEventDriven ? " · event-driven" : ""}

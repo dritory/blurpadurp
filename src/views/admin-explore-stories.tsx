@@ -3,6 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 
 export type GateFilter = "any" | "pass" | "fail" | "reject";
@@ -125,6 +126,7 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
   return (
     <Layout title="Stories — Explorer">
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+      <AdminNav current="explore" />
       <h2>Explorer</h2>
       <ExplorerNav current="stories" />
 
