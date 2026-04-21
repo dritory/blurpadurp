@@ -2,10 +2,6 @@
 
 Version tag: `editor-v0.1`. Pre-1.0.
 
-Drafts in this file that aren't yet activated in production (arcs,
-themes digest) land under a version bump when the operator is ready.
-Keep changes reversible until then.
-
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
 make the strongest issue. Composer writes the brief from the editor's
@@ -154,11 +150,9 @@ Return your shortlist now.
 
 ## Notes for future revisions
 
-- Arc picks (draft, not-yet-activated). Single-story picks
-  (story_id only) still parse as today; the arc shape
-  ({story_ids[], lead_story_id}) is additive. When arcs go live, bump
-  this file's version, add a config migration for
-  editor.prompt_version, and commit together.
+- Single-story picks (`story_id` only) and arc picks
+  (`{story_ids[], lead_story_id}`) both parse. Use arcs when a theme
+  is pre-tagged `← arc` in the digest.
 - The composer handles arcs by weaving stories chronologically into
   one paragraph (~4–5 sentences); see docs/composer-prompt.md#arcs.
 
