@@ -1,6 +1,6 @@
-# Composer prompt v0.2
+# Composer prompt v0.3
 
-Version tag: `composer-v0.2`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.3`. Pre-1.0 — schema and behavior may change
 freely.
 
 # System prompt

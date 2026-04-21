@@ -1,6 +1,6 @@
-# Editor prompt v0.1
+# Editor prompt v0.2
 
-Version tag: `editor-v0.1`. Pre-1.0.
+Version tag: `editor-v0.2`. Pre-1.0.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
