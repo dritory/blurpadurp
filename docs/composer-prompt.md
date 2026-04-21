@@ -1,6 +1,6 @@
-# Composer prompt v0.2
+# Composer prompt v0.3
 
-Version tag: `composer-v0.2`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.3`. Pre-1.0 — schema and behavior may change
 freely.
 
 # System prompt
@@ -189,6 +189,49 @@ Within *This week's conversation* and *Worth knowing*, preserve the
 editor's rank order. Within *Worth watching* and *Worth a shrug*, the
 composer may reorder for flow.
 
+## Arcs
+
+The input includes an `items` array. Each item is either a single story
+or an **arc** — a set of 2–5 related stories the editor grouped because
+they form one continuing thread over the week (escalation, widening
+crisis, reveal + reactions, policy → amendment → vote).
+
+For `kind: "arc"` items in *This week's conversation* or *Worth
+knowing*, write ONE item, not one per story. The writing register:
+
+- Lead with the arc's shape, not the earliest event. The headline
+  names the through-line ("The Hormuz standoff widens", "The AI bill's
+  rocky week", "The Pelicot trial comes to a head").
+- Weave the constituent stories chronologically, using the
+  `published_at` timestamps. Days of the week are fine
+  ("Monday's threat became Wednesday's carrier deployment became
+  Friday's oil spike"). Specific dates only when they matter.
+- 4–5 sentences for arcs in Conversation, 2–3 for arcs in Worth
+  knowing. Citations follow the same rule as singles — up to 3 distinct
+  tier-1 domains across the whole arc, not per-constituent.
+- End with the open question, not a prediction. If the arc is still
+  active, say so; if it resolved this week, mark the resolution.
+
+Never render an arc as bullet-points-of-events. The whole point of an
+arc pick is that the stories belong together in flowing prose.
+
+### Arc gold example — target register
+
+**The Hormuz standoff widens.** Iran threatened to close the strait on
+Monday in response to the new sanctions package; by Wednesday the US
+Fifth Fleet had moved two carrier groups east, which is the answer
+Tehran was fishing for — proof that a third of global oil still runs
+through a waterway Iran can credibly menace from shore. Brent closed
+Friday up 4%, the sharpest weekly gain since April. The open question
+nobody at the White House is answering on the record: at what oil price
+does the calculus change?
+( [reuters.com](…), [ft.com](…), [bloomberg.com](…) )
+
+*What works here: arc-shape headline, not an event-headline; chronology
+via day names, not dates; the "which is the answer Tehran was fishing
+for" is the sharp observation per arc; market data as the payoff; one
+open question.*
+
 # Output format
 
 Return exactly one JSON object, no prose around it:
@@ -229,6 +272,27 @@ stories (already gated, ordered by composite score descending):
 
   - ...
 
+items (editor's picks grouped into singles and arcs — this is the
+authoritative list for Conversation and Worth knowing. rank 1 leads,
+higher ranks follow. kind="arc" items contain multiple story_ids on
+the same theme; write them as ONE paragraph woven chronologically
+(see the Arcs section above)):
+
+  - kind: single|arc
+    rank: {{r}}
+    lead_story_id: {{id}}
+    story_ids: [{{id}}, {{id}}, ...]
+    reason: {{editor's ≤25 word justification}}
+    stories:
+      - story_id: {{id}}
+        title: {{title}}
+        published_at: {{iso8601 or "-"}}
+        scorer_one_liner: {{one_liner}}
+        source_url: {{url}}
+      - ...
+
+  - ...
+
 watch_candidate_ids (subset of story_ids above — render these ONLY in
 the Worth watching section, never in Conversation or Worth knowing):
 
@@ -259,10 +323,13 @@ Return your JSON object now.
 
 ## Notes for future revisions
 
-- v0.1 composed a single issue grouped by theme. v0.2 switches to four
+- v0.1 composed a single issue grouped by theme. v0.2 switched to four
   fixed functional sections (Conversation / Worth knowing / Worth watching
   / Worth a shrug) — see `docs/concept.md#section-scheme`.
-- v0.2 still composes a single issue per run. Event-driven single-item
+- v0.3 introduces arcs: editor may emit multi-story picks on the same
+  theme and the composer writes them as one chronologically-woven
+  paragraph. Singles remain the common case.
+- v0.3 still composes a single issue per run. Event-driven single-item
   issues will need a separate template.
 - Prior-theme context is today's workaround for cross-issue continuity;
   eventually the composer should read prior issues directly.

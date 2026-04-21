@@ -12,7 +12,8 @@ import type {
   ComposerInput,
   ComposerOutput,
 } from "../shared/composer-schema.ts";
-import type { EditorInput } from "../shared/editor-schema.ts";
+import { normalizePick } from "../shared/editor-schema.ts";
+import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
 // Penalty factors that push an otherwise-picked story into the Worth
@@ -147,27 +148,81 @@ export async function compose(): Promise<void> {
   );
 
   const editorResult = await curateViaEditor(editor, pool);
-  const picks = editorResult.picks;
-  const pickIds = new Set(picks.map((p) => p.story_id));
+  const normalizedPicks = editorResult.picks
+    .map(normalizePick)
+    .sort((a, b) => a.rank - b.rank);
   const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
 
-  // Order stories by editor-assigned rank (1 = headline). Skip picks that
-  // name an unknown story_id — the tool schema doesn't prevent that.
-  const capped = picks
-    .sort((a, b) => a.rank - b.rank)
-    .map((p) => byId.get(p.story_id))
-    .filter((r): r is NonNullable<typeof r> => r !== undefined);
+  // Filter normalized picks to only those whose story_ids are all in
+  // the pool. A partial arc (some ids unknown) degrades to whatever
+  // ids matched. Picks with zero matched ids are dropped.
+  type PoolRow = NonNullable<ReturnType<typeof byId.get>>;
+  const items: ComposerInput["items"] = [];
+  const storyRowsOrdered: PoolRow[] = [];
+  const seenIds = new Set<number>();
+  for (const p of normalizedPicks) {
+    const matched = p.story_ids
+      .map((sid) => byId.get(sid))
+      .filter((r): r is PoolRow => r !== undefined);
+    if (matched.length === 0) continue;
+    // Sort constituent stories by published_at asc so the composer gets
+    // chronological order; null dates sort last.
+    matched.sort((a, b) => {
+      const ta = a.published_at?.getTime() ?? Number.POSITIVE_INFINITY;
+      const tb = b.published_at?.getTime() ?? Number.POSITIVE_INFINITY;
+      return ta - tb;
+    });
+    for (const r of matched) {
+      const rid = Number(r.story_id);
+      if (!seenIds.has(rid)) {
+        seenIds.add(rid);
+        storyRowsOrdered.push(r);
+      }
+    }
+    items.push({
+      kind: p.is_arc && matched.length > 1 ? "arc" : "single",
+      rank: p.rank,
+      lead_story_id: byId.has(p.lead_story_id)
+        ? p.lead_story_id
+        : Number(matched[0]!.story_id),
+      reason: p.reason,
+      stories: matched.map((r) => {
+        const out = readScorerOutput(r.raw_output);
+        return {
+          story_id: Number(r.story_id),
+          title: r.title,
+          summary: r.summary,
+          source_url: r.source_url,
+          additional_source_urls: r.additional_source_urls ?? [],
+          category: (r.category_slug as ComposerInput["items"][number]["stories"][number]["category"]) ?? null,
+          theme_name: r.theme_name,
+          theme_relationship:
+            (r.theme_relationship as ComposerInput["items"][number]["stories"][number]["theme_relationship"]) ?? null,
+          zeitgeist_score: r.zeitgeist_score ?? 0,
+          half_life: r.half_life ?? 0,
+          reach: r.reach ?? 0,
+          composite: r.composite !== null ? Number(r.composite) : 0,
+          scorer_one_liner: out.summary,
+          retrodiction_12mo: out.retrodiction,
+          published_at: r.published_at?.toISOString() ?? null,
+        };
+      }),
+    });
+  }
 
-  if (capped.length === 0) {
+  if (items.length === 0) {
     console.log("[compose] editor returned no valid picks — aborting");
     return;
   }
-  if (capped.length !== pickIds.size) {
-    console.warn(
-      `[compose] editor picked ${pickIds.size} ids but only ${capped.length} matched the pool`,
-    );
+
+  const arcCount = items.filter((it) => it.kind === "arc").length;
+  if (arcCount > 0) {
+    console.log(`[compose] editor produced ${arcCount} arc item(s)`);
   }
 
+  // Legacy flat `stories` retained for fallback / any downstream that
+  // hasn't adopted the items model yet.
+  const capped = storyRowsOrdered;
   const stories: ComposerInput["stories"] = capped.map((r) => {
     const out = readScorerOutput(r.raw_output);
     return {
@@ -210,6 +265,7 @@ export async function compose(): Promise<void> {
   const input: ComposerInput = {
     week_of: new Date().toISOString().slice(0, 10),
     stories,
+    items,
     watch_candidate_ids,
     shrug_candidates,
     prior_theme_context,
@@ -246,10 +302,7 @@ async function curateViaEditor(
     tier1: number;
     total: number;
   }>,
-): Promise<{
-  picks: Array<{ story_id: number; rank: number; reason: string }>;
-  cuts_summary: string;
-}> {
+): Promise<EditorOutput> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
 
@@ -459,10 +512,7 @@ async function persistIssue(
   output: ComposerOutput,
   storyIds: number[],
   cfg: ConfigMap,
-  editorResult: {
-    picks: Array<{ story_id: number; rank: number; reason: string }>;
-    cuts_summary: string;
-  },
+  editorResult: EditorOutput,
   shrugCandidates: ComposerInput["shrug_candidates"],
 ): Promise<number> {
   return db.transaction().execute(async (tx) => {

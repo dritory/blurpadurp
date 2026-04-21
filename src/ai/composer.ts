@@ -162,6 +162,29 @@ function renderUserMessage(input: ComposerInput): string {
     lines.push(`    retrodiction_12mo: ${s.retrodiction_12mo}`);
     lines.push("");
   }
+  if (input.items.length > 0) {
+    lines.push(
+      "items (editor's picks in rank order; kind=arc means 2+ stories on the same theme — write as ONE chronologically-woven paragraph. kind=single means one story):",
+      "",
+    );
+    for (const it of input.items) {
+      lines.push(`  - kind: ${it.kind}`);
+      lines.push(`    rank: ${it.rank}`);
+      lines.push(`    lead_story_id: ${it.lead_story_id}`);
+      lines.push(`    reason: ${it.reason}`);
+      lines.push(`    stories:`);
+      for (const s of it.stories) {
+        lines.push(`      - story_id: ${s.story_id}`);
+        lines.push(`        title: ${s.title}`);
+        lines.push(`        published_at: ${s.published_at ?? "-"}`);
+        lines.push(`        scorer_one_liner: ${s.scorer_one_liner}`);
+        if (s.source_url !== null) {
+          lines.push(`        source_url: ${s.source_url}`);
+        }
+      }
+      lines.push("");
+    }
+  }
   if (input.watch_candidate_ids.length > 0) {
     lines.push(
       "watch_candidate_ids (render these ONLY in the Worth watching section, never in Conversation or Worth knowing):",

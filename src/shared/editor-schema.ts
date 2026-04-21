@@ -32,12 +32,55 @@ export type EditorInput = z.infer<typeof EditorInputSchema>;
 
 export const EditorOutputSchema = z.object({
   picks: z.array(
-    z.object({
-      story_id: z.number(),
-      rank: z.number(),
-      reason: z.string(),
-    }),
+    z.union([
+      // Single-story pick (backward compatible with editor-v0.1).
+      z.object({
+        story_id: z.number(),
+        rank: z.number(),
+        reason: z.string(),
+      }),
+      // Arc pick: a set of stories on the same theme, written by the
+      // composer as one chronological item. lead_story_id is the anchor
+      // (the scorer summary used for the headline).
+      z.object({
+        story_ids: z.array(z.number()).min(2),
+        lead_story_id: z.number(),
+        rank: z.number(),
+        reason: z.string(),
+      }),
+    ]),
   ),
   cuts_summary: z.string(),
 });
 export type EditorOutput = z.infer<typeof EditorOutputSchema>;
+
+// Normalized pick: always carries a populated story_ids array, with
+// is_arc flagged for composer branching. Singles expand to length-1 arrays.
+export interface NormalizedPick {
+  lead_story_id: number;
+  story_ids: number[];
+  rank: number;
+  reason: string;
+  is_arc: boolean;
+}
+
+export function normalizePick(
+  p: EditorOutput["picks"][number],
+): NormalizedPick {
+  if ("story_ids" in p) {
+    return {
+      lead_story_id: p.lead_story_id,
+      story_ids: p.story_ids,
+      rank: p.rank,
+      reason: p.reason,
+      is_arc: true,
+    };
+  }
+  return {
+    lead_story_id: p.story_id,
+    story_ids: [p.story_id],
+    rank: p.rank,
+    reason: p.reason,
+    is_arc: false,
+  };
+}

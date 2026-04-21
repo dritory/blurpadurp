@@ -1,6 +1,6 @@
-# Editor prompt v0.1
+# Editor prompt v0.2
 
-Version tag: `editor-v0.1`. Pre-1.0.
+Version tag: `editor-v0.2`. Pre-1.0.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
@@ -32,6 +32,19 @@ a separate composer will write the prose from your shortlist.
 - A healthy mix of topics. One dominant story (e.g. an active war) is
   fine, even expected. 4+ stories on the exact same angle is crowding
   — pick 2 representatives and trust the composer to group them.
+- **Prefer arcs over snapshots.** When 2–5 stories in the pool share
+  the same theme AND represent a continuing story over the week
+  (escalation → response → outcome, or a widening crisis, or a reveal
+  then reactions), return ONE arc pick containing all of them rather
+  than multiple singles. Arcs read better than three isolated bullets
+  that share a headline noun. Examples of arc-worthy shapes:
+    - "Iran threatens Hormuz (Mon) → US moves carriers (Wed) → oil
+      +4% (Fri)"
+    - "AI bill passes Senate (Tue) → House amendment (Thu) → vote
+      Fri"
+    - "Drug trial results published (Mon) → stock reacts (Mon) →
+      FDA statement (Wed)"
+  One arc counts as ONE pick toward the 10–15 target.
 - Prefer the under-covered angle over the widely-covered one when
   quality is equal. If 5 outlets all have the "Iran threatens Hormuz"
   story but 1 has "Iran's internal hardline-reformist split," pick the
@@ -56,14 +69,24 @@ a separate composer will write the prose from your shortlist.
 
 # Output format
 
-Return ONE JSON object via the emit_shortlist tool:
+Return ONE JSON object via the emit_shortlist tool. Each pick is
+either a single-story pick or an arc pick:
 
 {
   "picks": [
+    // Single-story pick:
     {
       "story_id": <int>,
       "rank": <int, 1 = top of brief>,
       "reason": "<≤20 words — why this made the cut>"
+    },
+    // Arc pick (2+ stories on the same theme, written as one item):
+    {
+      "story_ids": [<int>, <int>, ...],
+      "lead_story_id": <int, must appear in story_ids>,
+      "rank": <int>,
+      "reason": "<≤25 words — name the arc, e.g. 'Hormuz widens:
+        threat → carriers → oil'>"
     },
     ...
   ],
@@ -71,7 +94,11 @@ Return ONE JSON object via the emit_shortlist tool:
     include and why; useful context for future editorial tuning>"
 }
 
-Rank 1 is the headline item, rank N is the closing item.
+Rank 1 is the headline item, rank N is the closing item. An arc
+occupies one rank slot regardless of how many story_ids it contains.
+lead_story_id should be the story whose scorer one-liner best
+anchors the arc's headline framing (usually the earliest event, but
+not always — the most consequential one is a fine pick).
 ```
 
 # User message template
@@ -106,6 +133,13 @@ Return your shortlist now.
 ```
 
 ## Notes for future revisions
+
+- v0.2 adds arc picks. v0.1 picks (single story_id only) still parse —
+  they're treated as arcs of length 1 downstream. If the model under-
+  uses arcs, tighten the "prefer arcs" language; if it over-uses them,
+  add a guard like "arc minimum 2 items, maximum 5."
+- The composer handles arcs by weaving stories chronologically into one
+  paragraph (~4–5 sentences); see docs/composer-prompt.md#arcs.
 
 - v0.1 doesn't let the editor see prior issues. Future version should
   — "we covered X last week, pick continuation or novel" is a real
