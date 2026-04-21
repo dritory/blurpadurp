@@ -139,77 +139,17 @@ async function loadSystemPrompt(path: string): Promise<string> {
 
 function renderUserMessage(input: ComposerInput): string {
   const lines: string[] = [];
-  lines.push(`week_of: ${input.week_of}`);
-  lines.push(`stories_count: ${input.stories.length}`, "");
-  lines.push("stories (already gated, ordered by composite score descending):", "");
-  for (const s of input.stories) {
-    lines.push(`  - story_id: ${s.story_id}`);
-    lines.push(`    title: ${s.title}`);
-    lines.push(`    summary: ${s.summary ?? "-"}`);
-    lines.push(`    source_url: ${s.source_url ?? "-"}`);
-    if (s.additional_source_urls.length > 0) {
-      lines.push(`    additional_source_urls:`);
-      for (const u of s.additional_source_urls) lines.push(`      - ${u}`);
-    }
-    lines.push(`    category: ${s.category ?? "-"}`);
-    lines.push(`    theme: ${s.theme_name ?? "-"}`);
-    lines.push(`    theme_relationship: ${s.theme_relationship ?? "-"}`);
-    lines.push(`    zeitgeist_score: ${s.zeitgeist_score}`);
-    lines.push(`    half_life: ${s.half_life}`);
-    lines.push(`    reach: ${s.reach}`);
-    lines.push(`    composite: ${s.composite}`);
-    lines.push(`    scorer_one_liner: ${s.scorer_one_liner}`);
-    lines.push(`    retrodiction_12mo: ${s.retrodiction_12mo}`);
-    lines.push("");
-  }
-  if (input.items.length > 0) {
-    lines.push(
-      "items (editor's picks in rank order; kind=arc means 2+ stories on the same theme — write as ONE chronologically-woven paragraph. kind=single means one story):",
-      "",
-    );
-    for (const it of input.items) {
-      lines.push(`  - kind: ${it.kind}`);
-      lines.push(`    rank: ${it.rank}`);
-      lines.push(`    lead_story_id: ${it.lead_story_id}`);
-      lines.push(`    reason: ${it.reason}`);
-      lines.push(`    stories:`);
-      for (const s of it.stories) {
-        lines.push(`      - story_id: ${s.story_id}`);
-        lines.push(`        title: ${s.title}`);
-        lines.push(`        published_at: ${s.published_at ?? "-"}`);
-        lines.push(`        scorer_one_liner: ${s.scorer_one_liner}`);
-        if (s.source_url !== null) {
-          lines.push(`        source_url: ${s.source_url}`);
-        }
-      }
-      lines.push("");
-    }
-  }
-  if (input.watch_candidate_ids.length > 0) {
-    lines.push(
-      "watch_candidate_ids (render these ONLY in the Worth watching section, never in Conversation or Worth knowing):",
-    );
-    for (const id of input.watch_candidate_ids) lines.push(`  - ${id}`);
-    lines.push("");
-  }
-  if (input.shrug_candidates.length > 0) {
-    lines.push(
-      "shrug_candidates (separate pool — noise the algorithm pushed this week; one wry line each in Worth a shrug, name the hype, do not elevate):",
-    );
-    for (const s of input.shrug_candidates) {
-      lines.push(`  - story_id: ${s.story_id}`);
-      lines.push(`    title: ${s.title}`);
-      lines.push(`    source_url: ${s.source_url ?? "-"}`);
-      lines.push(`    category: ${s.category ?? "-"}`);
-      lines.push(`    penalty_factors: [${s.penalty_factors.join(", ")}]`);
-      lines.push(`    source_count: ${s.source_count}`);
-      lines.push(`    scorer_one_liner: ${s.scorer_one_liner}`);
-      lines.push("");
-    }
-  }
+  lines.push(`week_of: ${input.week_of}`, "");
+
+  renderItemSection(lines, "conversation", input.conversation);
+  renderItemSection(lines, "worth_knowing", input.worth_knowing);
+  renderItemSection(lines, "worth_watching", input.worth_watching);
+  renderShrugSection(lines, input.shrug);
+
   if (input.prior_theme_context.length > 0) {
     lines.push(
-      "prior_theme_context (most recent item per theme currently being continued):",
+      "# prior_theme_context (most recent item per theme currently being continued)",
+      "",
     );
     for (const p of input.prior_theme_context) {
       lines.push(
@@ -220,6 +160,63 @@ function renderUserMessage(input: ComposerInput): string {
   }
   lines.push("Return your JSON object now.");
   return lines.join("\n");
+}
+
+function renderItemSection(
+  lines: string[],
+  name: string,
+  items: ComposerInput["conversation"],
+): void {
+  lines.push(`# Section: ${name} (${items.length} item${items.length === 1 ? "" : "s"})`, "");
+  if (items.length === 0) {
+    lines.push("  (empty — OMIT this H2 heading from output)", "");
+    return;
+  }
+  for (const it of items) {
+    lines.push(`  - kind: ${it.kind}`);
+    lines.push(`    rank: ${it.rank}`);
+    lines.push(`    lead_story_id: ${it.lead_story_id}`);
+    lines.push(`    reason: ${it.reason}`);
+    lines.push(`    stories:`);
+    for (const s of it.stories) {
+      lines.push(`      - story_id: ${s.story_id}`);
+      lines.push(`        title: ${s.title}`);
+      lines.push(`        published_at: ${s.published_at ?? "-"}`);
+      if (s.source_url !== null) {
+        lines.push(`        source_url: ${s.source_url}`);
+      }
+      if (s.additional_source_urls.length > 0) {
+        lines.push(
+          `        additional_source_urls: [${s.additional_source_urls.join(", ")}]`,
+        );
+      }
+      lines.push(`        category: ${s.category ?? "-"}`);
+      lines.push(`        theme: ${s.theme_name ?? "-"}`);
+      lines.push(`        scorer_one_liner: ${s.scorer_one_liner}`);
+    }
+    lines.push("");
+  }
+}
+
+function renderShrugSection(
+  lines: string[],
+  items: ComposerInput["shrug"],
+): void {
+  lines.push(`# Section: shrug (${items.length} item${items.length === 1 ? "" : "s"})`, "");
+  if (items.length === 0) {
+    lines.push("  (empty — OMIT this H2 heading from output)", "");
+    return;
+  }
+  for (const s of items) {
+    lines.push(`  - story_id: ${s.story_id}`);
+    lines.push(`    title: ${s.title}`);
+    lines.push(`    source_url: ${s.source_url ?? "-"}`);
+    lines.push(`    category: ${s.category ?? "-"}`);
+    lines.push(`    penalty_factors: [${s.penalty_factors.join(", ")}]`);
+    lines.push(`    source_count: ${s.source_count}`);
+    lines.push(`    scorer_one_liner: ${s.scorer_one_liner}`);
+    lines.push("");
+  }
 }
 
 const COMPOSER_TOOL = {

@@ -10,6 +10,7 @@ import { db } from "../db/index.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
 import type {
   ComposerInput,
+  ComposerItem,
   ComposerOutput,
 } from "../shared/composer-schema.ts";
 import { normalizePick } from "../shared/editor-schema.ts";
@@ -154,136 +155,138 @@ export async function compose(): Promise<void> {
     .sort((a, b) => a.rank - b.rank);
   const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
 
-  // Filter normalized picks to only those whose story_ids are all in
-  // the pool. A partial arc (some ids unknown) degrades to whatever
-  // ids matched. Picks with zero matched ids are dropped.
   type PoolRow = NonNullable<ReturnType<typeof byId.get>>;
-  const items: ComposerInput["items"] = [];
-  const storyRowsOrdered: PoolRow[] = [];
-  const seenIds = new Set<number>();
+
+  // Materialize each normalized pick into a ComposerItem (stories sorted
+  // chronologically). Picks whose ids can't be resolved from the pool
+  // are dropped; partial arcs degrade to what matched.
+  const builtItems: Array<{
+    item: ComposerItem;
+    constituentRows: PoolRow[];
+  }> = [];
   for (const p of normalizedPicks) {
     const matched = p.story_ids
       .map((sid) => byId.get(sid))
       .filter((r): r is PoolRow => r !== undefined);
     if (matched.length === 0) continue;
-    // Sort constituent stories by published_at asc so the composer gets
-    // chronological order; null dates sort last.
     matched.sort((a, b) => {
       const ta = a.published_at?.getTime() ?? Number.POSITIVE_INFINITY;
       const tb = b.published_at?.getTime() ?? Number.POSITIVE_INFINITY;
       return ta - tb;
     });
-    for (const r of matched) {
-      const rid = Number(r.story_id);
-      if (!seenIds.has(rid)) {
-        seenIds.add(rid);
-        storyRowsOrdered.push(r);
-      }
-    }
-    items.push({
-      kind: p.is_arc && matched.length > 1 ? "arc" : "single",
-      rank: p.rank,
-      lead_story_id: byId.has(p.lead_story_id)
-        ? p.lead_story_id
-        : Number(matched[0]!.story_id),
-      reason: p.reason,
-      stories: matched.map((r) => {
-        const out = readScorerOutput(r.raw_output);
-        return {
-          story_id: Number(r.story_id),
-          title: r.title,
-          summary: r.summary,
-          source_url: r.source_url,
-          additional_source_urls: r.additional_source_urls ?? [],
-          category: (r.category_slug as ComposerInput["items"][number]["stories"][number]["category"]) ?? null,
-          theme_name: r.theme_name,
-          theme_relationship:
-            (r.theme_relationship as ComposerInput["items"][number]["stories"][number]["theme_relationship"]) ?? null,
-          zeitgeist_score: r.zeitgeist_score ?? 0,
-          half_life: r.half_life ?? 0,
-          reach: r.reach ?? 0,
-          composite: r.composite !== null ? Number(r.composite) : 0,
-          scorer_one_liner: out.summary,
-          retrodiction_12mo: out.retrodiction,
-          published_at: r.published_at?.toISOString() ?? null,
-        };
-      }),
+    builtItems.push({
+      constituentRows: matched,
+      item: {
+        kind: p.is_arc && matched.length > 1 ? "arc" : "single",
+        rank: p.rank,
+        lead_story_id: byId.has(p.lead_story_id)
+          ? p.lead_story_id
+          : Number(matched[0]!.story_id),
+        reason: p.reason,
+        stories: matched.map((r) => {
+          const out = readScorerOutput(r.raw_output);
+          return {
+            story_id: Number(r.story_id),
+            title: r.title,
+            summary: r.summary,
+            source_url: r.source_url,
+            additional_source_urls: r.additional_source_urls ?? [],
+            category: (r.category_slug as ComposerItem["stories"][number]["category"]) ?? null,
+            theme_name: r.theme_name,
+            theme_relationship:
+              (r.theme_relationship as ComposerItem["stories"][number]["theme_relationship"]) ?? null,
+            zeitgeist_score: r.zeitgeist_score ?? 0,
+            half_life: r.half_life ?? 0,
+            reach: r.reach ?? 0,
+            composite: r.composite !== null ? Number(r.composite) : 0,
+            scorer_one_liner: out.summary,
+            retrodiction_12mo: out.retrodiction,
+            published_at: r.published_at?.toISOString() ?? null,
+          };
+        }),
+      },
     });
   }
 
-  if (items.length === 0) {
+  if (builtItems.length === 0) {
     console.log("[compose] editor returned no valid picks — aborting");
     return;
   }
 
-  const arcCount = items.filter((it) => it.kind === "arc").length;
-  if (arcCount > 0) {
-    console.log(`[compose] editor produced ${arcCount} arc item(s)`);
-  }
-
-  // Legacy flat `stories` retained for fallback / any downstream that
-  // hasn't adopted the items model yet.
-  const capped = storyRowsOrdered;
-  const stories: ComposerInput["stories"] = capped.map((r) => {
-    const out = readScorerOutput(r.raw_output);
-    return {
-      story_id: Number(r.story_id),
-      title: r.title,
-      summary: r.summary,
-      source_url: r.source_url,
-      additional_source_urls: r.additional_source_urls ?? [],
-      category: (r.category_slug as ComposerInput["stories"][number]["category"]) ?? null,
-      theme_name: r.theme_name,
-      theme_relationship:
-        (r.theme_relationship as ComposerInput["stories"][number]["theme_relationship"]) ?? null,
-      zeitgeist_score: r.zeitgeist_score ?? 0,
-      half_life: r.half_life ?? 0,
-      reach: r.reach ?? 0,
-      composite: r.composite !== null ? Number(r.composite) : 0,
-      scorer_one_liner: out.summary,
-      retrodiction_12mo: out.retrodiction,
-    };
-  });
-
-  const prior_theme_context = await loadPriorThemeContext(
-    capped.map((r) => r.theme_id).filter((id): id is number => id !== null),
+  // Partition into the four fixed sections. Rules:
+  // - Arcs ALWAYS go to conversation/worth_knowing (split by rank); an
+  //   arc is by definition a continuing multi-story thread, not an
+  //   emerging/uncertain lead.
+  // - Singles whose lead story meets "watch" criteria (low/medium
+  //   confidence OR an unreplicated/preclinical_only/insufficient_evidence
+  //   penalty factor) go to worth_watching regardless of rank.
+  // - Other singles: rank ≤ CONVERSATION_TOP_N → conversation, else
+  //   worth_knowing.
+  const allRows = builtItems.flatMap((b) => b.constituentRows);
+  const leadIds = builtItems.map((b) => b.item.lead_story_id);
+  const allFactors = await loadFactorsByStory(
+    [...new Set([...leadIds, ...allRows.map((r) => Number(r.story_id))])],
   );
 
-  const cappedIds = capped.map((r) => Number(r.story_id));
-  const cappedFactors = await loadFactorsByStory(cappedIds);
-  const watch_candidate_ids = capped
-    .filter((r) => {
-      const id = Number(r.story_id);
-      const conf = r.point_in_time_confidence;
-      const penalty = cappedFactors.get(id)?.penalty ?? [];
-      const matchesFactor = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
-      return conf === "low" || conf === "medium" || matchesFactor;
-    })
-    .map((r) => Number(r.story_id));
+  const CONVERSATION_TOP_N = 5;
+  const conversation: ComposerItem[] = [];
+  const worth_knowing: ComposerItem[] = [];
+  const worth_watching: ComposerItem[] = [];
 
-  const shrug_candidates = await loadShrugCandidates(cutoff);
+  for (const b of builtItems) {
+    const leadRow = byId.get(b.item.lead_story_id) ?? b.constituentRows[0]!;
+    const conf = leadRow.point_in_time_confidence;
+    const penalty = allFactors.get(b.item.lead_story_id)?.penalty ?? [];
+    const matchesWatch = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
+    const watchWorthy =
+      b.item.kind === "single" &&
+      (conf === "low" || conf === "medium" || matchesWatch);
+    if (watchWorthy) {
+      worth_watching.push(b.item);
+    } else if (b.item.rank <= CONVERSATION_TOP_N) {
+      conversation.push(b.item);
+    } else {
+      worth_knowing.push(b.item);
+    }
+  }
+
+  const prior_theme_context = await loadPriorThemeContext(
+    allRows.map((r) => r.theme_id).filter((id): id is number => id !== null),
+  );
+
+  const shrug = await loadShrugCandidates(cutoff);
 
   const input: ComposerInput = {
     week_of: new Date().toISOString().slice(0, 10),
-    stories,
-    items,
-    watch_candidate_ids,
-    shrug_candidates,
+    conversation,
+    worth_knowing,
+    worth_watching,
+    shrug,
     prior_theme_context,
   };
 
+  const arcCount = builtItems.filter((b) => b.item.kind === "arc").length;
   console.log(
-    `[compose] composing ${stories.length} stories; watch=${watch_candidate_ids.length} shrug=${shrug_candidates.length} prior_theme_context=${prior_theme_context.length}`,
+    `[compose] composing conv=${conversation.length} know=${worth_knowing.length} watch=${worth_watching.length} shrug=${shrug.length} arcs=${arcCount} prior=${prior_theme_context.length}`,
   );
   const output = await composer.run(input);
-  const storyIds = stories.map((s) => s.story_id);
+
+  // Collect every story_id that appears in ANY section item — that's
+  // what gets persisted on the issue and flipped to published_to_reader.
+  const storyIds = Array.from(
+    new Set(
+      [conversation, worth_knowing, worth_watching]
+        .flat()
+        .flatMap((it) => it.stories.map((s) => s.story_id)),
+    ),
+  );
 
   const issueId = await persistIssue(
     output,
     storyIds,
     cfg,
     editorResult,
-    shrug_candidates,
+    shrug,
   );
   console.log(
     `[compose] issue ${issueId} published: ${storyIds.length} stories, ${output.markdown.length} md chars`,

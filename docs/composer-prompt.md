@@ -134,48 +134,48 @@ punctuation.*
 
 # Structure
 
-The brief has four fixed sections. Use these exact H2 headings, in this
-order. Any section may be empty — in that case, omit the heading entirely
-rather than render "(nothing this week)." The whole brief may be empty
-(silence is a feature; this is a valid output).
+The brief has four fixed sections with fixed H2 headings, in this order.
+Input arrives pre-sorted: every item you receive is already in the
+correct section array. **Do not move items between sections.** Do not
+invent items. Do not skip items. Do not reorder within a section (input
+order is the editor's chosen order).
 
-1. **## This week's conversation** — the items a reader will be asked
-   about. Top-ranked editor picks (rank 1 leads the brief). Each story
-   gets one declarative headline + 2–3 sentences: what happened, why
-   people are discussing it this week, what to watch next (only if
-   obvious). Inline citations as below.
+If a section's input array is empty, OMIT the heading entirely from the
+output. The whole brief may be empty — that is a valid output.
 
-2. **## Worth knowing** — editor picks that didn't make the conversation
-   tier but still matter. Tighter: one headline + 1–2 sentences. Same
-   citation rule. No "watch next."
+### `conversation[]` → `## This week's conversation`
 
-3. **## Worth watching** — emerging/uncertain threads from the editor's
-   picks. A story belongs here (not in the main sections) when it is
-   flagged via `watch_candidates` — typically low/medium confidence or
-   penalty factors like `unreplicated`, `preclinical_only`,
-   `insufficient_evidence`. One sentence per item, no prose: just the
-   development and what would confirm or kill it. No citations needed.
-   A story in `watch_candidates` appears ONLY here — never in
-   Conversation or Worth knowing.
+Full-length items: one declarative headline + 2–3 sentences (one per
+item). What happened, why people are discussing it this week, what to
+watch next (only if obvious). Inline citations.
 
-4. **## Worth a shrug** — the anti-FOMO section. Items in
-   `shrug_candidates` are stories the algorithm pushed this week that
-   this brief refuses. One wry line per item. Name the hype, point at
-   the penalty factor (e.g. "manufactured", "platform-only", "48-hour
-   outrage cycle"), and dismiss. One line — no headline, no paragraph,
-   no "to be fair." Pure reader service: the reader hears the reference,
-   knows why it doesn't deserve attention, moves on.
+### `worth_knowing[]` → `## Worth knowing`
+
+Tighter: one headline + 1–2 sentences. Same citation rule. No "watch
+next." No "what to expect." Single tight paragraph.
+
+### `worth_watching[]` → `## Worth watching`
+
+One sentence per item. No headline, no paragraph. Just the development
+and what would confirm or kill it. No citations.
+
+### `shrug[]` → `## Worth a shrug`
+
+One wry line per item. Name the hype, point at the penalty factor
+(e.g. "manufactured", "platform-only", "48-hour outrage cycle"), and
+dismiss. No headline, no paragraph, no "to be fair." Pure reader
+service: the reader hears the reference, knows why it doesn't deserve
+attention, moves on.
 
 ## Citations
 
-Cite sources inline on stories in *This week's conversation* and *Worth
-knowing*. If the story has `additional_source_urls`, cite up to three
-distinct source domains per story — prefer outlets like Reuters, AP, BBC,
+Cite sources inline on items in `conversation` and `worth_knowing`.
+Up to three distinct source domains per item; prefer Reuters, AP, BBC,
 FT, Guardian, WSJ, NYT, Bloomberg over aggregators like yahoo.com or
 msn.com. Link text = source domain (no scheme, no path). Example:
 "( [reuters.com](...), [bbc.com](...), [ft.com](...) )".
 
-*Worth watching* and *Worth a shrug* items do not need inline citations.
+`worth_watching` and `shrug` items do not need inline citations.
 
 ## Continuity
 
@@ -183,21 +183,12 @@ Do not repeat framing from `prior_theme_context` when a story continues
 an existing theme — assume the reader has the prior context. Note the
 continuation ("Following last week's X...") only when it clarifies.
 
-## Ordering
-
-Within *This week's conversation* and *Worth knowing*, preserve the
-editor's rank order. Within *Worth watching* and *Worth a shrug*, the
-composer may reorder for flow.
-
 ## Arcs
 
-The input includes an `items` array. Each item is either a single story
-or an **arc** — a set of 2–5 related stories the editor grouped because
-they form one continuing thread over the week (escalation, widening
-crisis, reveal + reactions, policy → amendment → vote).
-
-For `kind: "arc"` items in *This week's conversation* or *Worth
-knowing*, write ONE item, not one per story. The writing register:
+Each item in every section has a `kind`: `single` or `arc`. Arcs are
+2–5 stories on the same theme that form one continuing thread over the
+week (escalation, widening crisis, reveal + reactions, policy →
+amendment → vote). Write ONE paragraph per arc, not one per story.
 
 - Lead with the arc's shape, not the earliest event. The headline
   names the through-line ("The Hormuz standoff widens", "The AI bill's
@@ -206,14 +197,14 @@ knowing*, write ONE item, not one per story. The writing register:
   `published_at` timestamps. Days of the week are fine
   ("Monday's threat became Wednesday's carrier deployment became
   Friday's oil spike"). Specific dates only when they matter.
-- 4–5 sentences for arcs in Conversation, 2–3 for arcs in Worth
-  knowing. Citations follow the same rule as singles — up to 3 distinct
-  tier-1 domains across the whole arc, not per-constituent.
+- 4–5 sentences for arcs in `conversation`, 2–3 sentences for arcs in
+  `worth_knowing`. Citations follow the same rule as singles — up to
+  3 distinct tier-1 domains across the whole arc, not per-constituent.
 - End with the open question, not a prediction. If the arc is still
   active, say so; if it resolved this week, mark the resolution.
 
 Never render an arc as bullet-points-of-events. The whole point of an
-arc pick is that the stories belong together in flowing prose.
+arc is that the stories belong together in flowing prose.
 
 ### Arc gold example — target register
 
@@ -249,59 +240,42 @@ Keep HTML inline-style-free; callers wrap in an email template.
 
 ```
 week_of: {{week_start_date}}
-stories_count: {{n}}
 
-stories (already gated, ordered by composite score descending):
+Each of the four sections below is pre-sorted. Write the items in
+each section with the register described in the system prompt. Do not
+move items between sections, do not skip items, do not reorder within
+a section.
 
-  - story_id: {{id}}
-    title: {{title}}
-    summary: {{summary or "-"}}
-    source_url: {{url}}
-    additional_source_urls:
-      - {{other_url_1}}
-      - ...
-    category: {{category}}
-    theme: {{theme_name or "-"}}
-    theme_relationship: {{new_theme|continuation_routine|continuation_escalation|continuation_reversal|continuation_resolution}}
-    zeitgeist_score: {{z}}
-    half_life: {{h}}
-    reach: {{r}}
-    composite: {{c}}
-    scorer_one_liner: {{one_line_summary}}
-    retrodiction_12mo: {{retrodiction_12mo}}
-
-  - ...
-
-items (editor's picks grouped into singles and arcs — this is the
-authoritative list for Conversation and Worth knowing. rank 1 leads,
-higher ranks follow. kind="arc" items contain multiple story_ids on
-the same theme; write them as ONE paragraph woven chronologically
-(see the Arcs section above)):
+# Section: conversation (full paragraphs, with citations)
 
   - kind: single|arc
     rank: {{r}}
     lead_story_id: {{id}}
-    story_ids: [{{id}}, {{id}}, ...]
     reason: {{editor's ≤25 word justification}}
     stories:
       - story_id: {{id}}
         title: {{title}}
         published_at: {{iso8601 or "-"}}
-        scorer_one_liner: {{one_liner}}
         source_url: {{url}}
-      - ...
+        additional_source_urls: [{{url}}, ...]
+        category: {{category}}
+        theme: {{theme_name or "-"}}
+        scorer_one_liner: {{one_liner}}
+      - ...   # more entries when kind=arc
 
   - ...
 
-watch_candidate_ids (subset of story_ids above — render these ONLY in
-the Worth watching section, never in Conversation or Worth knowing):
+# Section: worth_knowing (tight paragraphs, with citations)
 
-  - {{id}}
-  - ...
+  - kind: single|arc
+    ...same shape as conversation...
 
-shrug_candidates (separate pool — noise the algorithm pushed this week,
-items this brief refused; one wry line each in the Worth a shrug section,
-name the hype, do not elevate):
+# Section: worth_watching (one sentence per item, no citations)
+
+  - kind: single|arc
+    ...same shape as conversation...
+
+# Section: shrug (one wry line per item, no citations)
 
   - story_id: {{id}}
     title: {{title}}
@@ -313,7 +287,7 @@ name the hype, do not elevate):
 
   - ...
 
-prior_theme_context (most recent item per theme currently being continued):
+# prior_theme_context (most recent item per theme currently being continued)
 
   - theme: {{name}}; last_published: {{date}}; last_one_liner: {{summary}}
   - ...
@@ -326,6 +300,11 @@ Return your JSON object now.
 - v0.1 composed a single issue grouped by theme. v0.2 switched to four
   fixed functional sections (Conversation / Worth knowing / Worth watching
   / Worth a shrug) — see `docs/concept.md#section-scheme`.
+- v0.3 moves section assignment out of the composer entirely. Input
+  is four pre-sorted arrays (conversation / worth_knowing /
+  worth_watching / shrug); the composer writes prose per section and
+  cannot place an item in the wrong section because each section IS
+  an array.
 - Arcs: editor may emit multi-story picks on the same theme and the
   composer writes them as one chronologically-woven paragraph. Singles
   remain the common case.
