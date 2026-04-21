@@ -253,9 +253,13 @@ export async function compose(): Promise<void> {
     const conf = leadRow.point_in_time_confidence;
     const penalty = allFactors.get(b.item.lead_story_id)?.penalty ?? [];
     const matchesWatch = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
+    // Route to Worth watching only for genuinely uncertain / emerging
+    // items — "low" confidence OR an evidence-weak penalty factor.
+    // Medium confidence alone is the scorer's default and doesn't imply
+    // the story is too shaky to stand on its own; those belong in
+    // Conversation or Worth knowing by rank.
     const watchWorthy =
-      b.item.kind === "single" &&
-      (conf === "low" || conf === "medium" || matchesWatch);
+      b.item.kind === "single" && (conf === "low" || matchesWatch);
     if (watchWorthy) {
       worth_watching.push(b.item);
     } else if (b.item.rank <= CONVERSATION_TOP_N) {
@@ -385,15 +389,19 @@ export async function compose(): Promise<void> {
   );
   const output = await composer.run(input);
 
-  // Collect every story_id that appears in ANY section item — that's
-  // what gets persisted on the issue and flipped to published_to_reader.
-  const storyIds = Array.from(
+  // Collect every story_id that appears in ANY section (including shrug)
+  // — that's what gets persisted on the issue and flipped to
+  // published_to_reader. Marking shrug items as published too prevents
+  // them from recurring in the next week's shrug pool.
+  const mainStoryIds = Array.from(
     new Set(
       [conversation, worth_knowing, worth_watching]
         .flat()
         .flatMap((it) => it.stories.map((s) => s.story_id)),
     ),
   );
+  const shrugStoryIds = shrug.map((s) => s.story_id);
+  const storyIds = Array.from(new Set([...mainStoryIds, ...shrugStoryIds]));
 
   const issueId = await persistIssue(
     output,

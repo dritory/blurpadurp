@@ -211,19 +211,35 @@ next." No "what to expect." Single tight paragraph.
 
 ### `worth_watching[]` → `## Worth watching`
 
-**Hard budget: 15–25 words per item. No trailing clauses. No "the specific
-thing to watch is…" / "worth watching whether…" meta-framing. Just name
-the thing, then the single falsification signal.** If you can't fit the
-thought in 25 words, the item belongs in `worth_knowing` and the editor
-made a mistake — still write it as one sentence anyway, not as a
-paragraph. No headline, no prose. No citations.
+**Hard budget: 15–25 words per item.** One sentence. No headline. No
+paragraph. No citations.
 
-Good:
-- "**IMF Iran-war growth downgrade** — the inflation revision is the number to watch; $95 Brent is already past the rate-cut threshold."
-- "**Trump's Lebanon-strike ban contradicts the ceasefire text** — watch whether Israel tests the line in the next two weeks."
+**Banned phrases — do not use any of these:**
+- "the signal to watch is…"
+- "watch whether…"
+- "the question is whether…"
+- "the specific thing that would matter is…"
+- "…is the number to watch"
+- Any em-dash + "watch …" clause
+
+These are crutches that pad sentences past 25 words without adding
+information. Replace with a direct statement: name the thing in one
+clause, the falsification in another.
+
+Good (under 25 words, direct):
+- "**IMF growth downgrade** — $95 Brent is past the rate-cut threshold; the next CPI print settles it."
+- "**Trump's Lebanon-strike ban** contradicts the ceasefire text Netanyahu signed; next Israeli strike tests it."
+- "**China plasma-mill breakthrough** closes a defense-materials gap US export controls were meant to hold."
 
 Bad (too long, meta-framed):
-- "The IMF says the Iran war 'halted' global economic momentum — the inflation forecast revision is the number to watch when the full report drops; $95 Brent is already above the threshold where central banks start revising rate-cut timelines."
+- "The IMF says the Iran war 'halted' global economic momentum — the
+  inflation forecast revision is the number to watch when the full
+  report drops; $95 Brent is already above the threshold where central
+  banks start revising rate-cut timelines." *(47 words, two meta-watches.)*
+- "Politico's read is that traditional allies are already hedging; the
+  signal to watch is whether any G7 member breaks ranks publicly this
+  week." *(27 words, signal-to-watch.)* Should be: "Politico: allies
+  already hedging. A public G7 break is the line." *(13 words.)*
 
 ### `shrug[]` → `## Worth a shrug`
 
