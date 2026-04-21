@@ -62,11 +62,26 @@ export const ComposerInputSchema = z.object({
   worth_knowing: z.array(ComposerItemSchema),
   worth_watching: z.array(ComposerItemSchema),
   shrug: z.array(ShrugItemSchema),
-  prior_theme_context: z.array(
+  // Theme timelines: for every theme that appears in any section above,
+  // the full recent history of stories under that theme — both already-
+  // published (prior issues) and in-current-issue entries. Lets the
+  // composer anchor arcs to the longer arc ("three weeks in", "since
+  // last month's X") instead of treating each week as a clean slate.
+  theme_timelines: z.array(
     z.object({
+      theme_id: z.number(),
       theme_name: z.string(),
-      last_published: z.string(),
-      last_one_liner: z.string(),
+      category: z.enum(categorySlug).nullable(),
+      trajectory: z.enum(["new", "rising", "stable", "falling"]),
+      is_long_running: z.boolean(),
+      n_prior_publications: z.number(),
+      entries: z.array(
+        z.object({
+          date: z.string(), // YYYY-MM-DD
+          one_liner: z.string(),
+          in_current_issue: z.boolean(),
+        }),
+      ),
     }),
   ),
 });

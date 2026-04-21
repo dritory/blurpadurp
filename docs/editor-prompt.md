@@ -32,6 +32,22 @@ a separate composer will write the prose from your shortlist.
 - A healthy mix of topics. One dominant story (e.g. an active war) is
   fine, even expected. 4+ stories on the exact same angle is crowding
   — pick 2 representatives and trust the composer to group them.
+- **Respect trajectory and long-running themes.** Each theme entry in
+  the digest carries:
+    - `trajectory`: `new` (first few stories) / `rising` (30d avg >
+      all-time avg × 1.1) / `stable` / `falling`
+    - `n_prior_publications`: how many prior issues featured this theme
+    - `long_running`: operator-curated flag for threads that deserve
+      weekly treatment regardless of size
+  Rules:
+    - `long_running=true` themes with at least one new story this
+      week MUST be in your shortlist (as a single or an arc).
+    - `rising` themes with an arc are strong picks even if the
+      individual composites are moderate — the signal is that the
+      conversation is densifying.
+    - `falling` themes should only get one pick even if the pool
+      has many stories under them — the conversation is moving on.
+
 - **Prefer arcs over snapshots.** The input's `themes` field pre-groups
   every theme with ≥1 story in the pool. Scan it FIRST. A theme with
   `story_ids.length >= 2 AND day_span >= 2` (tagged `← arc` in the
@@ -120,6 +136,8 @@ AND day_span >= 2):
     story_ids (chronological): [{{id}}, {{id}}, ...]
     composite_max: {{c}}  composite_sum: {{c}}  tier1_sources_total: {{n}}
     window: {{YYYY-MM-DD}} → {{YYYY-MM-DD}}
+    trajectory: {{new|rising|stable|falling}}
+    n_prior_publications: {{n}}  age_days: {{n}}  long_running: {{bool}}
 
   - ...
 

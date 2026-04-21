@@ -25,6 +25,7 @@ export interface Database {
     rolling_composite_avg: string | null;
     rolling_composite_30d: string | null;
     centroid_embedding: string | null;
+    is_long_running: Generated<boolean>;
   };
 
   story: {

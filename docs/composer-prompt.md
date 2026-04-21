@@ -179,9 +179,23 @@ msn.com. Link text = source domain (no scheme, no path). Example:
 
 ## Continuity
 
-Do not repeat framing from `prior_theme_context` when a story continues
-an existing theme — assume the reader has the prior context. Note the
-continuation ("Following last week's X...") only when it clarifies.
+The input includes `theme_timelines` — a recent arc per theme (last
+~90 days, up to ~12 entries each). Entries tagged `[NOW]` are stories
+in this issue; others are prior published context you should REFERENCE
+but never re-render.
+
+Use the timeline to anchor current-issue items to the longer story:
+- When a theme has 2+ prior publications, open with the positioning
+  ("Three weeks into the Hormuz standoff…", "The AI bill's third
+  rewrite…"). The reader is continuing a thread, not discovering one.
+- When a theme's `trajectory` is `rising`, call it out ("momentum
+  continues", "each week tighter"). When `falling`, mark the decay
+  ("the story is quieting", "first week below X in over a month").
+- When `is_long_running=true`, treat the theme as a permanent watch
+  — a sentence on where things stand this week, even if the item is
+  a single new development.
+- Never repeat framing from prior entries. The reader read last
+  week's brief.
 
 ## Arcs
 
@@ -287,9 +301,14 @@ a section.
 
   - ...
 
-# prior_theme_context (most recent item per theme currently being continued)
+# theme_timelines (recent arc per theme; [NOW] marks current issue,
+# other entries are prior published context — reference, don't re-render)
 
-  - theme: {{name}}; last_published: {{date}}; last_one_liner: {{summary}}
+  - theme "{{theme_name}}" ({{category}}) [trajectory=rising|stable|falling|new, long-running?, N prior issues]
+      YYYY-MM-DD [NOW] {{one_liner}}
+      YYYY-MM-DD        {{one_liner}}
+      ...
+
   - ...
 
 Return your JSON object now.

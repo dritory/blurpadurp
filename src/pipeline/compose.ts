@@ -4,6 +4,8 @@
 // published. For v0 there's a single cadence — one issue per run,
 // containing every currently-passing, unpublished story.
 
+import { sql } from "kysely";
+
 import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
@@ -149,7 +151,20 @@ export async function compose(): Promise<void> {
     `[compose] ${rows.length} passers → editor pool of ${poolSize}`,
   );
 
-  const editorResult = await curateViaEditor(editor, pool);
+  // Preload per-theme metadata for every theme in the pool — used both
+  // by the editor's themes digest (trajectory, prior-publication count)
+  // and the composer's timelines.
+  const poolThemeIds = [
+    ...new Set(
+      pool
+        .map((p) => p.row.theme_id)
+        .filter((id): id is number => id !== null)
+        .map((id) => Number(id)),
+    ),
+  ];
+  const poolThemeMeta = await loadThemeMeta(poolThemeIds);
+
+  const editorResult = await curateViaEditor(editor, pool, poolThemeMeta);
   const normalizedPicks = editorResult.picks
     .map(normalizePick)
     .sort((a, b) => a.rank - b.rank);
@@ -250,8 +265,52 @@ export async function compose(): Promise<void> {
     }
   }
 
-  const prior_theme_context = await loadPriorThemeContext(
-    allRows.map((r) => r.theme_id).filter((id): id is number => id !== null),
+  // Build per-theme metadata + cross-issue timelines. The metadata
+  // feeds the composer's ability to anchor arcs ("three weeks in",
+  // "since last month's X") instead of treating each week fresh.
+  const renderedItems = [
+    ...conversation,
+    ...worth_knowing,
+    ...worth_watching,
+  ];
+  const themeIdsInItems = [
+    ...new Set(
+      renderedItems
+        .flatMap((it) => it.stories)
+        .map((s) => {
+          const row = byId.get(s.story_id);
+          return row?.theme_id !== null && row?.theme_id !== undefined
+            ? Number(row.theme_id)
+            : null;
+        })
+        .filter((id): id is number => id !== null),
+    ),
+  ];
+  const themeMeta = await loadThemeMeta(themeIdsInItems);
+
+  const currentIssueStoriesByTheme = new Map<number, CurrentIssueStory[]>();
+  for (const it of renderedItems) {
+    for (const s of it.stories) {
+      const row = byId.get(s.story_id);
+      if (!row || row.theme_id === null) continue;
+      const tid = Number(row.theme_id);
+      const date = (s.published_at ?? "").slice(0, 10);
+      if (date === "") continue;
+      const entry: CurrentIssueStory = {
+        theme_id: tid,
+        story_id: s.story_id,
+        date,
+        one_liner: s.scorer_one_liner,
+      };
+      const list = currentIssueStoriesByTheme.get(tid) ?? [];
+      list.push(entry);
+      currentIssueStoriesByTheme.set(tid, list);
+    }
+  }
+
+  const theme_timelines = await loadThemeTimelines(
+    themeMeta,
+    currentIssueStoriesByTheme,
   );
 
   const shrug = await loadShrugCandidates(cutoff);
@@ -262,12 +321,13 @@ export async function compose(): Promise<void> {
     worth_knowing,
     worth_watching,
     shrug,
-    prior_theme_context,
+    theme_timelines,
   };
 
   const arcCount = builtItems.filter((b) => b.item.kind === "arc").length;
+  const deepArcs = theme_timelines.filter((t) => t.n_prior_publications >= 2).length;
   console.log(
-    `[compose] composing conv=${conversation.length} know=${worth_knowing.length} watch=${worth_watching.length} shrug=${shrug.length} arcs=${arcCount} prior=${prior_theme_context.length}`,
+    `[compose] composing conv=${conversation.length} know=${worth_knowing.length} watch=${worth_watching.length} shrug=${shrug.length} arcs=${arcCount} themes=${theme_timelines.length} (${deepArcs} with 2+ prior issues)`,
   );
   const output = await composer.run(input);
 
@@ -306,6 +366,7 @@ async function curateViaEditor(
     tier1: number;
     total: number;
   }>,
+  themeMeta: Map<number, ThemeMeta>,
 ): Promise<EditorOutput> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
@@ -348,7 +409,7 @@ async function curateViaEditor(
   const input: EditorInput = {
     as_of_date: new Date().toISOString().slice(0, 10),
     stories: editorStories,
-    themes: buildThemesDigest(pool, editorStories),
+    themes: buildThemesDigest(pool, editorStories, themeMeta),
   };
 
   const result = await editor.run(input);
@@ -369,6 +430,7 @@ function buildThemesDigest(
     total: number;
   }>,
   stories: EditorInput["stories"],
+  themeMeta: Map<number, ThemeMeta>,
 ): EditorInput["themes"] {
   const byId = new Map(stories.map((s) => [s.story_id, s] as const));
   const tier1ById = new Map(
@@ -427,6 +489,7 @@ function buildThemesDigest(
       composite_sum += s.composite;
       tier1_sources_total += tier1ById.get(sid) ?? 0;
     }
+    const meta = themeMeta.get(theme_id);
     digest.push({
       theme_id,
       theme_name: g.theme_name,
@@ -438,6 +501,10 @@ function buildThemesDigest(
       composite_max,
       composite_sum,
       tier1_sources_total,
+      age_days: meta?.age_days ?? 0,
+      n_prior_publications: meta?.n_prior_publications ?? 0,
+      trajectory: meta?.trajectory ?? "new",
+      is_long_running: meta?.is_long_running ?? false,
     });
   }
 
@@ -584,34 +651,172 @@ async function loadFactorsByStory(
   return out;
 }
 
-async function loadPriorThemeContext(
-  themeIds: number[],
-): Promise<ComposerInput["prior_theme_context"]> {
-  const unique = [...new Set(themeIds)];
-  if (unique.length === 0) return [];
+// Full per-theme timelines for the composer. For every theme_id the
+// composer's items touch, load up to TIMELINE_MAX_ENTRIES prior
+// published stories plus any current-issue constituents, merge, sort
+// descending by date, and annotate with in_current_issue.
+const TIMELINE_MAX_ENTRIES = 12;
+const TIMELINE_LOOKBACK_DAYS = 90;
 
-  const out: ComposerInput["prior_theme_context"] = [];
-  for (const tid of unique) {
-    const prior = await db
-      .selectFrom("story")
-      .leftJoin("theme", "theme.id", "story.theme_id")
-      .select([
-        "theme.name as theme_name",
-        "story.published_to_reader_at",
-        "story.raw_output",
-      ])
-      .where("story.theme_id", "=", tid)
-      .where("story.published_to_reader", "=", true)
-      .orderBy("story.published_to_reader_at", "desc")
-      .limit(1)
-      .executeTakeFirst();
-    if (!prior || !prior.theme_name) continue;
-    const scored = readScorerOutput(prior.raw_output);
+interface CurrentIssueStory {
+  theme_id: number;
+  story_id: number;
+  date: string;
+  one_liner: string;
+}
+
+async function loadThemeTimelines(
+  themeMeta: Map<number, ThemeMeta>,
+  currentIssueStoriesByTheme: Map<number, CurrentIssueStory[]>,
+): Promise<ComposerInput["theme_timelines"]> {
+  const themeIds = [...themeMeta.keys()];
+  if (themeIds.length === 0) return [];
+
+  const since = new Date(Date.now() - TIMELINE_LOOKBACK_DAYS * 24 * 3600_000);
+  const priorRows = await db
+    .selectFrom("story")
+    .select([
+      "theme_id",
+      "published_to_reader_at",
+      "raw_output",
+    ])
+    .where("theme_id", "in", themeIds)
+    .where("published_to_reader", "=", true)
+    .where("published_to_reader_at", ">=", since)
+    .orderBy("published_to_reader_at", "desc")
+    .execute();
+
+  const priorByTheme = new Map<
+    number,
+    Array<{ date: string; one_liner: string }>
+  >();
+  for (const r of priorRows) {
+    if (r.theme_id === null) continue;
+    const tid = Number(r.theme_id);
+    const list = priorByTheme.get(tid) ?? [];
+    const scored = readScorerOutput(r.raw_output);
+    list.push({
+      date: r.published_to_reader_at?.toISOString().slice(0, 10) ?? "",
+      one_liner: scored.summary,
+    });
+    priorByTheme.set(tid, list);
+  }
+
+  const out: ComposerInput["theme_timelines"] = [];
+  for (const [tid, meta] of themeMeta) {
+    const current = currentIssueStoriesByTheme.get(tid) ?? [];
+    const prior = priorByTheme.get(tid) ?? [];
+    const entries = [
+      ...current.map((c) => ({
+        date: c.date,
+        one_liner: c.one_liner,
+        in_current_issue: true,
+      })),
+      ...prior.map((p) => ({
+        date: p.date,
+        one_liner: p.one_liner,
+        in_current_issue: false,
+      })),
+    ]
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+      .slice(0, TIMELINE_MAX_ENTRIES);
+
     out.push({
-      theme_name: prior.theme_name,
-      last_published:
-        prior.published_to_reader_at?.toISOString().slice(0, 10) ?? "",
-      last_one_liner: scored.summary,
+      theme_id: tid,
+      theme_name: meta.theme_name,
+      category: meta.category as ComposerInput["theme_timelines"][number]["category"],
+      trajectory: meta.trajectory,
+      is_long_running: meta.is_long_running,
+      n_prior_publications: meta.n_prior_publications,
+      entries,
+    });
+  }
+  return out;
+}
+
+export interface ThemeMeta {
+  theme_id: number;
+  theme_name: string;
+  category: string | null;
+  age_days: number;
+  n_prior_publications: number;
+  trajectory: "new" | "rising" | "stable" | "falling";
+  is_long_running: boolean;
+}
+
+// Load per-theme metadata used by both editor (digest) and composer
+// (timelines). One pass for trajectory math; one pass for prior-issue
+// counts. Scales linearly with distinct-theme count in the pool.
+async function loadThemeMeta(themeIds: number[]): Promise<Map<number, ThemeMeta>> {
+  const out = new Map<number, ThemeMeta>();
+  if (themeIds.length === 0) return out;
+
+  const rows = await db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "category.slug as category_slug",
+      "theme.first_seen_at",
+      "theme.n_stories_published",
+      "theme.rolling_composite_avg",
+      "theme.rolling_composite_30d",
+      "theme.is_long_running",
+    ])
+    .where("theme.id", "in", themeIds)
+    .execute();
+
+  // Count distinct prior issues per theme — an issue counts if any of
+  // its story_ids has that theme. One SQL pass avoids N queries.
+  const priorCounts = await db
+    .selectFrom("issue")
+    .innerJoin("story", (join) =>
+      join.on(sql`story.id = ANY(issue.story_ids)`),
+    )
+    .select([
+      "story.theme_id",
+      sql<string>`count(distinct issue.id)`.as("n"),
+    ])
+    .where("story.theme_id", "in", themeIds)
+    .groupBy("story.theme_id")
+    .execute();
+  const priorCountMap = new Map<number, number>();
+  for (const r of priorCounts) {
+    if (r.theme_id === null) continue;
+    priorCountMap.set(Number(r.theme_id), Number(r.n));
+  }
+
+  const now = Date.now();
+  for (const r of rows) {
+    const tid = Number(r.id);
+    const avg =
+      r.rolling_composite_avg !== null ? Number(r.rolling_composite_avg) : null;
+    const d30 =
+      r.rolling_composite_30d !== null ? Number(r.rolling_composite_30d) : null;
+    const n = r.n_stories_published;
+    let trajectory: ThemeMeta["trajectory"];
+    if (n < 3 || avg === null || d30 === null) {
+      trajectory = "new";
+    } else if (avg === 0) {
+      trajectory = "stable";
+    } else {
+      const ratio = d30 / avg;
+      if (ratio > 1.1) trajectory = "rising";
+      else if (ratio < 0.9) trajectory = "falling";
+      else trajectory = "stable";
+    }
+    out.set(tid, {
+      theme_id: tid,
+      theme_name: r.name,
+      category: r.category_slug,
+      age_days: Math.max(
+        0,
+        Math.floor((now - r.first_seen_at.getTime()) / (24 * 3600_000)),
+      ),
+      n_prior_publications: priorCountMap.get(tid) ?? 0,
+      trajectory,
+      is_long_running: r.is_long_running,
     });
   }
   return out;

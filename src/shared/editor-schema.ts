@@ -33,7 +33,9 @@ export const EditorInputSchema = z.object({
   // the pool gets one entry here with its chronological story_id list
   // and aggregate signals. Makes arc candidates structurally visible:
   // any theme with story_ids.length >= 2 AND day_span >= 2 is a
-  // natural arc pick.
+  // natural arc pick. Trajectory + prior_issue_count add cross-issue
+  // context so the editor can weight a continuing theme over a fresh
+  // one.
   themes: z.array(
     z.object({
       theme_id: z.number(),
@@ -46,6 +48,11 @@ export const EditorInputSchema = z.object({
       composite_max: z.number(),
       composite_sum: z.number(),
       tier1_sources_total: z.number(),
+      // Cross-issue context
+      age_days: z.number(), // days since first_seen_at on the theme row
+      n_prior_publications: z.number(), // issues that have included this theme before
+      trajectory: z.enum(["new", "rising", "stable", "falling"]),
+      is_long_running: z.boolean(),
     }),
   ),
 });

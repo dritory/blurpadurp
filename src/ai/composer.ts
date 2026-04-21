@@ -146,17 +146,26 @@ function renderUserMessage(input: ComposerInput): string {
   renderItemSection(lines, "worth_watching", input.worth_watching);
   renderShrugSection(lines, input.shrug);
 
-  if (input.prior_theme_context.length > 0) {
+  if (input.theme_timelines.length > 0) {
     lines.push(
-      "# prior_theme_context (most recent item per theme currently being continued)",
+      "# theme_timelines (full recent arc per theme — use to anchor current-issue items to the longer story: 'three weeks in', 'since last month's X', etc. Entries marked [NOW] are in this issue; others are prior published context that should NOT be re-rendered, only referenced.)",
       "",
     );
-    for (const p of input.prior_theme_context) {
+    for (const t of input.theme_timelines) {
+      const flags: string[] = [];
+      flags.push(`trajectory=${t.trajectory}`);
+      if (t.is_long_running) flags.push("long-running");
+      if (t.n_prior_publications > 0)
+        flags.push(`${t.n_prior_publications} prior issue${t.n_prior_publications === 1 ? "" : "s"}`);
       lines.push(
-        `  - theme: ${p.theme_name}; last_published: ${p.last_published}; last_one_liner: ${p.last_one_liner}`,
+        `  - theme "${t.theme_name}" (${t.category ?? "—"}) [${flags.join(", ")}]`,
       );
+      for (const e of t.entries) {
+        const mark = e.in_current_issue ? "[NOW] " : "       ";
+        lines.push(`      ${e.date} ${mark}${e.one_liner}`);
+      }
+      lines.push("");
     }
-    lines.push("");
   }
   lines.push("Return your JSON object now.");
   return lines.join("\n");

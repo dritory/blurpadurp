@@ -152,9 +152,14 @@ function renderUserMessage(input: EditorInput): string {
       "",
     );
     for (const t of input.themes) {
-      const arcTag = t.story_ids.length >= 2 && t.day_span >= 2 ? " ← arc" : "";
+      const flags: string[] = [];
+      if (t.story_ids.length >= 2 && t.day_span >= 2) flags.push("← arc");
+      if (t.is_long_running) flags.push("★ long-running");
+      if (t.trajectory === "rising") flags.push("↑ rising");
+      if (t.trajectory === "falling") flags.push("↓ falling");
+      const tag = flags.length > 0 ? `  ${flags.join(" ")}` : "";
       lines.push(
-        `  - theme_id: ${t.theme_id}  "${t.theme_name}"${arcTag}`,
+        `  - theme_id: ${t.theme_id}  "${t.theme_name}"${tag}`,
       );
       lines.push(
         `    category: ${t.category ?? "-"}  n_stories: ${t.story_ids.length}  day_span: ${t.day_span}`,
@@ -170,6 +175,9 @@ function renderUserMessage(input: EditorInput): string {
         const last = (t.last_published_at ?? t.first_published_at).slice(0, 10);
         lines.push(`    window: ${first} → ${last}`);
       }
+      lines.push(
+        `    trajectory: ${t.trajectory}  n_prior_publications: ${t.n_prior_publications}  age_days: ${t.age_days}`,
+      );
       lines.push("");
     }
   }
