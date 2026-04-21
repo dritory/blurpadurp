@@ -407,6 +407,7 @@ export async function compose(): Promise<void> {
     cfg,
     editorResult,
     shrug,
+    input,
   );
   console.log(
     `[compose] issue ${issueId} published: ${storyIds.length} stories, ${output.markdown.length} md chars`,
@@ -882,6 +883,7 @@ async function persistIssue(
   cfg: ConfigMap,
   editorResult: EditorOutput,
   shrugCandidates: ComposerInput["shrug"],
+  composerInput: ComposerInput,
 ): Promise<number> {
   return db.transaction().execute(async (tx) => {
     const issue = await tx
@@ -895,6 +897,7 @@ async function persistIssue(
         composer_model_id: cfg["composer.model_id"],
         editor_output_jsonb: JSON.stringify(editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(shrugCandidates) as never,
+        composer_input_jsonb: JSON.stringify(composerInput) as never,
       })
       .returning("id")
       .executeTakeFirstOrThrow();

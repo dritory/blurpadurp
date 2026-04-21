@@ -21,7 +21,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { makeComposer } from "../ai/composer.ts";
 import { db } from "../db/index.ts";
+import {
+  ComposerInputSchema,
+  type ComposerInput,
+} from "../shared/composer-schema.ts";
 import { getEnv } from "../shared/env.ts";
 import {
   ScorerOutputSchema,
@@ -271,4 +276,101 @@ async function loadSystemPrompt(path: string): Promise<string> {
 
 function isoStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+// Composer replay: load a persisted issue's composer input from the
+// DB and re-render with a different prompt version or model. Writes
+// .md and .html to fixtures/ — open locally or via /admin/fixtures.
+// Does NOT touch the DB beyond the initial read; the original issue
+// stays as it was.
+export async function replayComposer(params: {
+  issueId: number;
+  promptPath: string;
+  promptVersion: string;
+  modelId: string;
+  maxTokens?: number;
+}): Promise<void> {
+  const row = await db
+    .selectFrom("issue")
+    .select([
+      "id",
+      "published_at",
+      "composer_input_jsonb",
+      "composed_markdown",
+      "composer_prompt_version",
+      "composer_model_id",
+    ])
+    .where("id", "=", params.issueId)
+    .executeTakeFirst();
+  if (!row) {
+    console.log(`[composer-replay] issue #${params.issueId} not found`);
+    return;
+  }
+  if (row.composer_input_jsonb === null) {
+    console.log(
+      `[composer-replay] issue #${params.issueId} has no persisted composer_input_jsonb — predates migration 015. Run compose again on fresh data.`,
+    );
+    return;
+  }
+
+  const parsed = ComposerInputSchema.safeParse(row.composer_input_jsonb);
+  if (!parsed.success) {
+    console.error("[composer-replay] stored input failed schema validation:");
+    console.error(parsed.error.issues.slice(0, 5));
+    return;
+  }
+  const input: ComposerInput = parsed.data;
+
+  const composer = makeComposer({
+    version: params.promptVersion,
+    modelId: params.modelId,
+    promptPath: params.promptPath,
+    maxTokens: params.maxTokens ?? 4000,
+  });
+
+  console.log(
+    `[composer-replay] issue #${row.id} · ${row.composer_prompt_version} (${row.composer_model_id}) → ${params.promptVersion} (${params.modelId})`,
+  );
+  const t0 = Date.now();
+  const output = await composer.run(input);
+  const latencyMs = Date.now() - t0;
+
+  await mkdir(FIXTURES_DIR, { recursive: true });
+  const stamp = isoStamp();
+  const base = `composer-replay-i${row.id}-${stamp}`;
+  const mdPath = resolve(FIXTURES_DIR, `${base}.md`);
+  const htmlPath = resolve(FIXTURES_DIR, `${base}.html`);
+  const diffPath = resolve(FIXTURES_DIR, `${base}.diff.md`);
+  await writeFile(mdPath, output.markdown, "utf8");
+  await writeFile(htmlPath, output.html, "utf8");
+  await writeFile(
+    diffPath,
+    `# composer-replay issue #${row.id}
+
+**Source**: ${row.composer_prompt_version ?? "?"} (${row.composer_model_id ?? "?"})
+**Replay**: ${params.promptVersion} (${params.modelId})
+**Latency**: ${latencyMs}ms
+**Original markdown length**: ${row.composed_markdown.length} chars
+**Replay markdown length**: ${output.markdown.length} chars
+
+---
+
+## Original
+
+${row.composed_markdown}
+
+---
+
+## Replay
+
+${output.markdown}
+`,
+    "utf8",
+  );
+  console.log(`[composer-replay] wrote ${mdPath}`);
+  console.log(`[composer-replay] wrote ${htmlPath}`);
+  console.log(`[composer-replay] wrote ${diffPath}  ← side-by-side`);
+  console.log(
+    `[composer-replay] latency ${latencyMs}ms · ${row.composed_markdown.length} → ${output.markdown.length} chars`,
+  );
 }

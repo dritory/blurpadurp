@@ -164,6 +164,14 @@ it's 60 words, cut one sentence. If it's 30 words, stop. The opener
 is a sign the week has shape, not a summary of it. One sharp sentence
 beats three smooth ones.
 
+**End on an observation about the thing itself, not on a
+meta-statement about what the reader should track.** "A crack in
+party discipline worth watching as the big-ticket legislative
+calendar fills up" is the bad version — it editorializes about why
+the reader should pay attention. "The first cross-party crack since
+Trump returned to office, and it came on surveillance" is the good
+version — it observes the event itself.
+
 ### Synthesis gold examples
 
 *Short is the target. Each of these is under 40 words.*
@@ -283,6 +291,14 @@ DC talks"` and no article actually names a White House official by
 name, then the write-up cannot name one. Write "senior White House
 official" or drop the detail. The rule: **if a named specific is not
 in the input you were given, it does not go in the output.**
+
+**Cross-story bridging is the common failure mode and it is
+banned.** If a sentence draws a connection between two different
+stories — "SpaceX is doing X while Musk is simultaneously doing Y"
+where X and Y come from different items in your input — that
+connection is yours, not the sources'. Cut it. The only exception:
+items inside the same arc (kind=arc), where the editor has already
+told you the stories belong together.
 
 Same rule for attributed quotes, internal details (Pentagon "Mythos
 model", etc.), and causal claims ("the talks centre on X"). If the

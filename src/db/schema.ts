@@ -97,6 +97,7 @@ export interface Database {
     composer_model_id: string | null;
     editor_output_jsonb: Jsonb | null;
     shrug_candidates_jsonb: Jsonb | null;
+    composer_input_jsonb: Jsonb | null;
   };
 
   email_subscription: {
