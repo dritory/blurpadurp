@@ -1555,12 +1555,30 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
   const titleRows = storyIds.length
     ? await db
         .selectFrom("story")
-        .select(["id", "title"])
-        .where("id", "in", storyIds)
+        .leftJoin("theme", "theme.id", "story.theme_id")
+        .select([
+          "story.id",
+          "story.title",
+          "story.theme_id",
+          "theme.name as theme_name",
+        ])
+        .where("story.id", "in", storyIds)
         .execute()
     : [];
   const storyTitles = new Map<number, string>(
     titleRows.map((r) => [Number(r.id), r.title]),
+  );
+  const storyThemes = new Map<
+    number,
+    { theme_id: number | null; theme_name: string | null }
+  >(
+    titleRows.map((r) => [
+      Number(r.id),
+      {
+        theme_id: r.theme_id !== null ? Number(r.theme_id) : null,
+        theme_name: r.theme_name,
+      },
+    ]),
   );
 
   return {
@@ -1573,6 +1591,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
     },
     editor: iss.editor_output_jsonb as EditorReviewData["editor"],
     storyTitles,
+    storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
   };
 }
