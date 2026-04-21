@@ -3,6 +3,7 @@
 
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { HTTPException } from "hono/http-exception";
 import { sql } from "kysely";
 import { readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -1576,6 +1577,9 @@ function parseFlash(
 app.notFound((c) => c.html(<NotFoundPage />, 404));
 
 app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
   console.error("[api]", err);
   const detail =
     getEnvOptional("NODE_ENV") === "production"

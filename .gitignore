@@ -23,6 +23,9 @@ bun.lockb.bak
 # data (local docker volumes)
 data/
 
+# local pg dumps
+backups/
+
 # captured scorer fixtures (may contain raw source payloads)
 fixtures/
 
