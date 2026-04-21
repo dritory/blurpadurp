@@ -143,12 +143,46 @@ function renderUserMessage(input: EditorInput): string {
   lines.push(`as_of_date: ${input.as_of_date}`);
   lines.push(`pool_size: ${input.stories.length}`);
   lines.push(`target_picks: 10-15`, "");
+  // Themes digest first — multi-story themes with day_span >= 2 are
+  // obvious arc candidates. Gives the model structural visibility into
+  // which stories belong together across the week.
+  if (input.themes.length > 0) {
+    lines.push(
+      "themes (pre-grouped by theme; arcs = themes with story_ids.length >= 2 AND day_span >= 2):",
+      "",
+    );
+    for (const t of input.themes) {
+      const arcTag = t.story_ids.length >= 2 && t.day_span >= 2 ? " ← arc" : "";
+      lines.push(
+        `  - theme_id: ${t.theme_id}  "${t.theme_name}"${arcTag}`,
+      );
+      lines.push(
+        `    category: ${t.category ?? "-"}  n_stories: ${t.story_ids.length}  day_span: ${t.day_span}`,
+      );
+      lines.push(
+        `    story_ids (chronological): [${t.story_ids.join(", ")}]`,
+      );
+      lines.push(
+        `    composite_max: ${t.composite_max}  composite_sum: ${t.composite_sum}  tier1_sources_total: ${t.tier1_sources_total}`,
+      );
+      if (t.first_published_at !== null) {
+        const first = t.first_published_at.slice(0, 10);
+        const last = (t.last_published_at ?? t.first_published_at).slice(0, 10);
+        lines.push(`    window: ${first} → ${last}`);
+      }
+      lines.push("");
+    }
+  }
+
   lines.push("stories (ordered by composite score; all have passed the gate):", "");
   for (const s of input.stories) {
     lines.push(`  - story_id: ${s.story_id}`);
     lines.push(`    title: ${s.title}`);
     lines.push(`    category: ${s.category ?? "-"}`);
-    lines.push(`    theme: ${s.theme_name ?? "-"}`);
+    lines.push(
+      `    theme: ${s.theme_name ?? "-"}${s.theme_id !== null ? ` (id=${s.theme_id})` : ""}`,
+    );
+    lines.push(`    published_at: ${s.published_at ?? "-"}`);
     lines.push(`    composite: ${s.composite}`);
     lines.push(
       `    zeitgeist: ${s.zeitgeist} half_life: ${s.half_life} reach: ${s.reach} non_obviousness: ${s.non_obviousness}`,

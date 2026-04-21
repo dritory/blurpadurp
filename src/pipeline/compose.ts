@@ -100,6 +100,7 @@ export async function compose(): Promise<void> {
       "theme.name as theme_name",
       "story.theme_id",
       "story.theme_relationship",
+      "story.published_at",
       "story.zeitgeist_score",
       "story.half_life",
       "story.reach",
@@ -306,40 +307,45 @@ async function curateViaEditor(
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
 
+  const editorStories: EditorInput["stories"] = pool.map((p) => {
+    const out = p.row.raw_output as ScorerOutput | null;
+    const factors = factorsByStory.get(Number(p.row.story_id)) ?? {
+      trigger: [],
+      penalty: [],
+    };
+    return {
+      story_id: Number(p.row.story_id),
+      title: p.row.title,
+      category:
+        (p.row.category_slug as EditorInput["stories"][number]["category"]) ??
+        null,
+      theme_id: p.row.theme_id !== null ? Number(p.row.theme_id) : null,
+      theme_name: p.row.theme_name,
+      published_at: p.row.published_at?.toISOString() ?? null,
+      composite: p.row.composite !== null ? Number(p.row.composite) : 0,
+      zeitgeist: p.row.zeitgeist_score ?? 0,
+      half_life: p.row.half_life ?? 0,
+      reach: p.row.reach ?? 0,
+      non_obviousness: p.row.non_obviousness ?? 0,
+      confidence:
+        (p.row.point_in_time_confidence as
+          | EditorInput["stories"][number]["confidence"]) ?? null,
+      tier1_sources: p.tier1,
+      total_sources: p.total,
+      theme_relationship:
+        (p.row.theme_relationship as
+          | EditorInput["stories"][number]["theme_relationship"]) ?? null,
+      scorer_one_liner: out?.summary ?? "",
+      retrodiction_12mo: out?.reasoning?.retrodiction_12mo ?? "",
+      factors_trigger: factors.trigger,
+      factors_penalty: factors.penalty,
+    };
+  });
+
   const input: EditorInput = {
     as_of_date: new Date().toISOString().slice(0, 10),
-    stories: pool.map((p) => {
-      const out = p.row.raw_output as ScorerOutput | null;
-      const factors = factorsByStory.get(Number(p.row.story_id)) ?? {
-        trigger: [],
-        penalty: [],
-      };
-      return {
-        story_id: Number(p.row.story_id),
-        title: p.row.title,
-        category:
-          (p.row.category_slug as EditorInput["stories"][number]["category"]) ??
-          null,
-        theme_name: p.row.theme_name,
-        composite: p.row.composite !== null ? Number(p.row.composite) : 0,
-        zeitgeist: p.row.zeitgeist_score ?? 0,
-        half_life: p.row.half_life ?? 0,
-        reach: p.row.reach ?? 0,
-        non_obviousness: p.row.non_obviousness ?? 0,
-        confidence:
-          (p.row.point_in_time_confidence as
-            | EditorInput["stories"][number]["confidence"]) ?? null,
-        tier1_sources: p.tier1,
-        total_sources: p.total,
-        theme_relationship:
-          (p.row.theme_relationship as
-            | EditorInput["stories"][number]["theme_relationship"]) ?? null,
-        scorer_one_liner: out?.summary ?? "",
-        retrodiction_12mo: out?.reasoning?.retrodiction_12mo ?? "",
-        factors_trigger: factors.trigger,
-        factors_penalty: factors.penalty,
-      };
-    }),
+    stories: editorStories,
+    themes: buildThemesDigest(pool, editorStories),
   };
 
   const result = await editor.run(input);
@@ -347,6 +353,105 @@ async function curateViaEditor(
     `[compose] editor picked ${result.picks.length} stories; cuts: ${result.cuts_summary}`,
   );
   return { picks: result.picks, cuts_summary: result.cuts_summary };
+}
+
+// Build the themes digest from the editor pool. Every theme with at
+// least one story in the pool yields one entry; story_ids are sorted
+// chronologically (earliest published_at first, null dates last).
+// day_span = calendar-day distance between first and last; same-day = 0.
+function buildThemesDigest(
+  pool: Array<{
+    row: Awaited<ReturnType<typeof rowsForEditor>>[number];
+    tier1: number;
+    total: number;
+  }>,
+  stories: EditorInput["stories"],
+): EditorInput["themes"] {
+  const byId = new Map(stories.map((s) => [s.story_id, s] as const));
+  const tier1ById = new Map(
+    pool.map((p) => [Number(p.row.story_id), p.tier1] as const),
+  );
+  const grouped = new Map<
+    number,
+    { theme_name: string; category: string | null; storyIds: number[] }
+  >();
+  for (const s of stories) {
+    if (s.theme_id === null || s.theme_name === null) continue;
+    const entry =
+      grouped.get(s.theme_id) ??
+      ({
+        theme_name: s.theme_name,
+        category: s.category,
+        storyIds: [],
+      } as const);
+    entry.storyIds.push(s.story_id);
+    grouped.set(s.theme_id, {
+      theme_name: entry.theme_name,
+      category: entry.category,
+      storyIds: entry.storyIds,
+    });
+  }
+
+  const digest: EditorInput["themes"] = [];
+  const DAY_MS = 24 * 3600_000;
+  for (const [theme_id, g] of grouped) {
+    const sorted = [...g.storyIds].sort((a, b) => {
+      const pa = byId.get(a)?.published_at ?? null;
+      const pb = byId.get(b)?.published_at ?? null;
+      const ta = pa !== null ? new Date(pa).getTime() : Number.POSITIVE_INFINITY;
+      const tb = pb !== null ? new Date(pb).getTime() : Number.POSITIVE_INFINITY;
+      return ta - tb;
+    });
+    const firstS = byId.get(sorted[0]!);
+    const lastS = byId.get(sorted[sorted.length - 1]!);
+    const first_published_at = firstS?.published_at ?? null;
+    const last_published_at = lastS?.published_at ?? null;
+    let day_span = 0;
+    if (first_published_at !== null && last_published_at !== null) {
+      day_span = Math.floor(
+        (new Date(last_published_at).getTime() -
+          new Date(first_published_at).getTime()) /
+          DAY_MS,
+      );
+    }
+    let composite_max = 0;
+    let composite_sum = 0;
+    let tier1_sources_total = 0;
+    for (const sid of sorted) {
+      const s = byId.get(sid);
+      if (s === undefined) continue;
+      if (s.composite > composite_max) composite_max = s.composite;
+      composite_sum += s.composite;
+      tier1_sources_total += tier1ById.get(sid) ?? 0;
+    }
+    digest.push({
+      theme_id,
+      theme_name: g.theme_name,
+      category: g.category as EditorInput["themes"][number]["category"],
+      story_ids: sorted,
+      first_published_at,
+      last_published_at,
+      day_span,
+      composite_max,
+      composite_sum,
+      tier1_sources_total,
+    });
+  }
+
+  // Surface likely arcs first: multi-story themes sorted by day_span
+  // desc then composite_sum desc. Single-story themes follow, by
+  // composite_max desc.
+  digest.sort((a, b) => {
+    const aArc = a.story_ids.length >= 2 ? 1 : 0;
+    const bArc = b.story_ids.length >= 2 ? 1 : 0;
+    if (aArc !== bArc) return bArc - aArc;
+    if (aArc === 1 && bArc === 1) {
+      if (b.day_span !== a.day_span) return b.day_span - a.day_span;
+      return b.composite_sum - a.composite_sum;
+    }
+    return b.composite_max - a.composite_max;
+  });
+  return digest;
 }
 
 // Typed helper so curateViaEditor's pool parameter can reference the shape.
@@ -365,6 +470,7 @@ async function rowsForEditor() {
       "theme.name as theme_name",
       "story.theme_id",
       "story.theme_relationship",
+      "story.published_at",
       "story.zeitgeist_score",
       "story.half_life",
       "story.reach",

@@ -11,7 +11,9 @@ export const EditorInputSchema = z.object({
       story_id: z.number(),
       title: z.string(),
       category: z.enum(categorySlug).nullable(),
+      theme_id: z.number().nullable(),
       theme_name: z.string().nullable(),
+      published_at: z.string().nullable(), // ISO 8601; enables arc chronology
       composite: z.number(),
       zeitgeist: z.number(),
       half_life: z.number(),
@@ -25,6 +27,25 @@ export const EditorInputSchema = z.object({
       retrodiction_12mo: z.string(),
       factors_trigger: z.array(z.string()),
       factors_penalty: z.array(z.string()),
+    }),
+  ),
+  // Pre-computed theme digest. Every theme with at least one story in
+  // the pool gets one entry here with its chronological story_id list
+  // and aggregate signals. Makes arc candidates structurally visible:
+  // any theme with story_ids.length >= 2 AND day_span >= 2 is a
+  // natural arc pick.
+  themes: z.array(
+    z.object({
+      theme_id: z.number(),
+      theme_name: z.string(),
+      category: z.enum(categorySlug).nullable(),
+      story_ids: z.array(z.number()), // chronological (earliest first)
+      first_published_at: z.string().nullable(),
+      last_published_at: z.string().nullable(),
+      day_span: z.number(), // whole days between first and last, 0 if same-day
+      composite_max: z.number(),
+      composite_sum: z.number(),
+      tier1_sources_total: z.number(),
     }),
   ),
 });

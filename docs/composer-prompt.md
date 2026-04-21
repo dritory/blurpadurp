@@ -1,7 +1,11 @@
-# Composer prompt v0.3
+# Composer prompt v0.2
 
-Version tag: `composer-v0.3`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.2`. Pre-1.0 — schema and behavior may change
 freely.
+
+Drafts that aren't yet activated in production (arcs) land under a
+version bump when the operator is ready. Keep changes reversible
+until then.
 
 # System prompt
 
@@ -326,10 +330,12 @@ Return your JSON object now.
 - v0.1 composed a single issue grouped by theme. v0.2 switched to four
   fixed functional sections (Conversation / Worth knowing / Worth watching
   / Worth a shrug) — see `docs/concept.md#section-scheme`.
-- v0.3 introduces arcs: editor may emit multi-story picks on the same
-  theme and the composer writes them as one chronologically-woven
-  paragraph. Singles remain the common case.
-- v0.3 still composes a single issue per run. Event-driven single-item
+- Arcs (draft, not-yet-activated): editor may emit multi-story picks
+  on the same theme and the composer writes them as one
+  chronologically-woven paragraph. Singles remain the common case.
+  When arcs go live, bump this file's version and the config
+  composer.prompt_version together.
+- Still composes a single issue per run. Event-driven single-item
   issues will need a separate template.
 - Prior-theme context is today's workaround for cross-issue continuity;
   eventually the composer should read prior issues directly.

@@ -1,6 +1,10 @@
-# Editor prompt v0.2
+# Editor prompt v0.1
 
-Version tag: `editor-v0.2`. Pre-1.0.
+Version tag: `editor-v0.1`. Pre-1.0.
+
+Drafts in this file that aren't yet activated in production (arcs,
+themes digest) land under a version bump when the operator is ready.
+Keep changes reversible until then.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
@@ -32,19 +36,23 @@ a separate composer will write the prose from your shortlist.
 - A healthy mix of topics. One dominant story (e.g. an active war) is
   fine, even expected. 4+ stories on the exact same angle is crowding
   — pick 2 representatives and trust the composer to group them.
-- **Prefer arcs over snapshots.** When 2–5 stories in the pool share
-  the same theme AND represent a continuing story over the week
-  (escalation → response → outcome, or a widening crisis, or a reveal
-  then reactions), return ONE arc pick containing all of them rather
-  than multiple singles. Arcs read better than three isolated bullets
-  that share a headline noun. Examples of arc-worthy shapes:
+- **Prefer arcs over snapshots.** The input's `themes` field pre-groups
+  every theme with ≥1 story in the pool. Scan it FIRST. A theme with
+  `story_ids.length >= 2 AND day_span >= 2` (tagged `← arc` in the
+  digest) is an arc candidate by construction: same topic, spread
+  across multiple days. Return ONE arc pick for each such theme rather
+  than multiple singles — pass the full `story_ids` list and set
+  `lead_story_id` to the story whose one-liner best anchors the arc
+  headline (usually the earliest event, sometimes the most
+  consequential). Example arc shapes the digest will surface:
     - "Iran threatens Hormuz (Mon) → US moves carriers (Wed) → oil
       +4% (Fri)"
-    - "AI bill passes Senate (Tue) → House amendment (Thu) → vote
-      Fri"
+    - "AI bill passes Senate (Tue) → House amendment (Thu) → vote Fri"
     - "Drug trial results published (Mon) → stock reacts (Mon) →
       FDA statement (Wed)"
-  One arc counts as ONE pick toward the 10–15 target.
+  One arc counts as ONE pick toward the 10–15 target. A theme with
+  `story_ids.length == 1` (no arc tag) is a natural single-pick
+  candidate if it makes the cut.
 - Prefer the under-covered angle over the widely-covered one when
   quality is equal. If 5 outlets all have the "Iran threatens Hormuz"
   story but 1 has "Iran's internal hardline-reformist split," pick the
@@ -108,12 +116,24 @@ as_of_date: {{as_of_date}}
 pool_size: {{n}}
 target_picks: 10-15
 
+themes (pre-grouped by theme; arcs = themes with story_ids.length >= 2
+AND day_span >= 2):
+
+  - theme_id: {{id}}  "{{theme_name}}"{{ " ← arc" if arc }}
+    category: {{category}}  n_stories: {{n}}  day_span: {{days}}
+    story_ids (chronological): [{{id}}, {{id}}, ...]
+    composite_max: {{c}}  composite_sum: {{c}}  tier1_sources_total: {{n}}
+    window: {{YYYY-MM-DD}} → {{YYYY-MM-DD}}
+
+  - ...
+
 stories (ordered by composite score; all have passed the gate):
 
   - story_id: {{id}}
     title: {{title}}
     category: {{category}}
-    theme: {{theme_name or "-"}}
+    theme: {{theme_name or "-"}} (id={{theme_id}})
+    published_at: {{iso8601 or "-"}}
     composite: {{c}}
     zeitgeist: {{z}}
     half_life: {{h}}
@@ -134,12 +154,13 @@ Return your shortlist now.
 
 ## Notes for future revisions
 
-- v0.2 adds arc picks. v0.1 picks (single story_id only) still parse —
-  they're treated as arcs of length 1 downstream. If the model under-
-  uses arcs, tighten the "prefer arcs" language; if it over-uses them,
-  add a guard like "arc minimum 2 items, maximum 5."
-- The composer handles arcs by weaving stories chronologically into one
-  paragraph (~4–5 sentences); see docs/composer-prompt.md#arcs.
+- Arc picks (draft, not-yet-activated). Single-story picks
+  (story_id only) still parse as today; the arc shape
+  ({story_ids[], lead_story_id}) is additive. When arcs go live, bump
+  this file's version, add a config migration for
+  editor.prompt_version, and commit together.
+- The composer handles arcs by weaving stories chronologically into
+  one paragraph (~4–5 sentences); see docs/composer-prompt.md#arcs.
 
 - v0.1 doesn't let the editor see prior issues. Future version should
   — "we covered X last week, pick continuation or novel" is a real
