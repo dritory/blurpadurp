@@ -160,10 +160,9 @@ async function runPrefilterPass(
   let done = 0;
   await mapLimit(stories, SCORING_CONCURRENCY, async (story) => {
     try {
-      const input: ScorerInput = buildScorerInput(story, {
-        existing_theme: null,
-        nearby_recent_stories: [],
-      });
+      // Prefilter pass: no theme context (embeddings + attach happen in
+      // the final pass). Scorer input's theme_context is nullable.
+      const input: ScorerInput = buildScorerInput(story, null);
       const output = await scorer.run(input);
       await db
         .updateTable("story")

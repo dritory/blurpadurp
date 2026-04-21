@@ -1,10 +1,17 @@
 // Kysely types mirroring migrations/001_init.sql.
 // Pre-1.0 — keep in sync with migrations by hand.
 
-import type { ColumnType, Generated, JSONColumnType } from "kysely";
+import type { ColumnType, Generated } from "kysely";
 
 type Id = Generated<number>;
 type Created = Generated<Date>;
+
+// Columns backed by jsonb. The shape varies by column; we select as
+// `unknown` and cast at read time against the scorer / composer schemas.
+// Kysely's JSONColumnType requires Select to be object|null, but many
+// of our jsonb columns are more loosely typed — ColumnType sidesteps
+// that constraint.
+type Jsonb = ColumnType<unknown, string, string>;
 
 export interface Database {
   category: {
@@ -43,8 +50,8 @@ export interface Database {
     as_of_date: ColumnType<Date, string, string>;
     scorer_model_id: string | null;
     scorer_prompt_version: string | null;
-    raw_input: JSONColumnType<unknown> | null;
-    raw_output: JSONColumnType<unknown> | null;
+    raw_input: Jsonb | null;
+    raw_output: Jsonb | null;
     zeitgeist_score: number | null;
     half_life: number | null;
     reach: number | null;
@@ -88,8 +95,8 @@ export interface Database {
     story_ids: number[];
     composer_prompt_version: string | null;
     composer_model_id: string | null;
-    editor_output_jsonb: JSONColumnType<unknown> | null;
-    shrug_candidates_jsonb: JSONColumnType<unknown> | null;
+    editor_output_jsonb: Jsonb | null;
+    shrug_candidates_jsonb: Jsonb | null;
   };
 
   email_subscription: {
@@ -97,10 +104,10 @@ export interface Database {
     email: string;
     confirmed_at: Date | null;
     unsubscribed_at: Date | null;
-    delivery_time_local: string;
-    timezone: string;
+    delivery_time_local: Generated<string>;
+    timezone: Generated<string>;
     urgent_override: Generated<boolean>;
-    category_mutes: string[];
+    category_mutes: Generated<string[]>;
     created_at: Created;
   };
 
@@ -110,10 +117,10 @@ export interface Database {
     p256dh_key: string;
     auth_key: string;
     user_agent_label: string | null;
-    delivery_time_local: string;
-    timezone: string;
+    delivery_time_local: Generated<string>;
+    timezone: Generated<string>;
     urgent_override: Generated<boolean>;
-    category_mutes: string[];
+    category_mutes: Generated<string[]>;
     created_at: Created;
     unsubscribed_at: Date | null;
   };
@@ -134,8 +141,8 @@ export interface Database {
     stage_version: string;
     model_id: string;
     input_hash: string | null;
-    input_jsonb: JSONColumnType<unknown> | null;
-    output_jsonb: JSONColumnType<unknown> | null;
+    input_jsonb: Jsonb | null;
+    output_jsonb: Jsonb | null;
     tokens_in: number | null;
     tokens_out: number | null;
     cost_estimate_usd: string | null;
@@ -146,7 +153,7 @@ export interface Database {
 
   config: {
     key: string;
-    value: JSONColumnType<unknown>;
+    value: Jsonb;
     updated_at: Created;
   };
 
@@ -166,7 +173,7 @@ export interface Database {
     prompt_version: string;
     model_id: string;
     story_count: number | null;
-    metrics: JSONColumnType<unknown> | null;
+    metrics: Jsonb | null;
     notes: string | null;
   };
 
@@ -178,7 +185,7 @@ export interface Database {
     llm_judge_score: string | null;
     operator_label: number | null;
     ground_truth_score: string | null;
-    evidence: JSONColumnType<unknown> | null;
+    evidence: Jsonb | null;
   };
 
   schema_migration: {
