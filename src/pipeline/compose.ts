@@ -315,6 +315,59 @@ export async function compose(): Promise<void> {
 
   const shrug = await loadShrugCandidates(cutoff);
 
+  // Build synthesis_themes: one entry per distinct theme touched by
+  // conversation + worth_knowing items (worth_watching is typically
+  // too speculative to anchor a synthesis). Each entry's shape uses
+  // the editor's reason if available (the one-line arc headline),
+  // or falls back to the lead story's scorer one-liner.
+  const synthesisItems = [...conversation, ...worth_knowing];
+  const synthesisByTheme = new Map<
+    number,
+    {
+      theme_name: string;
+      category: string | null;
+      shape: string;
+      is_arc: boolean;
+    }
+  >();
+  for (const it of synthesisItems) {
+    const leadRow = byId.get(it.lead_story_id);
+    const tid =
+      leadRow?.theme_id !== null && leadRow?.theme_id !== undefined
+        ? Number(leadRow.theme_id)
+        : null;
+    if (tid === null) continue;
+    const existing = synthesisByTheme.get(tid);
+    const theme_name =
+      leadRow?.theme_name ?? it.stories[0]?.theme_name ?? `theme #${tid}`;
+    const category = it.stories[0]?.category ?? null;
+    const shape =
+      it.reason.length > 0
+        ? it.reason
+        : it.stories[0]?.scorer_one_liner ?? theme_name;
+    if (existing === undefined || (it.kind === "arc" && !existing.is_arc)) {
+      synthesisByTheme.set(tid, {
+        theme_name,
+        category,
+        shape,
+        is_arc: it.kind === "arc",
+      });
+    }
+  }
+  const synthesis_themes: ComposerInput["synthesis_themes"] =
+    synthesisByTheme.size >= 2
+      ? [...synthesisByTheme.entries()].map(([tid, entry]) => {
+          const meta = themeMeta.get(tid);
+          return {
+            theme_name: entry.theme_name,
+            category: entry.category as ComposerInput["synthesis_themes"][number]["category"],
+            shape: entry.shape,
+            is_arc: entry.is_arc,
+            trajectory: meta?.trajectory ?? "new",
+          };
+        })
+      : [];
+
   const input: ComposerInput = {
     week_of: new Date().toISOString().slice(0, 10),
     conversation,
@@ -322,6 +375,7 @@ export async function compose(): Promise<void> {
     worth_watching,
     shrug,
     theme_timelines,
+    synthesis_themes,
   };
 
   const arcCount = builtItems.filter((b) => b.item.kind === "arc").length;

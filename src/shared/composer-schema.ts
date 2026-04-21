@@ -62,6 +62,18 @@ export const ComposerInputSchema = z.object({
   worth_knowing: z.array(ComposerItemSchema),
   worth_watching: z.array(ComposerItemSchema),
   shrug: z.array(ShrugItemSchema),
+  // Synthesis input: the themes the composer should touch in the
+  // opening paragraph (if at least 2). Pre-computed server-side from
+  // the items above. Empty array = skip the opener entirely.
+  synthesis_themes: z.array(
+    z.object({
+      theme_name: z.string(),
+      category: z.enum(categorySlug).nullable(),
+      shape: z.string(), // e.g. "Hormuz widening", "ceasefire talks resumed"
+      is_arc: z.boolean(),
+      trajectory: z.enum(["new", "rising", "stable", "falling"]),
+    }),
+  ),
   // Theme timelines: for every theme that appears in any section above,
   // the full recent history of stories under that theme — both already-
   // published (prior issues) and in-current-issue entries. Lets the

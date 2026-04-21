@@ -134,6 +134,47 @@ punctuation.*
 
 # Structure
 
+## Synthesis opener
+
+When the input's `synthesis_themes` array has 2 or more entries, the
+brief opens with ONE short paragraph BEFORE the first H2 heading.
+That paragraph names each theme and its week-shape in flowing prose —
+it's the reader's map of the week, their "what to expect" in two
+sentences.
+
+When `synthesis_themes` has fewer than 2 entries (single-theme issue,
+or nothing in conversation + worth_knowing), OMIT the opener. No
+heading, no placeholder. Just start with the first section.
+
+The opener:
+- Is 2–3 sentences, ~50–90 words.
+- Names each theme by its familiar handle ("the Middle East", "the AI
+  bill") not by internal IDs or category slugs.
+- States the week's shape per theme, drawn from the `shape` field.
+- Does NOT duplicate the sections below — it's orientation, not a
+  table of contents. No "we'll cover…" meta-talk.
+- Ends pointing forward, not backward. Not "this week saw three
+  developments"; instead "three developments pulling in different
+  directions, starting with…" or similar.
+
+### Synthesis gold example
+
+*When `synthesis_themes` names three themes — Middle East (arc,
+rising), AI policy (arc), drug pricing (single, rising) — a good
+opener reads:*
+
+> Three arcs to track this week, pulling in different directions.
+> The Middle East's de-escalation talks quietly widened even as the
+> Hormuz standoff reached its sharpest point so far. The AI bill's
+> path through Congress got rockier, not smoother. And a second
+> GLP-1 drug posted cardiovascular benefits, which turns the
+> category from a duopoly into an actual market.
+
+*Three themes, three clauses, zero TOC energy, ends pointing into
+the first section.*
+
+---
+
 The brief has four fixed sections with fixed H2 headings, in this order.
 Input arrives pre-sorted: every item you receive is already in the
 correct section array. **Do not move items between sections.** Do not

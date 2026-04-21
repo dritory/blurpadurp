@@ -141,6 +141,22 @@ function renderUserMessage(input: ComposerInput): string {
   const lines: string[] = [];
   lines.push(`week_of: ${input.week_of}`, "");
 
+  if (input.synthesis_themes.length >= 2) {
+    lines.push(
+      `# synthesis_themes (${input.synthesis_themes.length} themes to touch in the opening paragraph — write ONE short paragraph BEFORE the first H2 naming each. If this list has <2 entries the opener is omitted; that case is already handled server-side when you see no entries here.)`,
+      "",
+    );
+    for (const s of input.synthesis_themes) {
+      const flags: string[] = [];
+      if (s.is_arc) flags.push("arc");
+      if (s.trajectory !== "stable") flags.push(s.trajectory);
+      const tag = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+      lines.push(`  - ${s.theme_name} (${s.category ?? "—"})${tag}`);
+      lines.push(`    shape: ${s.shape}`);
+    }
+    lines.push("");
+  }
+
   renderItemSection(lines, "conversation", input.conversation);
   renderItemSection(lines, "worth_knowing", input.worth_knowing);
   renderItemSection(lines, "worth_watching", input.worth_watching);
