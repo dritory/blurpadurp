@@ -76,22 +76,12 @@ async function run(sub: Sub, args: string[]): Promise<void> {
     }
     case "composer-replay": {
       const [issueIdRaw, promptPath, promptVersion, modelId] = args;
-      if (!issueIdRaw || !promptPath || !promptVersion || !modelId) {
-        throw new Error(
-          "composer-replay: usage: composer-replay <issue_id> <prompt.md> <version> <model_id>",
-        );
-      }
-      const issueId = Number(issueIdRaw);
-      if (!Number.isFinite(issueId) || issueId <= 0) {
+      const issueId = issueIdRaw !== undefined ? Number(issueIdRaw) : undefined;
+      if (issueId !== undefined && (!Number.isFinite(issueId) || issueId <= 0)) {
         throw new Error("composer-replay: issue_id must be a positive number");
       }
       const { replayComposer } = await import("./pipeline/fixture.ts");
-      await replayComposer({
-        issueId,
-        promptPath,
-        promptVersion,
-        modelId,
-      });
+      await replayComposer({ issueId, promptPath, promptVersion, modelId });
       return;
     }
     case "reset-publish":

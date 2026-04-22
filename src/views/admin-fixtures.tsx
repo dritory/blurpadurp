@@ -11,7 +11,7 @@ export interface FixtureFile {
   name: string;
   sizeBytes: number;
   mtime: Date;
-  kind: "capture" | "replay" | "unknown";
+  kind: "capture" | "replay" | "composer-replay" | "unknown";
 }
 
 const ADMIN_STYLES = `
@@ -211,6 +211,22 @@ export const AdminReplayView: FC<{
     </Layout>
   );
 };
+
+export const AdminFixtureMarkdown: FC<{ name: string; content: string }> = ({
+  name,
+  content,
+}) => (
+  <Layout title={`${name} — fixture`}>
+    <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <AdminNav current="fixtures" />
+    <h2>{name}</h2>
+    <pre
+      style="white-space: pre-wrap; font-family: var(--serif); font-size: 16px; line-height: 1.6; margin: 0;"
+    >
+      {content}
+    </pre>
+  </Layout>
+);
 
 function diffsFrom(
   cap: CapturedRow["raw_output"],

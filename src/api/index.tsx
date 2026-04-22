@@ -55,6 +55,7 @@ import {
 } from "../views/admin-explore-story.tsx";
 import {
   AdminCaptureView,
+  AdminFixtureMarkdown,
   AdminFixturesList,
   AdminReplayView,
   type FixtureFile,
@@ -289,10 +290,18 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const name = c.req.param("name");
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) return c.notFound();
     const path = resolve("fixtures", name);
-    const text = await Bun.file(path)
-      .text()
-      .catch(() => null);
+    const text = await Bun.file(path).text().catch(() => null);
     if (text === null) return c.notFound();
+
+    // Composer-replay HTML: serve directly so it renders with full styling.
+    if (name.endsWith(".html")) return c.html(text);
+
+    // Composer-replay diff: show original vs replay in the admin layout.
+    if (name.endsWith(".diff.md")) {
+      return c.html(<AdminFixtureMarkdown name={name} content={text} />);
+    }
+
+    // Scorer fixtures (JSONL).
     const rows = text
       .split("\n")
       .filter((l) => l.trim().length > 0)
@@ -310,9 +319,7 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       );
     }
     if ("raw_input" in first && "raw_output" in first) {
-      return c.html(
-        <AdminCaptureView name={name} rows={rows as CapturedRow[]} />,
-      );
+      return c.html(<AdminCaptureView name={name} rows={rows as CapturedRow[]} />);
     }
     return c.text("(unknown fixture format)", 200);
   });
@@ -522,20 +529,20 @@ async function listFixtures(): Promise<FixtureFile[]> {
   const names = await readdir(dir).catch(() => [] as string[]);
   const out: FixtureFile[] = [];
   for (const name of names) {
-    if (!name.endsWith(".jsonl")) continue;
+    const isJsonl = name.endsWith(".jsonl");
+    const isComposerHtml = name.startsWith("composer-replay-") && name.endsWith(".html");
+    const isComposerDiff = name.startsWith("composer-replay-") && name.endsWith(".diff.md");
+    if (!isJsonl && !isComposerHtml && !isComposerDiff) continue;
     const st = await stat(resolve(dir, name)).catch(() => null);
     if (st === null) continue;
-    const kind: FixtureFile["kind"] = name.startsWith("capture-")
-      ? "capture"
-      : name.startsWith("replay-")
-        ? "replay"
-        : "unknown";
-    out.push({
-      name,
-      sizeBytes: st.size,
-      mtime: st.mtime,
-      kind,
-    });
+    const kind: FixtureFile["kind"] = isComposerHtml || isComposerDiff
+      ? "composer-replay"
+      : name.startsWith("capture-")
+        ? "capture"
+        : name.startsWith("replay-")
+          ? "replay"
+          : "unknown";
+    out.push({ name, sizeBytes: st.size, mtime: st.mtime, kind });
   }
   out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
   return out;

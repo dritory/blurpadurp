@@ -284,12 +284,47 @@ function isoStamp(): string {
 // Does NOT touch the DB beyond the initial read; the original issue
 // stays as it was.
 export async function replayComposer(params: {
-  issueId: number;
-  promptPath: string;
-  promptVersion: string;
-  modelId: string;
+  issueId?: number;
+  promptPath?: string;
+  promptVersion?: string;
+  modelId?: string;
   maxTokens?: number;
 }): Promise<void> {
+  // Fill defaults from DB config when args are omitted (zero-arg path).
+  let issueId = params.issueId;
+  if (issueId === undefined) {
+    const latest = await db
+      .selectFrom("issue")
+      .select("id")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (!latest) {
+      console.log("[composer-replay] no issues in DB yet — run compose first");
+      return;
+    }
+    issueId = Number(latest.id);
+    console.log(`[composer-replay] defaulting to latest issue #${issueId}`);
+  }
+
+  let promptVersion = params.promptVersion;
+  let modelId = params.modelId;
+  if (promptVersion === undefined || modelId === undefined) {
+    const cfgRows = await db
+      .selectFrom("config")
+      .select(["key", "value"])
+      .where("key", "in", ["composer.prompt_version", "composer.model_id"])
+      .execute();
+    const cfg = Object.fromEntries(cfgRows.map((r) => [r.key, r.value]));
+    if (promptVersion === undefined) {
+      promptVersion = `${String(cfg["composer.prompt_version"] ?? "dev")}-dev`;
+    }
+    if (modelId === undefined) {
+      modelId = String(cfg["composer.model_id"] ?? "claude-sonnet-4-6");
+    }
+  }
+  const promptPath = params.promptPath ?? "docs/composer-prompt.md";
+
   const row = await db
     .selectFrom("issue")
     .select([
@@ -300,15 +335,15 @@ export async function replayComposer(params: {
       "composer_prompt_version",
       "composer_model_id",
     ])
-    .where("id", "=", params.issueId)
+    .where("id", "=", issueId)
     .executeTakeFirst();
   if (!row) {
-    console.log(`[composer-replay] issue #${params.issueId} not found`);
+    console.log(`[composer-replay] issue #${issueId} not found`);
     return;
   }
   if (row.composer_input_jsonb === null) {
     console.log(
-      `[composer-replay] issue #${params.issueId} has no persisted composer_input_jsonb — predates migration 015. Run compose again on fresh data.`,
+      `[composer-replay] issue #${issueId} has no persisted composer_input_jsonb — predates migration 015. Run compose again on fresh data.`,
     );
     return;
   }
@@ -322,14 +357,14 @@ export async function replayComposer(params: {
   const input: ComposerInput = parsed.data;
 
   const composer = makeComposer({
-    version: params.promptVersion,
-    modelId: params.modelId,
-    promptPath: params.promptPath,
+    version: promptVersion,
+    modelId,
+    promptPath,
     maxTokens: params.maxTokens ?? 4000,
   });
 
   console.log(
-    `[composer-replay] issue #${row.id} · ${row.composer_prompt_version} (${row.composer_model_id}) → ${params.promptVersion} (${params.modelId})`,
+    `[composer-replay] issue #${row.id} · ${row.composer_prompt_version} (${row.composer_model_id}) → ${promptVersion} (${modelId})`,
   );
   const t0 = Date.now();
   const output = await composer.run(input);
@@ -348,7 +383,7 @@ export async function replayComposer(params: {
     `# composer-replay issue #${row.id}
 
 **Source**: ${row.composer_prompt_version ?? "?"} (${row.composer_model_id ?? "?"})
-**Replay**: ${params.promptVersion} (${params.modelId})
+**Replay**: ${promptVersion} (${modelId})
 **Latency**: ${latencyMs}ms
 **Original markdown length**: ${row.composed_markdown.length} chars
 **Replay markdown length**: ${output.markdown.length} chars
@@ -367,10 +402,9 @@ ${output.markdown}
 `,
     "utf8",
   );
-  console.log(`[composer-replay] wrote ${mdPath}`);
-  console.log(`[composer-replay] wrote ${htmlPath}`);
-  console.log(`[composer-replay] wrote ${diffPath}  ← side-by-side`);
   console.log(
-    `[composer-replay] latency ${latencyMs}ms · ${row.composed_markdown.length} → ${output.markdown.length} chars`,
+    `[composer-replay] done in ${latencyMs}ms · ${row.composed_markdown.length} → ${output.markdown.length} chars`,
   );
+  console.log(`[composer-replay] brief:  /admin/fixtures/${base}.html`);
+  console.log(`[composer-replay] diff:   /admin/fixtures/${base}.diff.md`);
 }
