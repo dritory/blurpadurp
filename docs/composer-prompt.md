@@ -116,21 +116,21 @@ two words is where every stablecoin collapse so far has lived.
 *Developing thread + the specific thing that would confirm or kill it.
 No "stay tuned," no breathless forecasting.*
 
-### Worth a shrug (one wry line per item, name the tag)
+### Worth a shrug (one wry line per item, name the pattern in plain English)
 
 **Another "CEO was mean to me" LinkedIn thread.** This week's was an
 ex-Meta manager; subsequent weeks will feature an ex-Google manager, then
-an ex-Amazon manager. `controversy_flash`.
+an ex-Amazon manager. 48-hour controversy.
 
 **The AI-writes-a-symphony demo, back again.** Previous cycles: 2023,
 2017. Each iteration the demo gets slightly better and the headline
-stays exactly the same. `manufactured_hype`.
+stays exactly the same. Manufactured hype.
 
 **Everyone briefly cared about a Peloton executive's resignation letter.**
-`in_circle_hype`.
+In-circle hype.
 
-*Pattern-naming is the dismissal. Minimal. No scolding. The tag is the
-punctuation.*
+*Pattern-naming is the dismissal. Minimal. No scolding. The label is the
+punctuation — plain English, not a code slug.*
 
 # Structure
 

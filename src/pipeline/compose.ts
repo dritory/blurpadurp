@@ -610,6 +610,15 @@ async function rowsForEditor() {
     .execute();
 }
 
+const PENALTY_LABELS: Record<string, string> = {
+  in_circle_hype: "in-circle hype",
+  manufactured_hype: "manufactured hype",
+  controversy_flash: "48-hour controversy",
+};
+function humanizePenaltyFactor(f: string): string {
+  return PENALTY_LABELS[f] ?? f.replace(/_/g, " ");
+}
+
 // Worth a shrug: scored-but-failed-gate items in the compose window
 // whose penalty factors include in_circle_hype / manufactured_hype /
 // controversy_flash. Ranked by how many sources carried it (higher =
@@ -679,7 +688,7 @@ async function loadShrugCandidates(
       title: v.title,
       source_url: v.source_url,
       category: v.category as ComposerInput["shrug"][number]["category"],
-      penalty_factors: [...v.penalty_factors],
+      penalty_factors: [...v.penalty_factors].map(humanizePenaltyFactor),
       source_count: v.source_count,
       scorer_one_liner: v.scorer_one_liner,
     }));
