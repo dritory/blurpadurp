@@ -17,6 +17,7 @@ const SUBCOMMANDS = [
   "fixture-capture",
   "fixture-replay",
   "composer-replay",
+  "reset-publish",
   "eval",
 ] as const;
 
@@ -93,6 +94,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       });
       return;
     }
+    case "reset-publish":
+      await (await import("./pipeline/reset-publish.ts")).resetPublish();
+      return;
     case "eval":
       await (await import("./pipeline/eval.ts")).evalSummary();
       return;
