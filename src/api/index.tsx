@@ -57,9 +57,14 @@ import {
   AdminCaptureView,
   AdminFixtureMarkdown,
   AdminFixturesList,
+  AdminReplayBrief,
   AdminReplayView,
   type FixtureFile,
 } from "../views/admin-fixtures.tsx";
+import {
+  AdminIssues,
+  type AdminIssueRow,
+} from "../views/admin-issues.tsx";
 import {
   AdminReview,
   type EditorReviewData,
@@ -152,12 +157,18 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     basicAuth({ username: adminUser, password: adminPassword }),
   );
 
+  app.get("/admin/issues", async (c) => {
+    const issues = await loadAdminIssues();
+    return c.html(<AdminIssues issues={issues} />);
+  });
+
   app.get("/admin/review/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const data = await loadReview(id);
     if (data === null) return c.notFound();
-    return c.html(<AdminReview data={data} />);
+    const replays = await loadReplaysForIssue(id);
+    return c.html(<AdminReview data={data} replays={replays} />);
   });
 
   app.get("/admin/status", async (c) => {
@@ -293,12 +304,24 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const text = await Bun.file(path).text().catch(() => null);
     if (text === null) return c.notFound();
 
-    // Composer-replay HTML: serve directly so it renders with full styling.
-    if (name.endsWith(".html")) return c.html(text);
+    const issueIdMatch = /^composer-replay-i(\d+)-/.exec(name);
+    const issueId = issueIdMatch && issueIdMatch[1] !== undefined
+      ? Number(issueIdMatch[1])
+      : null;
+
+    // Composer-replay HTML: wrap the rendered brief in admin chrome so
+    // you can click back to the issue review without losing context.
+    if (name.endsWith(".html")) {
+      return c.html(
+        <AdminReplayBrief name={name} html={text} issueId={issueId} />,
+      );
+    }
 
     // Composer-replay diff: show original vs replay in the admin layout.
     if (name.endsWith(".diff.md")) {
-      return c.html(<AdminFixtureMarkdown name={name} content={text} />);
+      return c.html(
+        <AdminFixtureMarkdown name={name} content={text} issueId={issueId} />,
+      );
     }
 
     // Scorer fixtures (JSONL).
@@ -1601,6 +1624,63 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
     storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
   };
+}
+
+// Scan fixtures/ for composer-replay-i<N>-<stamp>.html files, group
+// their base names by issue id. One pass covers every issue.
+async function loadReplaysByIssue(): Promise<Map<number, Array<{ base: string; mtime: Date }>>> {
+  const dir = resolve("fixtures");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const out = new Map<number, Array<{ base: string; mtime: Date }>>();
+  for (const name of names) {
+    if (!name.startsWith("composer-replay-i")) continue;
+    if (!name.endsWith(".html")) continue;
+    const m = /^composer-replay-i(\d+)-(.+)\.html$/.exec(name);
+    if (!m || m[1] === undefined) continue;
+    const issueId = Number(m[1]);
+    const st = await stat(resolve(dir, name)).catch(() => null);
+    if (st === null) continue;
+    const base = name.slice(0, -".html".length);
+    const list = out.get(issueId) ?? [];
+    list.push({ base, mtime: st.mtime });
+    out.set(issueId, list);
+  }
+  for (const list of out.values()) {
+    list.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  }
+  return out;
+}
+
+async function loadReplaysForIssue(
+  issueId: number,
+): Promise<Array<{ base: string; mtime: Date }>> {
+  const all = await loadReplaysByIssue();
+  return all.get(issueId) ?? [];
+}
+
+async function loadAdminIssues(): Promise<AdminIssueRow[]> {
+  const rows = await db
+    .selectFrom("issue")
+    .select([
+      "id",
+      "published_at",
+      "is_event_driven",
+      "composer_prompt_version",
+      "composer_model_id",
+      "story_ids",
+    ])
+    .orderBy("published_at", "desc")
+    .execute();
+  const replays = await loadReplaysByIssue();
+  return rows.map((r) => ({
+    id: Number(r.id),
+    publishedAt: r.published_at,
+    isEventDriven: r.is_event_driven,
+    composerPromptVersion: r.composer_prompt_version,
+    composerModelId: r.composer_model_id,
+    storyCount: (r.story_ids ?? []).length,
+    replays: replays.get(Number(r.id)) ?? [],
+  }));
 }
 
 async function loadArchive(): Promise<ArchiveEntry[]> {

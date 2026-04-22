@@ -26,46 +26,90 @@ const ADMIN_STYLES = `
   .summary-cell .value { font-family: var(--sans); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 4px; }
 `;
 
-export const AdminFixturesList: FC<{ files: FixtureFile[] }> = ({ files }) => (
-  <Layout title="Fixtures — Blurpadurp admin">
-    <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
-    <AdminNav current="fixtures" />
-    <h2>Fixtures</h2>
-    {files.length === 0 ? (
-      <p>
-        <em>
-          No fixtures yet. Run <code>bun run cli fixture-capture</code> after a
-          scorer run.
-        </em>
-      </p>
-    ) : (
-      <table class="fx">
-        <thead>
+function issueIdFromName(name: string): number | null {
+  const m = /^composer-replay-i(\d+)-/.exec(name);
+  return m && m[1] !== undefined ? Number(m[1]) : null;
+}
+
+const FixturesTable: FC<{ files: FixtureFile[] }> = ({ files }) => (
+  <table class="fx">
+    <thead>
+      <tr>
+        <th>File</th>
+        <th>Issue</th>
+        <th>Size</th>
+        <th>Modified</th>
+      </tr>
+    </thead>
+    <tbody>
+      {files.map((f) => {
+        const issueId = issueIdFromName(f.name);
+        return (
           <tr>
-            <th>File</th>
-            <th>Kind</th>
-            <th>Size</th>
-            <th>Modified</th>
+            <td>
+              <a href={`/admin/fixtures/${encodeURIComponent(f.name)}`}>
+                {f.name}
+              </a>
+            </td>
+            <td>
+              {issueId !== null ? (
+                <a href={`/admin/review/${issueId}`}>#{issueId}</a>
+              ) : (
+                <span style="color: var(--ink-soft);">—</span>
+              )}
+            </td>
+            <td class="num">{formatBytes(f.sizeBytes)}</td>
+            <td>{f.mtime.toISOString().replace("T", " ").slice(0, 16)}Z</td>
           </tr>
-        </thead>
-        <tbody>
-          {files.map((f) => (
-            <tr>
-              <td>
-                <a href={`/admin/fixtures/${encodeURIComponent(f.name)}`}>
-                  {f.name}
-                </a>
-              </td>
-              <td>{f.kind}</td>
-              <td class="num">{formatBytes(f.sizeBytes)}</td>
-              <td>{f.mtime.toISOString().replace("T", " ").slice(0, 16)}Z</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    )}
-  </Layout>
+        );
+      })}
+    </tbody>
+  </table>
 );
+
+export const AdminFixturesList: FC<{ files: FixtureFile[] }> = ({ files }) => {
+  const replayFiles = files.filter((f) => f.kind === "composer-replay");
+  const scorerFiles = files.filter((f) => f.kind !== "composer-replay");
+  return (
+    <Layout title="Fixtures — Blurpadurp admin">
+      <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+      <AdminNav current="fixtures" />
+      <h2>Fixtures</h2>
+      {files.length === 0 ? (
+        <p>
+          <em>
+            No fixtures yet. Run <code>bun run cli composer-replay</code>{" "}
+            (composer tuning) or <code>bun run cli fixture-capture</code>{" "}
+            (scorer tuning).
+          </em>
+        </p>
+      ) : (
+        <>
+          <h3>Composer replays</h3>
+          {replayFiles.length === 0 ? (
+            <p>
+              <em>
+                None yet. Run <code>bun run cli composer-replay</code>.
+              </em>
+            </p>
+          ) : (
+            <FixturesTable files={replayFiles} />
+          )}
+          <h3 style="margin-top: 32px;">Scorer fixtures</h3>
+          {scorerFiles.length === 0 ? (
+            <p>
+              <em>
+                None yet. Run <code>bun run cli fixture-capture</code>.
+              </em>
+            </p>
+          ) : (
+            <FixturesTable files={scorerFiles} />
+          )}
+        </>
+      )}
+    </Layout>
+  );
+};
 
 export const AdminCaptureView: FC<{
   name: string;
@@ -212,19 +256,60 @@ export const AdminReplayView: FC<{
   );
 };
 
-export const AdminFixtureMarkdown: FC<{ name: string; content: string }> = ({
-  name,
-  content,
-}) => (
+const REPLAY_BAR_STYLES = `
+  .replay-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-family: var(--sans); font-size: 13px; }
+  .replay-bar a { padding: 5px 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); text-decoration: none; }
+  .replay-bar a:hover { border-color: var(--ink); }
+`;
+
+export const AdminFixtureMarkdown: FC<{
+  name: string;
+  content: string;
+  issueId: number | null;
+}> = ({ name, content, issueId }) => (
   <Layout title={`${name} — fixture`}>
-    <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
+    <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES + REPLAY_BAR_STYLES }} />
     <AdminNav current="fixtures" />
+    {issueId !== null ? (
+      <nav class="replay-bar" aria-label="Replay actions">
+        <a href="/admin/fixtures">← Fixtures</a>
+        <a href={`/admin/review/${issueId}`}>Issue #{issueId} review</a>
+        <a href={`/issue/${issueId}`}>Published issue</a>
+        <a href={`/admin/fixtures/${name.replace(/\.diff\.md$/, ".html")}`}>
+          Rendered brief
+        </a>
+      </nav>
+    ) : null}
     <h2>{name}</h2>
     <pre
       style="white-space: pre-wrap; font-family: var(--serif); font-size: 16px; line-height: 1.6; margin: 0;"
     >
       {content}
     </pre>
+  </Layout>
+);
+
+// Wraps composer-replay *.html (the rendered brief) in admin chrome so
+// you can click back to the issue without losing context.
+export const AdminReplayBrief: FC<{
+  name: string;
+  html: string;
+  issueId: number | null;
+}> = ({ name, html, issueId }) => (
+  <Layout title={`${name} — replay`}>
+    <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES + REPLAY_BAR_STYLES }} />
+    <AdminNav current="fixtures" />
+    {issueId !== null ? (
+      <nav class="replay-bar" aria-label="Replay actions">
+        <a href="/admin/fixtures">← Fixtures</a>
+        <a href={`/admin/review/${issueId}`}>Issue #{issueId} review</a>
+        <a href={`/issue/${issueId}`}>Published issue</a>
+        <a href={`/admin/fixtures/${name.replace(/\.html$/, ".diff.md")}`}>
+          Side-by-side diff
+        </a>
+      </nav>
+    ) : null}
+    <div class="issue-body" dangerouslySetInnerHTML={{ __html: html }} />
   </Layout>
 );
 

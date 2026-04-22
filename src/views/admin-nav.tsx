@@ -4,24 +4,26 @@
 import type { FC } from "hono/jsx";
 
 export type AdminNavKey =
+  | "issues"
   | "explore"
   | "themes"
-  | "eval"
-  | "config"
-  | "costs"
-  | "status"
   | "fixtures"
+  | "eval"
+  | "status"
+  | "costs"
+  | "config"
   | "review"
   | null;
 
 const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: string }> = [
+  { key: "issues", href: "/admin/issues", label: "Issues" },
   { key: "explore", href: "/admin/explore", label: "Explore" },
   { key: "themes", href: "/admin/themes", label: "Themes" },
-  { key: "eval", href: "/admin/eval", label: "Eval" },
-  { key: "config", href: "/admin/config", label: "Config" },
-  { key: "costs", href: "/admin/costs", label: "Costs" },
-  { key: "status", href: "/admin/status", label: "Status" },
   { key: "fixtures", href: "/admin/fixtures", label: "Fixtures" },
+  { key: "eval", href: "/admin/eval", label: "Eval" },
+  { key: "status", href: "/admin/status", label: "Status" },
+  { key: "costs", href: "/admin/costs", label: "Costs" },
+  { key: "config", href: "/admin/config", label: "Config" },
 ];
 
 const STYLES = `

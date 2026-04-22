@@ -43,16 +43,47 @@ export interface EditorReviewData {
   }>;
 }
 
-export const AdminReview: FC<{ data: EditorReviewData }> = ({ data }) => (
+export const AdminReview: FC<{
+  data: EditorReviewData;
+  replays: Array<{ base: string; mtime: Date }>;
+}> = ({ data, replays }) => (
   <Layout title={`Review #${data.issue.id} — Blurpadurp`}>
+    <style
+      dangerouslySetInnerHTML={{
+        __html: `
+          .action-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-family: var(--sans); font-size: 13px; }
+          .action-bar a { padding: 5px 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); text-decoration: none; }
+          .action-bar a:hover { border-color: var(--ink); }
+          .action-bar .cli { color: var(--ink-soft); padding: 5px 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+        `,
+      }}
+    />
     <AdminNav current={null} />
     <div class="issue-meta">
+      <a href="/admin/issues">← Issues</a>
+      {" · "}
       Issue #{data.issue.id} · {formatIssueDate(data.issue.publishedAt)}
       {data.issue.isEventDriven ? " · event-driven" : ""}
       {" · "}
       {data.issue.composerPromptVersion ?? "unknown"} /{" "}
       {data.issue.composerModelId ?? "unknown"}
     </div>
+    <nav class="action-bar" aria-label="Actions">
+      <a href={`/issue/${data.issue.id}`}>View published</a>
+      {replays.length > 0 ? (
+        <>
+          <a href={`/admin/fixtures/${replays[0]!.base}.html`}>
+            Latest replay (brief)
+          </a>
+          <a href={`/admin/fixtures/${replays[0]!.base}.diff.md`}>
+            Latest replay (diff)
+          </a>
+          <a href="/admin/fixtures">All replays ({replays.length})</a>
+        </>
+      ) : (
+        <span class="cli">bun run cli composer-replay {data.issue.id}</span>
+      )}
+    </nav>
 
     <h2>Editor picks</h2>
     {data.editor === null ? (
