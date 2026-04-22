@@ -13,7 +13,7 @@ export const STYLES = `
   --flash-ok: #4a6b4a;
   --flash-err: #a63a3a;
   --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --serif: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --serif: Lora, Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
 }
 html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); }
 body { font-family: var(--serif); font-size: 18px; line-height: 1.55; }
@@ -73,6 +73,8 @@ em { color: var(--ink-soft); }
 .archive-list a:hover .title { text-decoration: underline; }
 .archive-list .date { font-family: var(--sans); font-size: 13px; color: var(--ink-soft); display: block; margin-bottom: 2px; }
 .archive-list .title { font-family: var(--sans); font-size: 17px; font-weight: 500; }
+
+.shrug-tag { font-family: var(--sans); font-size: 12px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; }
 
 footer { margin-top: 80px; padding-top: 20px; border-top: 1px solid var(--rule); color: var(--ink-soft); font-size: 13px; font-family: var(--sans); }
 footer p { margin: 0; }

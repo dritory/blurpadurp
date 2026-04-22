@@ -116,21 +116,20 @@ two words is where every stablecoin collapse so far has lived.
 *Developing thread + the specific thing that would confirm or kill it.
 No "stay tuned," no breathless forecasting.*
 
-### Worth a shrug (one wry line per item, name the pattern in plain English)
+### Worth a shrug (one wry line per item, label at the end)
 
 **Another "CEO was mean to me" LinkedIn thread.** This week's was an
 ex-Meta manager; subsequent weeks will feature an ex-Google manager, then
-an ex-Amazon manager. 48-hour controversy.
+an ex-Amazon manager. *48-hour controversy*
 
 **The AI-writes-a-symphony demo, back again.** Previous cycles: 2023,
 2017. Each iteration the demo gets slightly better and the headline
-stays exactly the same. Manufactured hype.
+stays exactly the same. *Manufactured hype*
 
-**Everyone briefly cared about a Peloton executive's resignation letter.**
-In-circle hype.
+**Everyone briefly cared about a Peloton executive's resignation letter.** *In-circle hype*
 
-*Pattern-naming is the dismissal. Minimal. No scolding. The label is the
-punctuation — plain English, not a code slug.*
+*Pattern-naming is the dismissal. Minimal. No scolding. Label is in
+italics in markdown; `<span class="shrug-tag">` in HTML.*
 
 # Structure
 
@@ -260,11 +259,12 @@ Bad (too long, meta-framed):
 
 ### `shrug[]` → `## Worth a shrug`
 
-One wry line per item. Name the hype, point at the penalty factor
-(e.g. "manufactured", "platform-only", "48-hour outrage cycle"), and
-dismiss. No headline, no paragraph, no "to be fair." Pure reader
-service: the reader hears the reference, knows why it doesn't deserve
-attention, moves on.
+One wry line per item. Name the hype, dismiss it, end with the label.
+No headline, no paragraph, no "to be fair."
+
+In **markdown**: end the line with the label in italics — `*48-hour controversy*`.
+In **HTML**: wrap the label in `<span class="shrug-tag">48-hour controversy</span>`.
+No other classes or inline styles anywhere.
 
 ## Citations
 
@@ -378,7 +378,8 @@ Return exactly one JSON object, no prose around it:
 }
 
 Both fields are required. HTML should use <h2>, <ul>, <li>, <p>, <a>.
-Keep HTML inline-style-free; callers wrap in an email template.
+One exception: shrug penalty labels use <span class="shrug-tag">label</span>.
+No other classes or inline styles; callers wrap in an email template.
 ```
 
 # User message template

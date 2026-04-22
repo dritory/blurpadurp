@@ -41,6 +41,9 @@ export const Layout: FC<{
         <meta name="twitter:title" content={title} />
         <meta name="twitter:description" content={description} />
         <link rel="alternate" type="application/atom+xml" title="Blurpadurp" href="/feed.xml" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap" />
         <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       </head>
       <body>
