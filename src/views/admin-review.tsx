@@ -4,7 +4,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
-import { AdminNav } from "./admin-nav.tsx";
+import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 
 export interface EditorReviewData {
@@ -46,7 +46,8 @@ export interface EditorReviewData {
 export const AdminReview: FC<{
   data: EditorReviewData;
   replays: Array<{ base: string; mtime: Date }>;
-}> = ({ data, replays }) => (
+  editorReplays: Array<{ base: string; mtime: Date }>;
+}> = ({ data, replays, editorReplays }) => (
   <Layout title={`Review #${data.issue.id} — Blurpadurp`}>
     <style
       dangerouslySetInnerHTML={{
@@ -55,13 +56,22 @@ export const AdminReview: FC<{
           .action-bar a { padding: 5px 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); text-decoration: none; }
           .action-bar a:hover { border-color: var(--ink); }
           .action-bar .cli { color: var(--ink-soft); padding: 5px 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+          .editor-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; font-family: var(--sans); font-size: 13px; align-items: center; }
+          .editor-bar a { padding: 5px 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); text-decoration: none; }
+          .editor-bar a:hover { border-color: var(--ink); }
+          .editor-bar .cli { color: var(--ink-soft); padding: 5px 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+          .editor-bar .label { color: var(--ink-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
         `,
       }}
     />
-    <AdminNav current={null} />
+    <AdminNav current="issues" />
+    <AdminCrumbs
+      trail={[
+        { label: "Issues", href: "/admin/issues" },
+        { label: `#${data.issue.id} review` },
+      ]}
+    />
     <div class="issue-meta">
-      <a href="/admin/issues">← Issues</a>
-      {" · "}
       Issue #{data.issue.id} · {formatIssueDate(data.issue.publishedAt)}
       {data.issue.isEventDriven ? " · event-driven" : ""}
       {" · "}
@@ -72,11 +82,11 @@ export const AdminReview: FC<{
       <a href={`/issue/${data.issue.id}`}>View published</a>
       {replays.length > 0 ? (
         <>
-          <a href={`/admin/fixtures/${replays[0]!.base}.html`}>
-            Latest replay (brief)
-          </a>
           <a href={`/admin/fixtures/${replays[0]!.base}.diff.md`}>
             Latest replay (diff)
+          </a>
+          <a href={`/admin/fixtures/${replays[0]!.base}.html`}>
+            Rendered brief
           </a>
           <a href="/admin/fixtures">All replays ({replays.length})</a>
         </>
@@ -86,6 +96,19 @@ export const AdminReview: FC<{
     </nav>
 
     <h2>Editor picks</h2>
+    <nav class="editor-bar" aria-label="Editor replay actions">
+      <span class="label">Editor replay:</span>
+      {editorReplays.length > 0 ? (
+        <>
+          <a href={`/admin/fixtures/${editorReplays[0]!.base}.diff.md`}>
+            Latest (diff)
+          </a>
+          <a href="/admin/fixtures">All ({editorReplays.length})</a>
+        </>
+      ) : (
+        <span class="cli">bun run cli editor-replay {data.issue.id}</span>
+      )}
+    </nav>
     {data.editor === null ? (
       <p><em>No editor output persisted for this issue.</em></p>
     ) : (

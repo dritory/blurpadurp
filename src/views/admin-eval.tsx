@@ -45,6 +45,17 @@ const ADMIN_STYLES = `
   .stat { text-align: center; background: #fff; border: 1px solid var(--rule); padding: 8px; }
   .stat .label { font-family: var(--sans); font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
   .stat .value { font-family: var(--sans); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+  @media (max-width: 640px) {
+    .eval-card { padding: 16px 16px; }
+    .eval-title { font-size: 18px; }
+    .eval-actions { gap: 6px; }
+    .eval-actions button { padding: 12px 14px; flex: 1 1 calc(50% - 6px); min-height: 44px; }
+    .stats { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 380px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
 `;
 
 export const AdminEval: FC<{

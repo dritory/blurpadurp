@@ -6,6 +6,7 @@ export interface ArchiveEntry {
   id: number;
   publishedAt: Date;
   isEventDriven: boolean;
+  title: string | null;
 }
 
 export const Archive: FC<{ issues: ArchiveEntry[] }> = ({ issues }) => (
@@ -24,7 +25,9 @@ export const Archive: FC<{ issues: ArchiveEntry[] }> = ({ issues }) => (
                 {formatIssueDate(iss.publishedAt)}
                 {iss.isEventDriven ? " · event-driven" : ""}
               </span>
-              <span class="title">Issue #{iss.id}</span>
+              <span class="title">
+                {iss.title ?? `Issue #${iss.id}`}
+              </span>
             </a>
           </li>
         ))}

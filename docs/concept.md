@@ -153,3 +153,24 @@ Delivery pattern refuses the engagement trap:
 
 The reader "gets" the meme without needing to watch. They aren't lost when
 someone references it — which is the whole point.
+
+## Blurp
+
+Blurp is Blurpadurp's mascot — a wizard octopus sitting in the header
+next to the wordmark (`public/blurp.svg`).
+
+He's been online a long time. He's fed up with social media and tired of
+the internet's nonsense, so he reads the feeds so you don't have to. Eight
+arms hold the chaos; a pointy hat holds the magic he uses to find the
+actual signal in all of it. He looks slightly overwhelmed and a little
+bit tired — because he is — but he's here, and he's with you.
+
+Blurp is visual only. He does not speak, sign off issues, or narrate
+anything. The composer's voice is the product's voice (wry, dry,
+observant — see above); Blurp is a silent companion, not a character
+voice. No "love, Blurp" sign-offs, no "Blurp says…" asides, no stickers.
+
+He is the one concession to warmth in an otherwise restrained visual
+design. That's on purpose: the product's ethic is severe (silence is a
+feature, the gate is strict), so the front door should feel like it's
+run by someone weary but kind, not by an algorithm.

@@ -48,6 +48,7 @@ export const AdminIssues: FC<{ issues: AdminIssueRow[] }> = ({ issues }) => (
         <em>No issues yet. Run <code>bun run cli compose</code>.</em>
       </p>
     ) : (
+      <div class="adm-scroll">
       <table class="iss">
         <thead>
           <tr>
@@ -81,9 +82,9 @@ export const AdminIssues: FC<{ issues: AdminIssueRow[] }> = ({ issues }) => (
                   <ul class="replay-list">
                     {i.replays.map((r) => (
                       <li>
-                        <a href={`/admin/fixtures/${r.base}.html`}>brief</a>
-                        {" · "}
                         <a href={`/admin/fixtures/${r.base}.diff.md`}>diff</a>
+                        {" · "}
+                        <a href={`/admin/fixtures/${r.base}.html`}>brief</a>
                         {" · "}
                         <span class="stamp">
                           {r.mtime.toISOString().replace("T", " ").slice(0, 16)}Z
@@ -97,6 +98,7 @@ export const AdminIssues: FC<{ issues: AdminIssueRow[] }> = ({ issues }) => (
           ))}
         </tbody>
       </table>
+      </div>
     )}
   </Layout>
 );

@@ -46,20 +46,29 @@ export function makeComposer(config: {
         input_hash,
       });
       if (cached !== null) {
-        await logAICall({
-          stage_name: "composer",
-          stage_version: config.version,
-          model_id: config.modelId,
-          input_hash,
-          input_jsonb: input,
-          output_jsonb: cached,
-          tokens_in: 0,
-          tokens_out: 0,
-          cost_estimate_usd: 0,
-          latency_ms: 0,
-          error: null,
-        });
-        return ComposerOutputSchema.parse(cached);
+        const validated = ComposerOutputSchema.safeParse(cached);
+        if (validated.success) {
+          await logAICall({
+            stage_name: "composer",
+            stage_version: config.version,
+            model_id: config.modelId,
+            input_hash,
+            input_jsonb: input,
+            output_jsonb: cached,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_estimate_usd: 0,
+            latency_ms: 0,
+            error: null,
+          });
+          return validated.data;
+        }
+        // Cached output no longer conforms to the schema — fall through
+        // and re-call the API. Happens after a schema/tool-description
+        // change when an old partial output is still in ai_call_log.
+        console.warn(
+          `[composer] stale cache for ${config.version}: ${validated.error.message.slice(0, 120)} — recomputing`,
+        );
       }
 
       await checkBudget();
@@ -246,21 +255,41 @@ function renderShrugSection(
 
 const COMPOSER_TOOL = {
   name: "emit_brief",
-  description: "Emit the composed news brief in markdown and HTML.",
+  description: "Emit the composed news brief: title, markdown, and HTML.",
   input_schema: {
     type: "object" as const,
     properties: {
+      title: {
+        type: "string",
+        description:
+          "Dry, observant, wry title for the issue (4–10 words, no more). " +
+          "Names the shape of the week, not a table of contents. No " +
+          "colons framing a subtitle, no 'This week in X,' no 'N stories,' " +
+          "no question marks, no emojis. Sentence case. Punctuation " +
+          "sparing. See the title gold examples in the system prompt.",
+      },
       markdown: {
         type: "string",
-        description: "Full brief in markdown: headers, bullets, links.",
+        description:
+          "Full brief in markdown: headers and paragraphs, links allowed. " +
+          "No bulleted or numbered lists. Every item is its own paragraph " +
+          "(blank-line separated). No '-', '*', or '1.' prefixes. Do NOT " +
+          "include the title here — the title is emitted separately.",
       },
       html: {
         type: "string",
         description:
-          "Same content as HTML, using <h2>, <ul>, <li>, <p>, <a>. No inline styles.",
+          "Same content as semantic HTML. Allowed tags: <h2>, <p>, <a>, " +
+          "<strong>, <em>, plus two classed spans: " +
+          "<span class=\"shrug-tag\">label</span> for shrug penalty " +
+          "labels, and <span class=\"cite\">( <a>domain</a>, ... )</span> " +
+          "wrapping every citation cluster (opening paren through " +
+          "closing paren). NO <ul>, <ol>, or <li>. Every item in every " +
+          "section is its own <p>. No inline styles or other classes. " +
+          "Do NOT include the title here — the title is emitted separately.",
       },
     },
-    required: ["markdown", "html"],
+    required: ["title", "markdown", "html"],
   },
 };
 

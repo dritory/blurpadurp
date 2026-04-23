@@ -164,7 +164,11 @@ export async function compose(): Promise<void> {
   ];
   const poolThemeMeta = await loadThemeMeta(poolThemeIds);
 
-  const editorResult = await curateViaEditor(editor, pool, poolThemeMeta);
+  const { output: editorResult, input: editorInput } = await curateViaEditor(
+    editor,
+    pool,
+    poolThemeMeta,
+  );
   const normalizedPicks = editorResult.picks
     .map(normalizePick)
     .sort((a, b) => a.rank - b.rank);
@@ -405,6 +409,7 @@ export async function compose(): Promise<void> {
     output,
     storyIds,
     cfg,
+    editorInput,
     editorResult,
     shrug,
     input,
@@ -428,7 +433,7 @@ async function curateViaEditor(
     total: number;
   }>,
   themeMeta: Map<number, ThemeMeta>,
-): Promise<EditorOutput> {
+): Promise<{ output: EditorOutput; input: EditorInput }> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
 
@@ -481,7 +486,10 @@ async function curateViaEditor(
   console.log(
     `[compose] editor picked ${result.picks.length} stories; cuts: ${result.cuts_summary}`,
   );
-  return { picks: result.picks, cuts_summary: result.cuts_summary };
+  return {
+    output: { picks: result.picks, cuts_summary: result.cuts_summary },
+    input,
+  };
 }
 
 // Pre-compute pool shape for the editor: category distribution,
@@ -939,6 +947,7 @@ async function persistIssue(
   output: ComposerOutput,
   storyIds: number[],
   cfg: ConfigMap,
+  editorInput: EditorInput,
   editorResult: EditorOutput,
   shrugCandidates: ComposerInput["shrug"],
   composerInput: ComposerInput,
@@ -948,11 +957,13 @@ async function persistIssue(
       .insertInto("issue")
       .values({
         is_event_driven: false,
+        title: output.title,
         composed_markdown: output.markdown,
         composed_html: output.html,
         story_ids: storyIds,
         composer_prompt_version: cfg["composer.prompt_version"],
         composer_model_id: cfg["composer.model_id"],
+        editor_input_jsonb: JSON.stringify(editorInput) as never,
         editor_output_jsonb: JSON.stringify(editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(shrugCandidates) as never,
         composer_input_jsonb: JSON.stringify(composerInput) as never,

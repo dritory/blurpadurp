@@ -3,7 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
-import { AdminNav } from "./admin-nav.tsx";
+import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 
 export interface StoryDrilldown {
@@ -75,6 +75,14 @@ const STYLES = `
   .gate-banner.pass { border-color: #4a6b4a; background: rgba(74, 107, 74, 0.06); }
   .gate-banner.fail { border-color: var(--flash-err); background: rgba(166, 58, 58, 0.04); }
   .gate-banner.reject { border-color: var(--ink-soft); background: rgba(0,0,0,0.03); }
+
+  @media (max-width: 640px) {
+    .kv-grid { grid-template-columns: 1fr; gap: 2px 0; }
+    .kv-grid dt { padding-top: 10px; }
+    .score-row { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .score-cell { padding: 8px; }
+    .score-cell .value { font-size: 18px; }
+  }
 `;
 
 const Score: FC<{ label: string; value: number | null }> = ({
@@ -103,6 +111,13 @@ export const AdminExploreStory: FC<{ d: StoryDrilldown }> = ({ d }) => {
     <Layout title={`Story #${d.id} — Explorer`}>
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       <AdminNav current="explore" />
+      <AdminCrumbs
+        trail={[
+          { label: "Explorer", href: "/admin/explore" },
+          { label: "Stories", href: "/admin/explore/stories" },
+          { label: `#${d.id}` },
+        ]}
+      />
       <h2>Story #{d.id}</h2>
       <ExplorerNav current="stories" />
 

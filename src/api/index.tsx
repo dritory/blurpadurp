@@ -3,6 +3,7 @@
 
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { serveStatic } from "hono/bun";
 import { HTTPException } from "hono/http-exception";
 import { sql } from "kysely";
 import { readdir, stat } from "node:fs/promises";
@@ -80,6 +81,7 @@ import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
+import { SubscribePage } from "../views/subscribe.tsx";
 import { ThemePage, type ThemeViewData } from "../views/theme.tsx";
 import { TokenResultPage } from "../views/token-result.tsx";
 
@@ -95,6 +97,16 @@ const subscribeLimiter = makeRateLimiter({
 });
 
 export const app = new Hono();
+
+// Static assets live in ./public — served under /assets/*. Safe to cache
+// aggressively; the logo and any supporting files are version-agnostic.
+app.use(
+  "/assets/*",
+  serveStatic({
+    root: "./public",
+    rewriteRequestPath: (path) => path.replace(/^\/assets\//, "/"),
+  }),
+);
 
 app.get("/health", async (c) => {
   const s = await loadPipelineStatus();
@@ -119,8 +131,12 @@ app.get("/health", async (c) => {
 
 app.get("/", async (c) => {
   const latest = await loadLatestIssue();
+  return c.html(<Home latest={latest} flash={null} />);
+});
+
+app.get("/subscribe", (c) => {
   const flash = parseFlash(c.req.query("subscribed"), c.req.query("error"));
-  return c.html(<Home latest={latest} flash={flash} />);
+  return c.html(<SubscribePage flash={flash} />);
 });
 
 app.get("/archive", async (c) => {
@@ -157,6 +173,8 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     basicAuth({ username: adminUser, password: adminPassword }),
   );
 
+  app.get("/admin", (c) => c.redirect("/admin/issues", 302));
+
   app.get("/admin/issues", async (c) => {
     const issues = await loadAdminIssues();
     return c.html(<AdminIssues issues={issues} />);
@@ -167,8 +185,17 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const data = await loadReview(id);
     if (data === null) return c.notFound();
-    const replays = await loadReplaysForIssue(id);
-    return c.html(<AdminReview data={data} replays={replays} />);
+    const [replays, editorReplays] = await Promise.all([
+      loadReplaysForIssue(id),
+      loadEditorReplaysForIssue(id),
+    ]);
+    return c.html(
+      <AdminReview
+        data={data}
+        replays={replays}
+        editorReplays={editorReplays}
+      />,
+    );
   });
 
   app.get("/admin/status", async (c) => {
@@ -304,7 +331,7 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const text = await Bun.file(path).text().catch(() => null);
     if (text === null) return c.notFound();
 
-    const issueIdMatch = /^composer-replay-i(\d+)-/.exec(name);
+    const issueIdMatch = /^(?:composer|editor)-replay-i(\d+)-/.exec(name);
     const issueId = issueIdMatch && issueIdMatch[1] !== undefined
       ? Number(issueIdMatch[1])
       : null;
@@ -317,11 +344,16 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       );
     }
 
-    // Composer-replay diff: show original vs replay in the admin layout.
+    // Composer- and editor-replay diffs: side-by-side markdown viewer.
     if (name.endsWith(".diff.md")) {
       return c.html(
         <AdminFixtureMarkdown name={name} content={text} issueId={issueId} />,
       );
+    }
+
+    // Editor-replay raw JSON — return as-is for inspection.
+    if (name.startsWith("editor-replay-") && name.endsWith(".json")) {
+      return c.body(text, 200, { "Content-Type": "application/json" });
     }
 
     // Scorer fixtures (JSONL).
@@ -378,7 +410,7 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       );
     }
     return c.redirect(
-      `/admin/config?saved=1&key=${encodeURIComponent(key)}`,
+      `/admin/config?saved=1&key=${encodeURIComponent(key)}#cfg-${encodeURIComponent(key)}`,
       303,
     );
   });
@@ -435,7 +467,7 @@ app.get("/sitemap.xml", async (c) => {
 app.get("/feed.xml", async (c) => {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .orderBy("published_at", "desc")
     .limit(FEED_MAX_ENTRIES)
     .execute();
@@ -444,6 +476,7 @@ app.get("/feed.xml", async (c) => {
     publishedAt: r.published_at,
     html: r.composed_html,
     isEventDriven: r.is_event_driven,
+    title: r.title,
   }));
   const updated = entries[0]?.publishedAt ?? new Date();
   const xml = renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
@@ -494,24 +527,24 @@ app.get("/unsubscribe/:token", async (c) => {
 app.post("/subscribe", async (c) => {
   const ip = clientIp(c.req.raw.headers, null);
   if (!subscribeLimiter.take(ip)) {
-    return c.redirect("/?error=rate_limited", 303);
+    return c.redirect("/subscribe?error=rate_limited", 303);
   }
   const body = await c.req.parseBody();
   // Honeypot: bots fill every field; humans leave this hidden one empty.
   // Silently redirect as if it succeeded — no signal to the bot.
   if (typeof body.company === "string" && body.company.length > 0) {
-    return c.redirect("/?subscribed=1", 303);
+    return c.redirect("/subscribe?subscribed=1", 303);
   }
   const parsed = SubscribeSchema.safeParse({ email: body.email });
   if (!parsed.success) {
-    return c.redirect("/?error=invalid_email", 303);
+    return c.redirect("/subscribe?error=invalid_email", 303);
   }
   await db
     .insertInto("email_subscription")
     .values({ email: parsed.data.email })
     .onConflict((oc) => oc.column("email").doNothing())
     .execute();
-  return c.redirect("/?subscribed=1", 303);
+  return c.redirect("/subscribe?subscribed=1", 303);
 });
 
 // --- data loaders ---
@@ -519,7 +552,7 @@ app.post("/subscribe", async (c) => {
 async function loadLatestIssue(): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .orderBy("published_at", "desc")
     .limit(1)
     .executeTakeFirst();
@@ -528,6 +561,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
     id: Number(row.id),
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
+    title: row.title,
     html: row.composed_html,
   };
 }
@@ -535,7 +569,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
 async function loadIssue(id: number): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .where("id", "=", id)
     .executeTakeFirst();
   if (!row) return null;
@@ -543,6 +577,7 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     id: Number(row.id),
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
+    title: row.title,
     html: row.composed_html,
   };
 }
@@ -555,16 +590,22 @@ async function listFixtures(): Promise<FixtureFile[]> {
     const isJsonl = name.endsWith(".jsonl");
     const isComposerHtml = name.startsWith("composer-replay-") && name.endsWith(".html");
     const isComposerDiff = name.startsWith("composer-replay-") && name.endsWith(".diff.md");
-    if (!isJsonl && !isComposerHtml && !isComposerDiff) continue;
+    const isEditorDiff = name.startsWith("editor-replay-") && name.endsWith(".diff.md");
+    const isEditorJson = name.startsWith("editor-replay-") && name.endsWith(".json");
+    if (!isJsonl && !isComposerHtml && !isComposerDiff && !isEditorDiff && !isEditorJson) {
+      continue;
+    }
     const st = await stat(resolve(dir, name)).catch(() => null);
     if (st === null) continue;
     const kind: FixtureFile["kind"] = isComposerHtml || isComposerDiff
       ? "composer-replay"
-      : name.startsWith("capture-")
-        ? "capture"
-        : name.startsWith("replay-")
-          ? "replay"
-          : "unknown";
+      : isEditorDiff || isEditorJson
+        ? "editor-replay"
+        : name.startsWith("capture-")
+          ? "capture"
+          : name.startsWith("replay-")
+            ? "replay"
+            : "unknown";
     out.push({ name, sizeBytes: st.size, mtime: st.mtime, kind });
   }
   out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
@@ -1471,17 +1512,18 @@ function parseConfigFlash(
   saved: string | undefined,
   error: string | undefined,
   key: string | undefined,
-): { kind: "ok" | "error"; msg: string } | null {
-  const label = key !== undefined && key.length > 0 ? ` (${key})` : "";
-  if (saved) return { kind: "ok", msg: `Saved${label}.` };
+): { kind: "ok" | "error"; msg: string; key: string | null } | null {
+  const k = key !== undefined && key.length > 0 ? key : null;
+  const label = k !== null ? ` (${k})` : "";
+  if (saved) return { kind: "ok", msg: `Saved${label}.`, key: k };
   if (error === "bad_json") {
-    return { kind: "error", msg: `Value is not valid JSON${label}.` };
+    return { kind: "error", msg: `Value is not valid JSON${label}.`, key: k };
   }
   if (error === "unknown_key") {
-    return { kind: "error", msg: `Unknown config key${label}.` };
+    return { kind: "error", msg: `Unknown config key${label}.`, key: k };
   }
   if (error === "missing_key") {
-    return { kind: "error", msg: "Missing key in form submission." };
+    return { kind: "error", msg: "Missing key in form submission.", key: null };
   }
   return null;
 }
@@ -1658,6 +1700,26 @@ async function loadReplaysForIssue(
   return all.get(issueId) ?? [];
 }
 
+// Editor replays are named editor-replay-i<N>-<stamp>.diff.md (and .json).
+// We key on the .diff.md since that's what the admin review page links to.
+async function loadEditorReplaysForIssue(
+  issueId: number,
+): Promise<Array<{ base: string; mtime: Date }>> {
+  const dir = resolve("fixtures");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const out: Array<{ base: string; mtime: Date }> = [];
+  for (const name of names) {
+    if (!name.startsWith(`editor-replay-i${issueId}-`)) continue;
+    if (!name.endsWith(".diff.md")) continue;
+    const st = await stat(resolve(dir, name)).catch(() => null);
+    if (st === null) continue;
+    const base = name.slice(0, -".diff.md".length);
+    out.push({ base, mtime: st.mtime });
+  }
+  out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  return out;
+}
+
 async function loadAdminIssues(): Promise<AdminIssueRow[]> {
   const rows = await db
     .selectFrom("issue")
@@ -1686,13 +1748,14 @@ async function loadAdminIssues(): Promise<AdminIssueRow[]> {
 async function loadArchive(): Promise<ArchiveEntry[]> {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven"])
+    .select(["id", "published_at", "is_event_driven", "title"])
     .orderBy("published_at", "desc")
     .execute();
   return rows.map((r) => ({
     id: Number(r.id),
     publishedAt: r.published_at,
     isEventDriven: r.is_event_driven,
+    title: r.title,
   }));
 }
 

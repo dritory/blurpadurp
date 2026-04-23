@@ -30,6 +30,7 @@ export const AdminStatus: FC<{ s: PipelineStatus }> = ({ s }) => (
     <style dangerouslySetInnerHTML={{ __html: ADMIN_STYLES }} />
     <AdminNav current="status" />
     <h2>Pipeline status</h2>
+    <div class="adm-scroll">
     <table class="fx">
       <tbody>
         <tr>
@@ -78,6 +79,7 @@ export const AdminStatus: FC<{ s: PipelineStatus }> = ({ s }) => (
         </tr>
       </tbody>
     </table>
+    </div>
     <p style="margin-top: 20px; font-family: var(--sans); font-size: 13px; color: var(--ink-soft);">
       JSON version at <a href="/health">/health</a> — cron-friendly.
     </p>

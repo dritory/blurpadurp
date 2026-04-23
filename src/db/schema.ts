@@ -90,11 +90,13 @@ export interface Database {
     id: Id;
     published_at: Created;
     is_event_driven: Generated<boolean>;
+    title: string | null;
     composed_markdown: string;
     composed_html: string;
     story_ids: number[];
     composer_prompt_version: string | null;
     composer_model_id: string | null;
+    editor_input_jsonb: Jsonb | null;
     editor_output_jsonb: Jsonb | null;
     shrug_candidates_jsonb: Jsonb | null;
     composer_input_jsonb: Jsonb | null;

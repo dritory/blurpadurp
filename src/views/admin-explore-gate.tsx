@@ -4,7 +4,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
-import { AdminNav } from "./admin-nav.tsx";
+import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 import { HBar } from "./charts.tsx";
 
@@ -64,6 +64,15 @@ const STYLES = `
   .eval-row .stat { background: rgba(0,0,0,0.03); padding: 8px 10px; }
   .eval-row .stat .lbl { font-size: 10px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
   .eval-row .stat .val { font-size: 18px; font-variant-numeric: tabular-nums; margin-top: 2px; font-weight: 600; }
+
+  @media (max-width: 640px) {
+    .gs-form { padding: 14px 14px; }
+    .gs-form button { padding: 10px 18px; min-height: 40px; }
+    .gs-compare { grid-template-columns: repeat(2, 1fr); }
+    .gs-cell { padding: 10px 12px; }
+    .gs-cell .value { font-size: 20px; }
+    .gs-lists { grid-template-columns: 1fr; gap: 12px; }
+  }
 `;
 
 const Cell: FC<{
@@ -94,7 +103,13 @@ export const AdminExploreGate: FC<{ d: GateSandboxData }> = ({ d }) => {
     <Layout title="Gate sandbox — Explorer">
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       <AdminNav current="explore" />
-      <h2>Explorer</h2>
+      <AdminCrumbs
+        trail={[
+          { label: "Explorer", href: "/admin/explore" },
+          { label: "Gate sandbox" },
+        ]}
+      />
+      <h2>Gate sandbox</h2>
       <ExplorerNav current="gate" />
 
       <div class="gs-form">

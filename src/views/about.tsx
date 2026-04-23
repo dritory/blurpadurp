@@ -8,6 +8,27 @@ import { Layout } from "./layout.tsx";
 
 export const About: FC = () => (
   <Layout title="About — Blurpadurp" nav="about">
+    <style
+      dangerouslySetInnerHTML={{
+        __html: `
+          .meet-blurp { display: flex; flex-direction: column; gap: 14px; margin: 0 0 32px; }
+          .meet-blurp img { display: block; width: 100%; height: auto; }
+          .meet-blurp h2 { margin-top: 0; }
+        `,
+      }}
+    />
+    <section class="meet-blurp" aria-labelledby="meet-blurp">
+      <img src="/assets/blurp-wide.png" alt="" />
+      <div>
+        <h2 id="meet-blurp">Meet Blurp</h2>
+        <p>
+          Blurp is a wizard octopus. He's been online a long time. He's fed
+          up with social media and tired of the internet's nonsense, so he
+          reads the feeds so you don't have to.
+        </p>
+      </div>
+    </section>
+
     <h2>What this is</h2>
     <p>
       An automated, anti-algorithm curated brief. Delivers only the

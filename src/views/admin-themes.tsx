@@ -44,10 +44,17 @@ const STYLES = `
 
   form.toggle { display: inline; }
   form.toggle button {
-    padding: 4px 10px; font-size: 12px; font-family: var(--sans);
+    padding: 6px 12px; min-height: 30px; font-size: 12px; font-family: var(--sans);
     border: 1px solid var(--rule); background: #fff; color: var(--ink-soft); cursor: pointer;
   }
   form.toggle button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  @media (max-width: 640px) {
+    .t-filters { flex-wrap: wrap; gap: 4px; }
+    .t-filters a { padding: 8px 12px; min-height: 36px; display: inline-flex; align-items: center; }
+    table.t-table { min-width: 640px; }
+    form.toggle button { padding: 8px 12px; min-height: 36px; }
+  }
 `;
 
 export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
@@ -86,6 +93,7 @@ export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
         </a>
       </nav>
 
+      <div class="adm-scroll">
       <table class="t-table">
         <thead>
           <tr>
@@ -145,6 +153,7 @@ export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
           ))}
         </tbody>
       </table>
+      </div>
 
       {data.rows.length === 0 ? (
         <p>

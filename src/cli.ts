@@ -17,6 +17,7 @@ const SUBCOMMANDS = [
   "fixture-capture",
   "fixture-replay",
   "composer-replay",
+  "editor-replay",
   "reset-publish",
   "eval",
 ] as const;
@@ -82,6 +83,16 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       }
       const { replayComposer } = await import("./pipeline/fixture.ts");
       await replayComposer({ issueId, promptPath, promptVersion, modelId });
+      return;
+    }
+    case "editor-replay": {
+      const [issueIdRaw, promptPath, promptVersion, modelId] = args;
+      const issueId = issueIdRaw !== undefined ? Number(issueIdRaw) : undefined;
+      if (issueId !== undefined && (!Number.isFinite(issueId) || issueId <= 0)) {
+        throw new Error("editor-replay: issue_id must be a positive number");
+      }
+      const { replayEditor } = await import("./pipeline/fixture.ts");
+      await replayEditor({ issueId, promptPath, promptVersion, modelId });
       return;
     }
     case "reset-publish":

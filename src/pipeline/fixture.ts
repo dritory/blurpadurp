@@ -22,11 +22,18 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { makeComposer } from "../ai/composer.ts";
+import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
 import {
   ComposerInputSchema,
   type ComposerInput,
 } from "../shared/composer-schema.ts";
+import {
+  EditorInputSchema,
+  EditorOutputSchema,
+  type EditorInput,
+  type EditorOutput,
+} from "../shared/editor-schema.ts";
 import { getEnv } from "../shared/env.ts";
 import {
   ScorerOutputSchema,
@@ -307,22 +314,24 @@ export async function replayComposer(params: {
     console.log(`[composer-replay] defaulting to latest issue #${issueId}`);
   }
 
-  let promptVersion = params.promptVersion;
-  let modelId = params.modelId;
-  if (promptVersion === undefined || modelId === undefined) {
-    const cfgRows = await db
-      .selectFrom("config")
-      .select(["key", "value"])
-      .where("key", "in", ["composer.prompt_version", "composer.model_id"])
-      .execute();
-    const cfg = Object.fromEntries(cfgRows.map((r) => [r.key, r.value]));
-    if (promptVersion === undefined) {
-      promptVersion = `${String(cfg["composer.prompt_version"] ?? "dev")}-dev`;
-    }
-    if (modelId === undefined) {
-      modelId = String(cfg["composer.model_id"] ?? "claude-sonnet-4-6");
-    }
-  }
+  const cfgRows = await db
+    .selectFrom("config")
+    .select(["key", "value"])
+    .where("key", "in", [
+      "composer.prompt_version",
+      "composer.model_id",
+      "composer.max_tokens",
+    ])
+    .execute();
+  const cfg = Object.fromEntries(cfgRows.map((r) => [r.key, r.value]));
+
+  const promptVersion =
+    params.promptVersion ??
+    `${String(cfg["composer.prompt_version"] ?? "dev")}-dev`;
+  const modelId =
+    params.modelId ?? String(cfg["composer.model_id"] ?? "claude-sonnet-4-6");
+  const maxTokens =
+    params.maxTokens ?? Number(cfg["composer.max_tokens"] ?? 8000);
   const promptPath = params.promptPath ?? "docs/composer-prompt.md";
 
   const row = await db
@@ -360,7 +369,7 @@ export async function replayComposer(params: {
     version: promptVersion,
     modelId,
     promptPath,
-    maxTokens: params.maxTokens ?? 4000,
+    maxTokens,
   });
 
   console.log(
@@ -407,4 +416,198 @@ ${output.markdown}
   );
   console.log(`[composer-replay] brief:  /admin/fixtures/${base}.html`);
   console.log(`[composer-replay] diff:   /admin/fixtures/${base}.diff.md`);
+}
+
+// Editor replay: mirrors composer-replay but for the pick-selection
+// stage. Loads the stored editor_input_jsonb for an issue and re-runs
+// the editor with a different prompt/model, writing a .diff.md that the
+// side-by-side viewer can render.
+export async function replayEditor(params: {
+  issueId?: number;
+  promptPath?: string;
+  promptVersion?: string;
+  modelId?: string;
+  maxTokens?: number;
+}): Promise<void> {
+  let issueId = params.issueId;
+  if (issueId === undefined) {
+    const latest = await db
+      .selectFrom("issue")
+      .select("id")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (!latest) {
+      console.log("[editor-replay] no issues in DB yet — run compose first");
+      return;
+    }
+    issueId = Number(latest.id);
+    console.log(`[editor-replay] defaulting to latest issue #${issueId}`);
+  }
+
+  const cfgRows = await db
+    .selectFrom("config")
+    .select(["key", "value"])
+    .where("key", "in", [
+      "editor.prompt_version",
+      "editor.model_id",
+      "editor.max_tokens",
+    ])
+    .execute();
+  const cfg = Object.fromEntries(cfgRows.map((r) => [r.key, r.value]));
+
+  const promptVersion =
+    params.promptVersion ??
+    `${String(cfg["editor.prompt_version"] ?? "dev")}-dev`;
+  const modelId =
+    params.modelId ?? String(cfg["editor.model_id"] ?? "claude-sonnet-4-6");
+  const maxTokens =
+    params.maxTokens ?? Number(cfg["editor.max_tokens"] ?? 2000);
+  const promptPath = params.promptPath ?? "docs/editor-prompt.md";
+
+  const row = await db
+    .selectFrom("issue")
+    .select([
+      "id",
+      "published_at",
+      "editor_input_jsonb",
+      "editor_output_jsonb",
+      "composer_prompt_version",
+    ])
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (!row) {
+    console.log(`[editor-replay] issue #${issueId} not found`);
+    return;
+  }
+  if (row.editor_input_jsonb === null) {
+    console.log(
+      `[editor-replay] issue #${issueId} has no persisted editor_input_jsonb — predates migration 021. Run compose again on fresh data.`,
+    );
+    return;
+  }
+
+  const parsed = EditorInputSchema.safeParse(row.editor_input_jsonb);
+  if (!parsed.success) {
+    console.error("[editor-replay] stored input failed schema validation:");
+    console.error(parsed.error.issues.slice(0, 5));
+    return;
+  }
+  const input: EditorInput = parsed.data;
+
+  const originalOutput =
+    row.editor_output_jsonb !== null
+      ? EditorOutputSchema.safeParse(row.editor_output_jsonb)
+      : null;
+
+  const editor = makeEditor({
+    version: promptVersion,
+    modelId,
+    promptPath,
+    maxTokens,
+  });
+
+  console.log(
+    `[editor-replay] issue #${row.id} · pool of ${input.stories.length} → ${promptVersion} (${modelId})`,
+  );
+  const t0 = Date.now();
+  const output = await editor.run(input);
+  const latencyMs = Date.now() - t0;
+
+  // Build story_id → title lookup so the diff shows human-readable picks
+  // instead of bare IDs.
+  const titleById = new Map<number, string>(
+    input.stories.map((s) => [s.story_id, s.title]),
+  );
+
+  await mkdir(FIXTURES_DIR, { recursive: true });
+  const stamp = isoStamp();
+  const base = `editor-replay-i${row.id}-${stamp}`;
+  const jsonPath = resolve(FIXTURES_DIR, `${base}.json`);
+  const diffPath = resolve(FIXTURES_DIR, `${base}.diff.md`);
+  await writeFile(
+    jsonPath,
+    JSON.stringify(
+      {
+        issue_id: Number(row.id),
+        replay: {
+          prompt_version: promptVersion,
+          model_id: modelId,
+          latency_ms: latencyMs,
+          output,
+        },
+        original: originalOutput?.success ? originalOutput.data : null,
+        input,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const originalSection =
+    originalOutput !== null && originalOutput.success
+      ? renderEditorPicks(originalOutput.data, titleById)
+      : "_(original editor output missing or invalid — issue predates editor_output_jsonb or schema changed)_";
+  const replaySection = renderEditorPicks(output, titleById);
+
+  await writeFile(
+    diffPath,
+    `# editor-replay issue #${row.id}
+
+**Source**: editor (${row.composer_prompt_version ?? "?"} era)
+**Replay**: ${promptVersion} (${modelId})
+**Latency**: ${latencyMs}ms
+**Pool size**: ${input.stories.length} stories
+
+---
+
+## Original
+
+${originalSection}
+
+---
+
+## Replay
+
+${replaySection}
+`,
+    "utf8",
+  );
+  console.log(
+    `[editor-replay] done in ${latencyMs}ms · ${output.picks.length} picks`,
+  );
+  console.log(`[editor-replay] diff:   /admin/fixtures/${base}.diff.md`);
+}
+
+// Render an editor output as a human-readable markdown block: picks in
+// rank order (story id, title, reason) plus the cuts summary. Used by
+// both sides of the editor-replay diff file.
+function renderEditorPicks(
+  out: EditorOutput,
+  titleById: Map<number, string>,
+): string {
+  const lines: string[] = [];
+  const ranked = [...out.picks].sort((a, b) => a.rank - b.rank);
+  for (const p of ranked) {
+    if ("story_ids" in p) {
+      lines.push(
+        `**${p.rank}. arc (${p.story_ids.length} stories, lead #${p.lead_story_id})** — ${p.reason}`,
+      );
+      for (const sid of p.story_ids) {
+        const marker = sid === p.lead_story_id ? "★" : " ";
+        lines.push(
+          `   ${marker} #${sid} — ${titleById.get(sid) ?? "(unknown title)"}`,
+        );
+      }
+    } else {
+      lines.push(
+        `**${p.rank}. #${p.story_id}** — ${titleById.get(p.story_id) ?? "(unknown title)"}`,
+      );
+      lines.push(`   _${p.reason}_`);
+    }
+    lines.push("");
+  }
+  lines.push(`**Cuts:** ${out.cuts_summary}`);
+  return lines.join("\n");
 }
