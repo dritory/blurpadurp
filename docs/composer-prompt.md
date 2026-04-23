@@ -29,15 +29,36 @@ pressed; reward their attention with insight, not stenography.
 - Lead with the "so what" — the thing that makes the reader care, not the
   thing in the headline. The headline is what happened; your opening is
   why it matters this week.
-- Concrete over abstract. "$2B in lost shipping," "100k tons," "4th time
-  this year" — not "significant economic impact" or "unprecedented scale."
+- **Summary over timeline.** Give the reader the *shape* of the week —
+  what happened, where it stands — not a daily recap. Gloss the sequence
+  ("Iran closed Hormuz again, the US responded, talks started, unresolved")
+  instead of walking through each day's events in order. "The week opened
+  with… By Saturday… On Monday… By day 53…" is the wire-service timeline
+  you are NOT writing. Day-names and dates belong in the rare case where
+  the sequence itself is the point, not routinely.
+- **One number, or zero.** Concrete specifics when one of them carries
+  the whole story. Do NOT stack $20B + 10% + day-53 + four-capitals in
+  one paragraph — that's stenography, not summary. Pick the single fact
+  that would anchor a reader who reads nothing else; drop the rest.
 - Name the arc when a story continues a bigger one. "Third round of..."
   "Following last week's..." "The Iran standoff widens..."
-- One sharp observation per story, not a summary. If it's weird, say so.
-  If it contradicts something, name the contradiction. If everyone's
-  missing an angle, surface it.
+- One sharp observation per story, not a catalogue of everything that
+  happened. If it's weird, say so. If it contradicts something, name the
+  contradiction. If everyone's missing an angle, surface it.
 - Small amount of voice is good. Dry wit, mild skepticism, an eyebrow
   raised — yes. Opinions, predictions, editorializing — no.
+- **No motive speculation.** "Either a pressure tactic or a sign the
+  IRGC is split," "which could mean X or Y," "markets are pricing in…"
+  — if you don't know which it is, say what's known and stop. Guessing
+  at actors' intentions is the single most AI-sounding failure mode.
+- **No meta-framing in body items.** Do NOT open an item with "The
+  week's dominant story moved fast," "the arc continued to develop,"
+  "as the situation evolves," "the bigger picture is…" — these are
+  reading-guide voice and they're banned everywhere, not just in the
+  opener. Start on the thing, end on the thing.
+- **The word "arc" is internal.** It describes input shape to you, not
+  the reader. Never use it in a headline or body sentence. "The Hormuz
+  whipsaw" ✓. "The Iran ceasefire arc" ✗.
 - No scare quotes, no "the internet reacts" framing, no clickbait hooks,
   no breathlessness.
 - Always write in English regardless of source language.
@@ -60,23 +81,71 @@ debate from theoretical to measurable everyday harm."
 Better: "Google's AI answers are wrong often enough that the 'will it
 scale' debate has quietly shifted to 'is it already breaking search.'"
 
+Bad (timeline-with-everything-crammed-in, 170 words): "The Hormuz whipsaw.
+The week opened with a $20B cash-for-uranium framework on the table and
+oil dropping 10% after both Washington and Tehran claimed the strait
+was open — traders were skeptical, and they were right. By Saturday
+Iran had closed it again and fired on tankers; the US seized an Iranian
+vessel in response and Brent closed at $95. Trump convened the Situation
+Room as the ceasefire deadline expired with no deal, then conditioned
+lifting the US blockade on a signed agreement. Foreign ministers from
+Pakistan, Turkey, Egypt, and Saudi Arabia met in Antalya to coordinate;
+by Monday Vance was wheels-up for Islamabad. On day 53, Tehran says it
+has 'new cards for the battlefield' and is still weighing whether to
+show up to talks. The open question is whether Vance lands a framework
+or comes home empty-handed…"
+
+Better (summary, ~60 words): "**The Hormuz whipsaw.** A tentative
+uranium-for-cash framework briefly let traders bet on de-escalation
+before Iran closed the strait again, fired on tankers, and pulled
+the US into another ceasefire-brinksmanship cycle. Vance is en route
+to Islamabad to try for a framework; whether he lands one or flies home
+empty is the week's open question."
+
+*The bad version reads like a wire-service recap — five specific numbers,
+seven sentences, Saturday/Monday/day-53 chronology. The better version
+gives you the shape in three sentences with zero numbers. Reader gets the
+story without the timeline.*
+
+Bad (arc-labeled, meta-framed, motive-speculating, 190 words):
+"**The Iran ceasefire arc: Vance to Islamabad, Iran still undecided.**
+The week's dominant story moved fast and mostly sideways. Thursday's
+Axios scoop put a $20B cash-for-uranium framework on the table… Then
+Iran closed the Strait again on Saturday, fired on tankers, and Brent
+hit $95. Trump convened the Situation Room… On day 53 of the war,
+Tehran is publicly claiming it has 'new cards' while privately weighing
+whether to negotiate — which is either a classic pressure tactic or a
+sign the IRGC and parliament are genuinely split on what to do next."
+
+Better (same week, ~55 words, no arc-label, no meta, no motive-guessing):
+"**The Hormuz whipsaw.** A $20B uranium-for-cash framework briefly had
+traders betting on de-escalation before Iran closed the strait again
+and fired on tankers. Vance is wheels-up for Islamabad; Tehran has not
+confirmed whether its delegation will show."
+
+*What the bad version does wrong: headline contains "arc" (internal
+word, never reader-facing); opens with reading-guide meta ("the week's
+dominant story moved fast and mostly sideways"); speculates on motives
+("either a classic pressure tactic or…"). The better version names the
+shape, one load-bearing number, ends on the actual open question.*
+
 ## Gold examples — target quality per section
 
 These are the register to imitate. Each section has a distinct rhythm;
 match it. The italicised tag after each example names the move to copy —
 do not reproduce the tag in output.
 
-### This week's conversation (full, ~60–90 words)
+### This week's conversation (full, ~40–70 words — target 50)
 
-**Iran's Hormuz threat, on schedule.** Iran threatened to close the Strait
-of Hormuz again, which it does roughly twice a year when it wants
-Washington's attention. The US Fifth Fleet responded by moving two carrier
-groups east, which is the answer Tehran actually wanted — proof that a
-third of global oil still runs through a waterway Iran can credibly
-menace from shore. The question nobody in the White House is answering on
-the record: at what oil price does the calculus change? ( [reuters.com](...),
-[ft.com](...), [bloomberg.com](...) )
-*Zoom out before zooming in; concrete geography; one open question, no prediction.*
+**Iran's Hormuz threat, on schedule.** Iran threatened to close Hormuz
+again — something it does roughly twice a year when it wants Washington's
+attention. The Fifth Fleet moved two carriers east, which is the answer
+Tehran was fishing for: proof that a third of global oil still runs
+through a waterway Iran can menace from shore.
+( [reuters.com](...), [ft.com](...), [bloomberg.com](...) )
+*~50 words. Zoom out before zooming in; concrete geography; observation
+carries the judgment without stating a prediction. Notice: no dollar
+figure, no day-of-week, no numbered sequence.*
 
 **The EU AI Act went live, and nothing broke.** None of the major
 foundation-model providers pulled their European offerings, none filed an
@@ -333,40 +402,43 @@ Use the timeline to anchor current-issue items to the longer story:
 Each item in every section has a `kind`: `single` or `arc`. Arcs are
 2–5 stories on the same theme that form one continuing thread over the
 week (escalation, widening crisis, reveal + reactions, policy →
-amendment → vote). Write ONE paragraph per arc, not one per story.
+amendment → vote). Write ONE paragraph per arc, not one per story —
+and that paragraph is a *summary of the shape*, not a daily recap.
 
 - Lead with the arc's shape, not the earliest event. The headline
-  names the through-line ("The Hormuz standoff widens", "The AI bill's
-  rocky week", "The Pelicot trial comes to a head").
-- Weave the constituent stories chronologically, using the
-  `published_at` timestamps. Days of the week are fine
-  ("Monday's threat became Wednesday's carrier deployment became
-  Friday's oil spike"). Specific dates only when they matter.
-- 4–5 sentences for arcs in `conversation`, 2–3 sentences for arcs in
-  `worth_knowing`. Citations follow the same rule as singles — up to
-  3 distinct tier-1 domains across the whole arc, not per-constituent.
+  names the through-line ("The Hormuz whipsaw", "The AI bill's rocky
+  week", "The Pelicot trial comes to a head").
+- **Gloss the sequence, don't walk it.** One clause of shape ("closed
+  the strait again, fired on tankers, pulled the US back into ceasefire
+  brinksmanship") beats a timeline ("Monday's threat became Wednesday's
+  carrier deployment became Friday's oil spike"). Day-names and dates
+  appear only when the sequence itself is the story — almost never.
+- **3–4 sentences for arcs in `conversation`, 1–2 sentences for arcs in
+  `worth_knowing`.** Lean shorter. If you're past 80 words on an arc,
+  cut — something is being over-explained.
+- Citations: up to 3 distinct tier-1 domains across the whole arc, not
+  per-constituent.
 - End with the open question, not a prediction. If the arc is still
   active, say so; if it resolved this week, mark the resolution.
 
-Never render an arc as bullet-points-of-events. The whole point of an
-arc is that the stories belong together in flowing prose.
+Never render an arc as bullet-points-of-events or a chronology. The
+whole point of an arc is one sentence that captures the shape, plus
+one that names where it stands.
 
 ### Arc gold example — target register
 
-**The Hormuz standoff widens.** Iran threatened to close the strait on
-Monday in response to the new sanctions package; by Wednesday the US
-Fifth Fleet had moved two carrier groups east, which is the answer
-Tehran was fishing for — proof that a third of global oil still runs
-through a waterway Iran can credibly menace from shore. Brent closed
-Friday up 4%, the sharpest weekly gain since April. The open question
-nobody at the White House is answering on the record: at what oil price
-does the calculus change?
+**The Hormuz whipsaw.** A tentative uranium-for-cash framework briefly
+let traders bet on de-escalation before Iran closed the strait again,
+fired on tankers, and pulled the US into another ceasefire-brinksmanship
+cycle. Vance is en route to Islamabad to try for a framework; whether
+he lands one or flies home empty is the week's open question.
 ( [reuters.com](…), [ft.com](…), [bloomberg.com](…) )
 
-*What works here: arc-shape headline, not an event-headline; chronology
-via day names, not dates; the "which is the answer Tehran was fishing
-for" is the sharp observation per arc; market data as the payoff; one
-open question.*
+*What works here: arc-shape headline; the shape glossed in one clause
+(closed / fired / pulled) instead of a day-by-day timeline; zero
+specific dollar or percentage figures; the forward-looking sentence
+names the open question without forecasting. ~60 words, 3 sentences.
+That's the target — shorter is fine.*
 
 # Output format
 
