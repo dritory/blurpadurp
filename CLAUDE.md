@@ -9,10 +9,12 @@ not regress, what's opinionated, what keeps biting.
 Blurpadurp — an automated, anti-algorithm weekly news brief. The whole
 product is the filter: ruthlessly selective, silence-is-a-feature,
 two-axis (conversational relevance AND durable significance). See
-`docs/concept.md`. Today's publish gate is zeitgeist-based
-(`zeitgeist × half_life − non_obviousness`); `structural_importance` is
-scored on every story but not yet surfaced to the editor — a known gap
-between docs and code.
+`docs/concept.md`. The publish gate is zeitgeist-based
+(`zeitgeist × half_life − non_obviousness`); structural significance
+enters at the editor stage — the editor picks within the gated pool
+using an explicit four-quadrant rubric (loud×significant, quiet×
+significant, loud×insignificant, quiet×insignificant; see
+`docs/editor-prompt.md`).
 
 The stack: Bun + Hono + Kysely + Postgres/pgvector + Anthropic +
 Voyage. TypeScript throughout. JSX server-rendered (no client JS

@@ -6,6 +6,22 @@ import { categorySlug, themeRelationship } from "./scoring-schema.ts";
 
 export const EditorInputSchema = z.object({
   as_of_date: z.string(),
+  // Pre-computed pool shape — category/confidence distribution plus
+  // explicit lists of the "interesting" cohorts: quiet-but-significant
+  // items (the Worth-knowing population) and loud-but-insignificant
+  // items (the zeitgeist stenography trap). Lets the editor see the
+  // composition it's working with rather than inferring it story-by-story.
+  pool_composition: z.object({
+    total: z.number(),
+    by_category: z.record(z.string(), z.number()),
+    by_confidence: z.object({
+      low: z.number(),
+      medium: z.number(),
+      high: z.number(),
+    }),
+    quiet_but_significant: z.array(z.number()), // story_ids with low zeitgeist, high structural
+    loud_but_insignificant: z.array(z.number()), // story_ids with high zeitgeist, low structural
+  }),
   stories: z.array(
     z.object({
       story_id: z.number(),
@@ -19,11 +35,24 @@ export const EditorInputSchema = z.object({
       half_life: z.number(),
       reach: z.number(),
       non_obviousness: z.number(),
+      // The second axis: 0-5, "will this matter in 12 months?" —
+      // independent of zeitgeist. High-structural/low-zeitgeist items
+      // are the quiet-but-consequential picks the reader would miss
+      // otherwise. Surfaced to the editor starting in v0.3.
+      structural_importance: z.number(),
+      // Scorer's "how often does this kind of event happen per year" —
+      // calibrated significance prior. Low base_rate (< 0.5) means
+      // rare/precedent-setting; high base_rate (> 10) means routine.
+      base_rate_per_year: z.number(),
       confidence: z.enum(["low", "medium", "high"]).nullable(),
       tier1_sources: z.number(),
       total_sources: z.number(),
       theme_relationship: z.enum(themeRelationship).nullable(),
       scorer_one_liner: z.string(),
+      // The scorer's strongest case FOR including this story — already
+      // generated during scoring, now surfaced to the editor so it
+      // doesn't have to reconstruct significance from the one-liner.
+      steelman_important: z.string(),
       retrodiction_12mo: z.string(),
       factors_trigger: z.array(z.string()),
       factors_penalty: z.array(z.string()),

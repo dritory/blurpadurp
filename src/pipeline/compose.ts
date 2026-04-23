@@ -452,6 +452,8 @@ async function curateViaEditor(
       half_life: p.row.half_life ?? 0,
       reach: p.row.reach ?? 0,
       non_obviousness: p.row.non_obviousness ?? 0,
+      structural_importance: out?.scores?.structural_importance ?? 0,
+      base_rate_per_year: out?.reasoning?.base_rate_per_year ?? 0,
       confidence:
         (p.row.point_in_time_confidence as
           | EditorInput["stories"][number]["confidence"]) ?? null,
@@ -461,6 +463,7 @@ async function curateViaEditor(
         (p.row.theme_relationship as
           | EditorInput["stories"][number]["theme_relationship"]) ?? null,
       scorer_one_liner: out?.summary ?? "",
+      steelman_important: out?.reasoning?.steelman_important ?? "",
       retrodiction_12mo: out?.reasoning?.retrodiction_12mo ?? "",
       factors_trigger: factors.trigger,
       factors_penalty: factors.penalty,
@@ -469,6 +472,7 @@ async function curateViaEditor(
 
   const input: EditorInput = {
     as_of_date: new Date().toISOString().slice(0, 10),
+    pool_composition: buildPoolComposition(editorStories),
     stories: editorStories,
     themes: buildThemesDigest(pool, editorStories, themeMeta),
   };
@@ -478,6 +482,51 @@ async function curateViaEditor(
     `[compose] editor picked ${result.picks.length} stories; cuts: ${result.cuts_summary}`,
   );
   return { picks: result.picks, cuts_summary: result.cuts_summary };
+}
+
+// Pre-compute pool shape for the editor: category distribution,
+// confidence distribution, and explicit lists of the two cohorts
+// where editorial judgment matters most — quiet-but-significant
+// (Worth-knowing candidates) and loud-but-insignificant (the
+// zeitgeist stenography trap).
+const QUIET_ZEITGEIST_MAX = 2;
+const SIGNIFICANT_STRUCTURAL_MIN = 4;
+const LOUD_ZEITGEIST_MIN = 4;
+const INSIGNIFICANT_STRUCTURAL_MAX = 2;
+
+function buildPoolComposition(
+  stories: EditorInput["stories"],
+): EditorInput["pool_composition"] {
+  const byCategory: Record<string, number> = {};
+  const byConfidence = { low: 0, medium: 0, high: 0 };
+  const quiet: number[] = [];
+  const loud: number[] = [];
+  for (const s of stories) {
+    const cat = s.category ?? "unknown";
+    byCategory[cat] = (byCategory[cat] ?? 0) + 1;
+    if (s.confidence === "low") byConfidence.low += 1;
+    else if (s.confidence === "medium") byConfidence.medium += 1;
+    else if (s.confidence === "high") byConfidence.high += 1;
+    if (
+      s.zeitgeist <= QUIET_ZEITGEIST_MAX &&
+      s.structural_importance >= SIGNIFICANT_STRUCTURAL_MIN
+    ) {
+      quiet.push(s.story_id);
+    }
+    if (
+      s.zeitgeist >= LOUD_ZEITGEIST_MIN &&
+      s.structural_importance <= INSIGNIFICANT_STRUCTURAL_MAX
+    ) {
+      loud.push(s.story_id);
+    }
+  }
+  return {
+    total: stories.length,
+    by_category: byCategory,
+    by_confidence: byConfidence,
+    quiet_but_significant: quiet,
+    loud_but_insignificant: loud,
+  };
 }
 
 // Build the themes digest from the editor pool. Every theme with at

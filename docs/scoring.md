@@ -50,14 +50,12 @@ an in-circle signal, not zeitgeist.
 
 The weekly publish *gate* is conversational relevance — a story nobody
 is discussing rarely earns space in a brief whose job is keeping the
-reader in the loop. `structural_importance` is scored on every story
-and is intended to enter the editor's curation within the gated pool,
-so that quiet-but-consequential items (the law that passed on page
-four, the study that will redirect a field) reach *Worth knowing*.
-As of today, the editor doesn't yet read `structural_importance` —
-the scorer produces it, the pipeline stores it, downstream is the
-gap. Until that's closed, significance relies on the editor reading
-the scorer's one-liner.
+reader in the loop. `structural_importance` enters the editor's
+curation within the gated pool: the editor balances the two axes
+explicitly, biasing FOR quiet-but-significant picks (high structural,
+low zeitgeist) and sparing on loud-but-insignificant ones. *Worth
+knowing* is the section that holds the former. See `docs/editor-prompt.md`
+— the four-quadrant rubric is the heart of the editor's job.
 
 ### Gate formula
 
