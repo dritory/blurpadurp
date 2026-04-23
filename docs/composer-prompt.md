@@ -210,18 +210,55 @@ No "stay tuned," no breathless forecasting.*
 
 ### Worth a shrug (one wry line per item, label at the end)
 
-**Another "CEO was mean to me" LinkedIn thread.** This week's was an
-ex-Meta manager; subsequent weeks will feature an ex-Google manager, then
-an ex-Amazon manager. *48-hour controversy*
+**Shrug is where the brief permits itself dry wit.** Body items are
+summary-voiced and neutral; shrug is observational comedy at the
+expense of *the thing that tried to get attention and didn't deserve
+it*. Not at people's expense, not snark. Wit lives in specific
+understatement, tautology, and structural punchlines — NOT in
+explaining why the story doesn't matter. The joke IS the dismissal.
 
-**The AI-writes-a-symphony demo, back again.** Previous cycles: 2023,
-2017. Each iteration the demo gets slightly better and the headline
-stays exactly the same. *Manufactured hype*
+Target moves (copy the register, not the exact phrasing):
 
-**Everyone briefly cared about a Peloton executive's resignation letter.** *In-circle hype*
+*Dry tautology — say what it is, then say it's only that:*
+"Matt Wuerker drew some cartoons about April 2026. They are cartoons
+about April 2026." *In-circle hype*
 
-*Pattern-naming is the dismissal. Minimal. No scolding. Label is in
-italics in markdown; `<span class="shrug-tag">` in HTML.*
+*Recursive specificity — notable only to the people it's notable to:*
+"Japan is minting commemorative coins for the Showa Era centennial,
+which is a thing Japan does, and which will be of great interest to
+the people it is of great interest to." *In-circle hype*
+
+*Time-bound punchline — the structure carries the joke:*
+"Hong Kong announced a public consultation on its first five-year
+plan, which will resolve in approximately five years." *In-circle hype*
+
+*Proleptic forgetting — name the decay:*
+"A Chinese worker went viral for winning seven days of rain leave
+from a generous employer — a charming story that will be forgotten
+by Thursday." *48-hour controversy*
+
+*Self-consuming pattern — show the recurrence:*
+"Marjorie Taylor Greene predicted a GOP midterm bloodbath in a
+Politico interview — the kind of prediction that generates 48 hours
+of takes and then gets quietly filed next to all the other midterm
+predictions." *48-hour controversy*
+
+Bad (explanatory, preachy, or generic — the wit dies):
+
+- "…is editorial commentary, not a news event — the internet will
+  survive without a take on it." *(explains why it's not worth
+  covering; the reader already knows)*
+- "…which is a thing that is happening." *(no observation, generic)*
+- "…which is exactly as exciting as it sounds." *(could apply to any
+  shrug item; not specific)*
+- "…charming and also not news." *(tells instead of shows; flat)*
+
+The shrug section is the one place the brief gets to be funny.
+**Specific > generic. Show > tell. Be funny, not preachy.**
+"Clarity over brevity" applies less here — the rhythm of the joke
+matters. Name the pattern in one observational line; let the
+structure carry the dismissal. Label in italics in markdown;
+`<span class="shrug-tag">` in HTML.
 
 # Structure
 
@@ -351,8 +388,13 @@ Bad (too long, meta-framed):
 
 ### `shrug[]` → `## Worth a shrug`
 
-One wry line per item. Name the hype, dismiss it, end with the label.
-No headline, no paragraph, no "to be fair."
+One wry line per item. Name the hype, dismiss it with an observation,
+end with the label. **This is where the brief gets to be funny** —
+dry wit, tautology, structural punchlines. Do NOT explain why the
+story doesn't matter; let the observation do that. No headline, no
+paragraph, no "to be fair." See `## Gold examples` → `Worth a shrug`
+for target moves (dry tautology, recursive specificity, time-bound
+punchline, proleptic forgetting, self-consuming pattern).
 
 In **markdown**: end the line with the label in italics — `*48-hour controversy*`.
 In **HTML**: wrap the label in `<span class="shrug-tag">48-hour controversy</span>`.
