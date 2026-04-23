@@ -38,6 +38,9 @@ type ConfigMap = {
   "scorer.prefilter_prompt_version": string;
   "scorer.prefilter_top_fraction": number;
   "scorer.prefilter_max_tokens": number;
+  "scorer.dedup_enabled": boolean;
+  "scorer.dedup_similarity_threshold": number;
+  "scorer.dedup_lookback_days": number;
   "gate.x_threshold": number;
   "gate.delta": number;
   "gate.confidence_floor": "low" | "medium" | "high";
@@ -121,9 +124,13 @@ export async function score(): Promise<void> {
       ok++;
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       const totalElapsed = ((Date.now() - runStart) / 1000).toFixed(0);
+      const inheritTag =
+        result.inherited_from !== null
+          ? ` [inherit←#${result.inherited_from} sim=${result.inherited_similarity?.toFixed(3)}]`
+          : "";
       const outcome = result.early_reject
-        ? "early_reject"
-        : `z=${result.zeitgeist_score} c=${result.composite} gate=${result.passed ? "PASS" : "fail"}`;
+        ? `early_reject${inheritTag}`
+        : `z=${result.zeitgeist_score} c=${result.composite} gate=${result.passed ? "PASS" : "fail"}${inheritTag}`;
       done++;
       console.log(
         `[score] ${done}/${total} id=${story.id} ${outcome} (${elapsed}s, total ${totalElapsed}s)`,
@@ -220,6 +227,8 @@ interface StoryResult {
   zeitgeist_score: number;
   composite: number;
   passed: boolean;
+  inherited_from: number | null;
+  inherited_similarity: number | null;
 }
 
 async function processStory(
@@ -229,6 +238,33 @@ async function processStory(
 ): Promise<StoryResult> {
   const embeddingVec =
     story.embedding ?? (await ensureEmbedding(story));
+
+  // Semantic dedup. Before paying for a full scorer call, check whether
+  // a near-duplicate was scored recently. If similarity crosses the
+  // threshold, inherit that neighbor's scores verbatim and skip the LLM.
+  // Chains are prevented by excluding inherited rows from the search.
+  if (cfg["scorer.dedup_enabled"]) {
+    const inherit = await tryInheritFromNeighbor(
+      story,
+      embeddingVec,
+      cfg["scorer.dedup_similarity_threshold"],
+      cfg["scorer.dedup_lookback_days"],
+    );
+    if (inherit !== null) {
+      // Inherited rows still run the gate (it's mechanical — no LLM)
+      // so passed_gate reflects the current gate config, not whatever
+      // was in force when the donor was scored.
+      const passed = inherit.early_reject ? false : await applyGate(story.id, cfg);
+      return {
+        early_reject: inherit.early_reject,
+        zeitgeist_score: inherit.zeitgeist_score,
+        composite: inherit.composite,
+        passed,
+        inherited_from: inherit.neighborId,
+        inherited_similarity: inherit.similarity,
+      };
+    }
+  }
 
   let themeId = story.theme_id;
   if (themeId === null) {
@@ -283,6 +319,112 @@ async function processStory(
     zeitgeist_score: output.scores.zeitgeist,
     composite: output.scores.composite,
     passed,
+    inherited_from: null,
+    inherited_similarity: null,
+  };
+}
+
+// Semantic dedup lookup + inherit. Scans the `story` table for the
+// nearest already-scored (and not-itself-inherited) row within the
+// lookback window. If cosine similarity ≥ threshold, copies the donor's
+// raw_output + denormalized scores + factors onto this row and sets
+// scored_via_story_id. raw_input stays NULL — signals "we skipped the
+// scorer" and lets replay audits differentiate.
+async function tryInheritFromNeighbor(
+  story: StoryRow,
+  embeddingVec: string,
+  threshold: number,
+  lookbackDays: number,
+): Promise<{
+  neighborId: number;
+  similarity: number;
+  early_reject: boolean;
+  zeitgeist_score: number;
+  composite: number;
+} | null> {
+  const cutoff = new Date(Date.now() - lookbackDays * 24 * 3600_000);
+  const row = await db
+    .selectFrom("story")
+    .select([
+      "id",
+      "raw_output",
+      "theme_id",
+      "category_id",
+      "zeitgeist_score",
+      "half_life",
+      "reach",
+      "non_obviousness",
+      "structural_importance",
+      "composite",
+      "point_in_time_confidence",
+      "theme_relationship",
+      "base_rate_per_year",
+      "early_reject",
+      "scorer_model_id",
+      "scorer_prompt_version",
+      sql<number>`1 - (embedding <=> ${embeddingVec}::vector)`.as("sim"),
+    ])
+    .where("scored_at", ">=", cutoff)
+    .where("scored_via_story_id", "is", null)
+    .where("id", "!=", story.id)
+    .where("embedding", "is not", null)
+    .orderBy(sql`embedding <=> ${embeddingVec}::vector`)
+    .limit(1)
+    .executeTakeFirst();
+
+  if (!row || row.sim < threshold) return null;
+
+  await db
+    .updateTable("story")
+    .set({
+      scored_at: new Date(),
+      scored_via_story_id: Number(row.id),
+      scorer_model_id: row.scorer_model_id,
+      scorer_prompt_version: row.scorer_prompt_version,
+      raw_output: row.raw_output as never,
+      zeitgeist_score: row.zeitgeist_score,
+      half_life: row.half_life,
+      reach: row.reach,
+      non_obviousness: row.non_obviousness,
+      structural_importance: row.structural_importance,
+      composite: row.composite,
+      point_in_time_confidence: row.point_in_time_confidence,
+      theme_relationship: row.theme_relationship,
+      base_rate_per_year: row.base_rate_per_year,
+      early_reject: row.early_reject,
+      theme_id: row.theme_id,
+      category_id: row.category_id,
+    })
+    .where("id", "=", story.id)
+    .execute();
+
+  // Copy the donor's factor tags onto this story. Duplicates are no-ops
+  // via the primary key.
+  const factors = await db
+    .selectFrom("story_factor")
+    .select(["kind", "factor"])
+    .where("story_id", "=", Number(row.id))
+    .execute();
+  if (factors.length > 0) {
+    await db
+      .insertInto("story_factor")
+      .values(
+        factors.map((f) => ({
+          story_id: story.id,
+          kind: f.kind,
+          factor: f.factor,
+        })),
+      )
+      .onConflict((oc) => oc.doNothing())
+      .execute();
+  }
+
+  return {
+    neighborId: Number(row.id),
+    similarity: row.sim,
+    early_reject: row.early_reject,
+    zeitgeist_score: row.zeitgeist_score ?? 0,
+    composite: row.composite !== null ? Number(row.composite) : 0,
   };
 }
 
@@ -694,5 +836,10 @@ async function loadConfig(): Promise<ConfigMap> {
   map["scorer.prefilter_prompt_version"] ??= map["scorer.prompt_version"];
   map["scorer.prefilter_top_fraction"] ??= 0.3;
   map["scorer.prefilter_max_tokens"] ??= 1500;
+  // Semantic-dedup knobs (migration 022). Default on so the scorer bill
+  // drops immediately; threshold is conservative to avoid false inherits.
+  map["scorer.dedup_enabled"] ??= true;
+  map["scorer.dedup_similarity_threshold"] ??= 0.95;
+  map["scorer.dedup_lookback_days"] ??= 3;
   return map as ConfigMap;
 }

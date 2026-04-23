@@ -19,29 +19,57 @@ export async function ingest(): Promise<void> {
     return;
   }
 
+  // Pre-compute every (connector, scope) pair so the progress counter is
+  // meaningful — scopes() may itself be async (RSS has ~15 feeds).
+  const plan: Array<{ conn: Connector; scope: string }> = [];
   for (const conn of connectors) {
     const scopes = conn.scopes
       ? await Promise.resolve(conn.scopes())
       : [DEFAULT_SCOPE];
-    for (const scope of scopes) {
-      try {
-        await runConnector(conn, scope);
-      } catch (err) {
-        console.error(`[ingest] ${conn.name}[${scope}] failed:`, err);
-      }
+    for (const scope of scopes) plan.push({ conn, scope });
+  }
+  console.log(
+    `[ingest] ${plan.length} source${plan.length === 1 ? "" : "s"} to pull (${connectors.map((c) => c.name).join(", ")})`,
+  );
+
+  const startedAt = Date.now();
+  let done = 0;
+  let totalFetched = 0;
+  let totalInserted = 0;
+  for (const { conn, scope } of plan) {
+    const i = ++done;
+    const tag = `(${i}/${plan.length}) ${conn.name}[${scope}]`;
+    console.log(`[ingest] ${tag} pulling…`);
+    const t0 = Date.now();
+    try {
+      const { fetched, inserted } = await runConnector(conn, scope);
+      totalFetched += fetched;
+      totalInserted += inserted;
+      console.log(
+        `[ingest] ${tag} fetched=${fetched} inserted=${inserted} (${Date.now() - t0}ms)`,
+      );
+    } catch (err) {
+      console.error(
+        `[ingest] ${tag} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
+  const durSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(
+    `[ingest] done · ${totalFetched} fetched, ${totalInserted} inserted across ${plan.length} source${plan.length === 1 ? "" : "s"} in ${durSec}s`,
+  );
 }
 
-async function runConnector(conn: Connector, scope: string): Promise<void> {
+async function runConnector(
+  conn: Connector,
+  scope: string,
+): Promise<{ fetched: number; inserted: number }> {
   const cursor = await loadCursor(conn.name, scope);
   const raws = await conn.fetchSince(cursor);
   const normalized = raws.map((r) => conn.normalize(r));
   const inserted = await upsertStories(normalized);
   await saveCursor(conn.name, scope, new Date());
-  console.log(
-    `[ingest] ${conn.name}[${scope}]: fetched=${raws.length} inserted=${inserted}`,
-  );
+  return { fetched: raws.length, inserted };
 }
 
 async function loadCursor(

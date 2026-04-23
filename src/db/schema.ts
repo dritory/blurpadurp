@@ -78,6 +78,7 @@ export interface Database {
     first_pass_model_id: string | null;
     first_pass_prompt_version: string | null;
     first_pass_scored_at: Date | null;
+    scored_via_story_id: number | null;
   };
 
   story_factor: {
