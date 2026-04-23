@@ -18,19 +18,35 @@ export const About: FC = () => (
 
     <h2>Mission</h2>
     <p>
-      <strong>Let readers quit social media for keeping up.</strong>
+      <strong>
+        Let readers quit social media for keeping up — on both what's
+        being discussed and what actually matters.
+      </strong>
     </p>
     <p>
-      Most people use social feeds to answer one question: <em>"What's
-      everyone talking about?"</em> Blurpadurp replaces that function. A
-      reader who follows Blurpadurp should be able to hold their own in any
-      interesting conversation — at lunch, at a dinner party, at the coffee
-      machine — without opening TikTok, X, or Reddit.
+      Social feeds answer one question — <em>"What's everyone talking
+      about?"</em> — and treat that as the whole job. It isn't. A reader
+      who follows Blurpadurp should be able to hold their own in any
+      interesting conversation <em>and</em> catch the slower, quieter
+      stories that will still matter in twelve months: the law that
+      passed on page four, the study that will redirect a field, the
+      geopolitical shift nobody's trending. Both without opening TikTok,
+      X, or Reddit.
     </p>
+    <p>The brief balances two axes:</p>
+    <ul>
+      <li>
+        <strong>Conversational relevance</strong> — what informed adults
+        are actually discussing this week. Keeps the reader in the loop.
+      </li>
+      <li>
+        <strong>Durable significance</strong> — what will still matter
+        in twelve months. Keeps the reader from missing the consequential.
+      </li>
+    </ul>
     <p>
-      The gate is <strong>current conversational relevance</strong>, not
-      long-term historical weight. We publish what informed adults will
-      actually be discussing over the next one to two weeks.
+      Strong on both leads the issue. Strong on one earns inclusion.
+      <em>Worth knowing</em> is the section built for the latter.
     </p>
 
     <h2>Editorial principles</h2>

@@ -9,19 +9,28 @@ per week = better product.
 
 ## Mission
 
-**Let readers quit social media for keeping-up.**
+**Let readers quit social media for keeping up — on both what's being
+discussed and what actually matters.**
 
-Most people use social feeds to answer one question: *"What's everyone
-talking about?"* Blurpadurp replaces that function. A reader who follows
+Social feeds answer one question — *"What's everyone talking about?"* —
+and treat that as the whole job. It isn't. A reader who follows
 Blurpadurp should be able to hold their own in any interesting
 conversation — at lunch, at a dinner party, at the coffee machine, at
-Easter dinner — without opening TikTok, X, or Reddit.
+Easter dinner — *and* catch the slower, quieter stories that will still
+matter in twelve months: the law that passed on page four, the study
+that will redirect a field, the geopolitical shift nobody's trending.
+Both without opening TikTok, X, or Reddit.
 
-The gate is **current conversational relevance**, not long-term historical
-weight. We publish what informed adults will actually be discussing over
-the next 1–2 weeks. Long-term "structural" importance is scored separately
-and stored for retrospective curation, but it does not drive the weekly
-publish decision.
+The brief balances two axes:
+
+- **Conversational relevance** — what informed adults are actually
+  discussing this week. Keeps the reader in the loop.
+- **Durable significance** — what will still matter in twelve months.
+  Keeps the reader from missing the consequential.
+
+Strong on both leads the issue. Strong on one earns inclusion. *Worth
+knowing* is the section built for the latter — quiet-but-consequential
+items the algorithmic feed will never surface.
 
 The filter is the product. The filter is opinionated and global.
 
