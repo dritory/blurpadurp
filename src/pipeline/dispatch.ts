@@ -50,6 +50,7 @@ async function runDispatch(): Promise<void> {
       "e.email as email",
     ])
     .where("i.published_at", ">=", cutoff)
+    .where("i.is_draft", "=", false)
     .where("e.confirmed_at", "is not", null)
     .where("e.unsubscribed_at", "is", null)
     // Only send issues published at or after the subscriber confirmed.

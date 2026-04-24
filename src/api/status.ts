@@ -59,6 +59,7 @@ export async function loadPipelineStatus(): Promise<PipelineStatus> {
   const lastIssueRow = await db
     .selectFrom("issue")
     .select(sql<Date | null>`max(published_at)`.as("t"))
+    .where("is_draft", "=", false)
     .executeTakeFirst();
   const lastIssueAt = lastIssueRow?.t ?? null;
 
