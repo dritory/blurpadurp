@@ -98,7 +98,14 @@ export const Layout: FC<{
           <footer role="contentinfo">
             <p>Silence is a feature. If nothing clears the bar, nothing publishes.</p>
             <p>
-              <a href="/privacy">Privacy</a> · <a href="/feed.xml">RSS</a>
+              <a href="/privacy">Privacy</a> · <a href="/feed.xml">RSS</a> ·{" "}
+              <a href="https://github.com/dritory/blurpadurp" rel="noopener noreferrer" target="_blank">
+                Source
+              </a>{" "}
+              ·{" "}
+              <a href="https://buymeacoffee.com/dritoryr" rel="noopener noreferrer" target="_blank">
+                Coffee
+              </a>
             </p>
           </footer>
         </div>

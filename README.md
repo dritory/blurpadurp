@@ -1,44 +1,33 @@
 # Blurpadurp
 
-The anti-social-media zeitgeist brief. Subscribe once, quit social media.
+One brief a week. No account, no tracking, no password.
 
-Design docs live in [`docs/`](./docs):
-
-- [`concept.md`](./docs/concept.md) — mission, non-negotiable rules, scope
-- [`architecture.md`](./docs/architecture.md) — pipeline, sources, data model, cost
-- [`scoring.md`](./docs/scoring.md) — rubric, gate, precision techniques
-- [`scoring-prompt.md`](./docs/scoring-prompt.md) — the actual scorer prompt (v0.1)
-- [`backtesting.md`](./docs/backtesting.md) — validation methodology
-- [`open-questions.md`](./docs/open-questions.md) — unresolved decisions
-
-## Stack
+A filter, run by a tired wizard. The brief publishes when something
+actually clears the bar, nothing otherwise; success is fewer minutes of
+your week, not more. Two axes: what informed adults are actually
+discussing, and what will still matter in twelve months.
 
 TypeScript on Bun. Hono for HTTP + JSX server rendering. Postgres with
-pgvector. Kysely for type-safe SQL. Anthropic SDK directly. See
-[`docs/architecture.md`](./docs/architecture.md).
+pgvector. Anthropic for scoring, editing, and composition. Voyage for
+embeddings. Resend for email.
 
-## Layout
+Pre-1.0 — schema and prompts change without backwards compatibility.
 
-```
-src/
-├── connectors/     # data sources (1 interface, N implementations)
-├── ai/             # LLM stages: scorer, composer, theme classifier, ...
-├── pipeline/       # orchestration — ingest → score → gate → compose → dispatch
-├── db/             # Kysely schema + migrator
-├── api/            # Hono routes
-├── views/          # JSX templates
-└── shared/         # Zod schemas, env loader
-```
+## Running locally
 
-## Local development
+Copy `.env.example` to `.env` and fill in the API keys. Then:
 
 ```sh
-cp .env.example .env           # fill in ANTHROPIC_API_KEY etc.
-docker compose up -d           # Postgres + pgvector
+docker compose up -d
 bun install
-bun run migrate                # apply migrations/*.sql
-bun run cli ingest             # (stub) exercise the pipeline
-bun run dev:api                # Hono on :3000
+bun run migrate
+bun run cli ingest
+bun run cli score
+bun run cli compose
+bun run dev:api
 ```
 
-Pre-1.0. Schema and behavior may change without notice.
+See `docs/concept.md` for the philosophy, `docs/deploy.md` for the Fly
++ Neon recipe, `docs/tuning.md` for the prompt-iteration loop.
+
+Dual-licensed Apache-2.0 OR MIT. Copyright © 2026 Endre Dåvøy Vestå.
