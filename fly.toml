@@ -12,23 +12,21 @@ primary_region = "ams"
   NODE_ENV = "production"
   BLURPADURP_PUBLIC_URL = "https://blurpadurp.fly.dev"
 
-[[services]]
-  protocol = "tcp"
+# Single HTTP service handling port 80 + 443 with auto-TLS. Fly's
+# modern pattern — don't mix with [[services]], that triggers the
+# "conflicting service definitions on port 443" error.
+[http_service]
   internal_port = 3000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
 
-  [[services.ports]]
-    port = 80
-    handlers = ["http"]
-    force_https = true
-
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
-
-[[services.http_checks]]
-  interval = "30s"
-  grace_period = "5s"
-  method = "get"
-  path = "/health"
-  protocol = "http"
-  timeout = "5s"
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "5s"

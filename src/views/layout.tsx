@@ -102,11 +102,7 @@ export const Layout: FC<{
             </p>
           </footer>
         </div>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `(function(){try{var k="blurp_last_wave",n=Date.now(),l=Number(sessionStorage.getItem(k)||0);if(n-l>=10000){var a=document.querySelector('a[href="/subscribe"]');if(a){a.classList.add("waving");sessionStorage.setItem(k,String(n));setTimeout(function(){a.classList.remove("waving");},1800);}}}catch(e){}})();`,
-          }}
-        />
+        <script src="/assets/wave.js" defer></script>
       </body>
     </html>
   );

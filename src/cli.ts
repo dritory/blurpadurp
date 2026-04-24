@@ -19,6 +19,7 @@ const SUBCOMMANDS = [
   "composer-replay",
   "editor-replay",
   "reset-publish",
+  "retention",
   "eval",
 ] as const;
 
@@ -97,6 +98,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
     }
     case "reset-publish":
       await (await import("./pipeline/reset-publish.ts")).resetPublish();
+      return;
+    case "retention":
+      await (await import("./pipeline/retention.ts")).retention();
       return;
     case "eval":
       await (await import("./pipeline/eval.ts")).evalSummary();

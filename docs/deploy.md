@@ -143,27 +143,79 @@ public.
 
 ## 8. Schedule the pipeline
 
-Fly Machines support scheduled runs. Create one per cron job:
+| Stage | Cadence | Why |
+|---|---|---|
+| `ingest` | hourly | RSS/GDELT refresh faster than daily; no LLM cost |
+| `score` | chained into compose (see below) | Ensures every ingested story has a verdict before the week's brief is composed |
+| `compose` | weekly, Sunday afternoon UTC | Product cadence — one brief a week |
+| `dispatch` | hourly | New confirmations + breaking issues land near subscriber's delivery window |
+| `retention` | daily | GDPR storage-limitation policy: prune unconfirmed subs + anonymize long-unsubscribed rows + trim old dispatch_log entries |
+
+The `score` + `compose` chain matters: with ingest hourly and a daily
+score job, the last 24 hours of stories are always unscored at compose
+time and can't pass the gate. Chaining scores a final catchup pass
+right before the weekly compose, so nothing ingested up to an hour
+before the brief is dropped.
+
+Fly Machines support scheduled runs. `--schedule` only accepts the
+presets `hourly | daily | weekly | monthly | yearly` — no arbitrary
+cron. The exact hour "weekly" fires is Fly's choice and doesn't matter
+for this product: dispatch runs hourly and delivers each subscriber at
+their own `delivery_time_local`, so compose can complete any time on
+Sunday and everyone still gets it on their preferred morning.
 
 ```bash
 # hourly ingest
-fly machine run . --schedule hourly --command "bun run cli ingest"
+fly machine run . --schedule hourly --region ams \
+  --command "bun run cli ingest" -a blurpadurp
 
-# daily score (cheap, runs prefilter + final)
-fly machine run . --schedule daily --command "bun run cli score"
+# hourly dispatch — sends any issue published after a subscriber's
+# confirmed_at that hasn't been dispatched yet.
+fly machine run . --schedule hourly --region ams \
+  --command "bun run cli dispatch" -a blurpadurp
 
-# weekly compose
-fly machine run . --schedule weekly --command "bun run cli compose"
+# daily score — catchup pass on every unscored story. Fast when the
+# prefilter is on; the progressive scorer only spends the expensive
+# model on the top fraction.
+fly machine run . --schedule daily --region ams \
+  --command "bun run cli score" -a blurpadurp
 
-# hourly dispatch (once dispatch is implemented)
-# fly machine run . --schedule hourly --command "bun run cli dispatch"
+# weekly: chain another score pass + compose so the brief sees every
+# ingestion up to an hour before it fires.
+fly machine run . --schedule weekly --region ams \
+  --command "sh -c 'bun run cli score && bun run cli compose'" -a blurpadurp
+
+# daily retention — prune unconfirmed subs (30d), anonymize
+# unsubscribed (90d), trim old dispatch_log (180d). No API calls.
+fly machine run . --schedule daily --region ams \
+  --command "bun run cli retention" -a blurpadurp
 ```
+
+The `score` pass runs twice in a busy week (daily + chained into the
+weekly). That's intentional and idempotent — the second run skips
+anything already scored.
 
 These machines share the app's image + secrets. They exit after running,
 so there's no idle cost.
 
-Alternative: a single-node container running a Bun cron loop. Simpler
-ops, no Fly-specific machine config, but no free retry-on-failure.
+Alternative: host cron against `scripts/weekly-brief.sh`, which runs
+ingest→score→compose→dispatch in sequence. Simpler ops on a single VPS,
+no Fly-specific machine config.
+
+### Budget check
+
+At operator scale (solo + friends, hourly ingest, weekly compose):
+
+| Line | Approx / month |
+|---|---|
+| Ingest | $0 (no LLM) |
+| Score | $5–15 (Anthropic; lower end with prefilter on) |
+| Compose + editor | $2 |
+| Dispatch | $0 (Resend free tier covers it) |
+| **Total Anthropic spend** | **$7–17** |
+
+`budget.daily_usd_cap` in the config table is the circuit breaker —
+the stages throw and exit when the day's spend crosses it.
 
 ## 9. Domain (stage 4)
 
@@ -202,13 +254,13 @@ than a deploy and safer.
 | Line item | Approx / mo |
 |---|---|
 | Fly app (shared-cpu-1x, 256MB) | $3 |
-| Fly Postgres (shared-cpu-1x, 10GB) | $5 |
+| Postgres w/ pgvector (Neon free tier, or Fly Machine + volume) | $0–5 |
 | Anthropic (scorer + composer + editor) | $5–15 |
 | Voyage embeddings | $0–2 |
 | BigQuery (GDELT queries) | $0 (free tier) |
 | Resend (transactional email) | $0 (free tier) |
 | Domain | $1 |
-| **Total** | **$14–26 / mo** |
+| **Total** | **$9–26 / mo** |
 
 Progressive scoring (see docs/scoring.md / src/pipeline/score.ts) cuts
 the Anthropic line 3–5x once enabled — the cheap prefilter absorbs the
