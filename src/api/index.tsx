@@ -2152,6 +2152,10 @@ app.onError((err, c) => {
 // Run directly: `bun run src/api/index.ts`
 if (import.meta.main) {
   const port = Number(process.env.PORT ?? 3000);
-  console.log(`listening on http://localhost:${port}`);
-  Bun.serve({ port, fetch: app.fetch });
+  // Bind to 0.0.0.0 so Fly's proxy (and any container runtime) can
+  // reach the socket. Bun.serve defaults to localhost otherwise, which
+  // is invisible from outside the machine's network namespace.
+  const hostname = "0.0.0.0";
+  console.log(`listening on http://${hostname}:${port}`);
+  Bun.serve({ port, hostname, fetch: app.fetch });
 }
