@@ -17,6 +17,7 @@ import type {
 } from "../shared/composer-schema.ts";
 import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
+import { withLock } from "../shared/pipeline-lock.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
 // Penalty factors that push an otherwise-picked story into the Worth
@@ -74,6 +75,10 @@ type ConfigMap = {
 };
 
 export async function compose(): Promise<void> {
+  await withLock("compose", 15 * 60_000, runCompose);
+}
+
+async function runCompose(): Promise<void> {
   const cfg = await loadConfig();
   const composer = makeComposer({
     version: cfg["composer.prompt_version"],

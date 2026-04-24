@@ -41,7 +41,7 @@ create_machine() {
 create_machine ingest    hourly bun run cli ingest
 create_machine dispatch  hourly bun run cli dispatch
 create_machine score     daily  bun run cli score
-create_machine weekly    weekly /bin/sh -c 'bun run cli score && bun run cli compose'
+create_machine weekly    weekly bun run cli compose
 create_machine retention daily  bun run cli retention
 
 echo ""

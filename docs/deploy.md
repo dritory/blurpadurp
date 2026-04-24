@@ -146,16 +146,28 @@ public.
 | Stage | Cadence | Why |
 |---|---|---|
 | `ingest` | hourly | RSS/GDELT refresh faster than daily; no LLM cost |
-| `score` | chained into compose (see below) | Ensures every ingested story has a verdict before the week's brief is composed |
-| `compose` | weekly, Sunday afternoon UTC | Product cadence — one brief a week |
-| `dispatch` | hourly | New confirmations + breaking issues land near subscriber's delivery window |
+| `score` | daily | Catchup pass on every unscored story |
+| `compose` | weekly | Product cadence — one brief a week |
+| `dispatch` | hourly | New confirmations + newly-published issues land near subscriber's delivery window |
 | `retention` | daily | GDPR storage-limitation policy: prune unconfirmed subs + anonymize long-unsubscribed rows + trim old dispatch_log entries |
 
-The `score` + `compose` chain matters: with ingest hourly and a daily
-score job, the last 24 hours of stories are always unscored at compose
-time and can't pass the gate. Chaining scores a final catchup pass
-right before the weekly compose, so nothing ingested up to an hour
-before the brief is dropped.
+**Race-safety.** Every pipeline stage acquires a DB mutex (the
+`pipeline_lock` table, migration 024) before running. A second
+invocation of the same stage — manual via `fly ssh`, another scheduled
+machine, a deploy-triggered retry — sees the mutex and exits with
+`[<stage>] another run in progress, exiting`. No double-scoring, no
+duplicate issue per week, no race on theme creation. Crashed stages
+release the lock via TTL (5–60 min per stage) so deadlocks don't
+persist.
+
+The weekly machine runs `compose` alone, not `score && compose`.
+Earlier iterations chained score into the weekly run for freshness,
+but that created structural overlap with the daily `score` machine.
+The mutex caught the collision, but the simpler fix is to stop doing
+it: daily `score` keeps the pool at most 24h stale, and the product
+doesn't have a "Saturday night story must make Sunday morning's brief"
+deadline — dispatch is hourly and delivers at each subscriber's
+chosen time.
 
 Fly Machines support scheduled runs. `--schedule` only accepts the
 presets `hourly | daily | weekly | monthly | yearly` — no arbitrary

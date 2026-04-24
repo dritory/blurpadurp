@@ -204,4 +204,10 @@ export interface Database {
     notes: string | null;
     labeled_at: Created;
   };
+
+  pipeline_lock: {
+    stage_name: string;
+    acquired_at: Created;
+    expires_at: Date;
+  };
 }

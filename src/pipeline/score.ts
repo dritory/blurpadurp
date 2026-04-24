@@ -15,6 +15,7 @@ import { makeScorer } from "../ai/scorer.ts";
 import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
+import { withLock } from "../shared/pipeline-lock.ts";
 import type {
   ScorerInput,
   ScorerOutput,
@@ -47,6 +48,10 @@ type ConfigMap = {
 };
 
 export async function score(): Promise<void> {
+  await withLock("score", 60 * 60_000, runScore);
+}
+
+async function runScore(): Promise<void> {
   const cfg = await loadConfig();
   const scorer = makeScorer({
     version: cfg["scorer.prompt_version"],
