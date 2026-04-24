@@ -102,6 +102,7 @@ export function renderBriefEmail(ctx: BriefEmailCtx): Rendered {
   const subject = ctx.title !== null ? ctx.title : `Blurpadurp — ${dateStr}`;
   const titleHtml =
     ctx.title !== null ? `<h1 class="title">${esc(ctx.title)}</h1>` : "";
+  const privacyUrl = `${ctx.brandUrl}/privacy`;
   const body = `
 <p class="brand">Blurpadurp</p>
 <p class="meta">${esc(dateStr)}</p>
@@ -109,7 +110,7 @@ ${titleHtml}
 ${ctx.issueHtml}
 <div class="footer">
   <p>You're receiving this because you subscribed at <a href="${esc(ctx.brandUrl)}">${esc(hostOf(ctx.brandUrl))}</a>. One brief a week when the gate fires, nothing otherwise.</p>
-  <p><a href="${esc(ctx.unsubscribeUrl)}">Unsubscribe</a> · <a href="${esc(ctx.issueUrl)}">Read on web</a></p>
+  <p><a href="${esc(ctx.unsubscribeUrl)}">Unsubscribe</a> · <a href="${esc(ctx.issueUrl)}">Read on web</a> · <a href="${esc(privacyUrl)}">Privacy</a></p>
 </div>`;
   const html = docShell(subject, body);
   const text = [

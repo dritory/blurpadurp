@@ -79,6 +79,7 @@ import {
 } from "../views/admin-themes.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
+import { Privacy } from "../views/privacy.tsx";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
@@ -159,6 +160,8 @@ app.get("/issue/:id", async (c) => {
 });
 
 app.get("/about", (c) => c.html(<About />));
+
+app.get("/privacy", (c) => c.html(<Privacy />));
 
 app.get("/theme/:id", async (c) => {
   const id = Number(c.req.param("id"));

@@ -97,6 +97,9 @@ export const Layout: FC<{
           <main id="main" role="main">{children}</main>
           <footer role="contentinfo">
             <p>Silence is a feature. If nothing clears the bar, nothing publishes.</p>
+            <p>
+              <a href="/privacy">Privacy</a> · <a href="/feed.xml">RSS</a>
+            </p>
           </footer>
         </div>
         <script

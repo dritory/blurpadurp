@@ -1,0 +1,34 @@
+# Fly.io app config for blurpadurp. See docs/deploy.md for the full
+# provisioning recipe (Postgres + pgvector, secrets, scheduled machines
+# for the pipeline). Adjust `app` and `primary_region` to your Fly org.
+
+app = "blurpadurp"
+primary_region = "ams"
+
+[build]
+
+[env]
+  PORT = "3000"
+  NODE_ENV = "production"
+  BLURPADURP_PUBLIC_URL = "https://blurpadurp.fly.dev"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 3000
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+[[services.http_checks]]
+  interval = "30s"
+  grace_period = "5s"
+  method = "get"
+  path = "/health"
+  protocol = "http"
+  timeout = "5s"
