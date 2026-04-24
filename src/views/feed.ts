@@ -7,6 +7,7 @@ interface FeedEntry {
   publishedAt: Date;
   html: string;
   isEventDriven: boolean;
+  title: string | null;
 }
 
 function xmlEscape(s: string): string {
@@ -20,9 +21,10 @@ function xmlEscape(s: string): string {
 
 function entry(e: FeedEntry, baseUrl: string): string {
   const url = `${baseUrl}/issue/${e.id}`;
-  const title = e.isEventDriven
+  const fallback = e.isEventDriven
     ? `Issue #${e.id} — event-driven`
     : `Issue #${e.id}`;
+  const title = e.title ?? fallback;
   return `  <entry>
     <id>${xmlEscape(url)}</id>
     <title>${xmlEscape(title)}</title>

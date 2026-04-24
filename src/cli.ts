@@ -16,6 +16,9 @@ const SUBCOMMANDS = [
   "retag",
   "fixture-capture",
   "fixture-replay",
+  "composer-replay",
+  "editor-replay",
+  "reset-publish",
   "eval",
 ] as const;
 
@@ -72,6 +75,29 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       });
       return;
     }
+    case "composer-replay": {
+      const [issueIdRaw, promptPath, promptVersion, modelId] = args;
+      const issueId = issueIdRaw !== undefined ? Number(issueIdRaw) : undefined;
+      if (issueId !== undefined && (!Number.isFinite(issueId) || issueId <= 0)) {
+        throw new Error("composer-replay: issue_id must be a positive number");
+      }
+      const { replayComposer } = await import("./pipeline/fixture.ts");
+      await replayComposer({ issueId, promptPath, promptVersion, modelId });
+      return;
+    }
+    case "editor-replay": {
+      const [issueIdRaw, promptPath, promptVersion, modelId] = args;
+      const issueId = issueIdRaw !== undefined ? Number(issueIdRaw) : undefined;
+      if (issueId !== undefined && (!Number.isFinite(issueId) || issueId <= 0)) {
+        throw new Error("editor-replay: issue_id must be a positive number");
+      }
+      const { replayEditor } = await import("./pipeline/fixture.ts");
+      await replayEditor({ issueId, promptPath, promptVersion, modelId });
+      return;
+    }
+    case "reset-publish":
+      await (await import("./pipeline/reset-publish.ts")).resetPublish();
+      return;
     case "eval":
       await (await import("./pipeline/eval.ts")).evalSummary();
       return;

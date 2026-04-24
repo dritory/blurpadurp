@@ -49,9 +49,15 @@ const STYLES = `
   .x-panel h3 { font-family: var(--sans); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin: 0 0 8px; font-weight: 600; }
   .x-panel .stat-line { font-family: var(--sans); font-size: 12px; color: var(--ink-soft); margin-top: 6px; font-variant-numeric: tabular-nums; }
 
-  .x-sub-nav { display: flex; gap: 10px; font-family: var(--sans); font-size: 13px; margin: 0 0 20px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; }
-  .x-sub-nav a { text-decoration: none; padding: 6px 12px; border: 1px solid var(--rule); background: #fff; color: var(--ink); }
+  .x-sub-nav { display: flex; gap: 10px; font-family: var(--sans); font-size: 13px; margin: 0 0 20px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; flex-wrap: wrap; }
+  .x-sub-nav a { text-decoration: none; padding: 8px 14px; min-height: 32px; display: inline-flex; align-items: center; border: 1px solid var(--rule); background: #fff; color: var(--ink); }
   .x-sub-nav a.current { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  @media (max-width: 640px) {
+    .x-sub-nav { gap: 6px; }
+    .x-sub-nav a { padding: 10px 14px; min-height: 40px; flex: 1 1 auto; justify-content: center; }
+    .x-panels { grid-template-columns: 1fr; gap: 12px; }
+  }
 `;
 
 export const ExplorerNav: FC<{ current: "home" | "stories" | "gate" }> = ({

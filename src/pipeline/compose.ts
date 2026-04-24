@@ -164,7 +164,11 @@ export async function compose(): Promise<void> {
   ];
   const poolThemeMeta = await loadThemeMeta(poolThemeIds);
 
-  const editorResult = await curateViaEditor(editor, pool, poolThemeMeta);
+  const { output: editorResult, input: editorInput } = await curateViaEditor(
+    editor,
+    pool,
+    poolThemeMeta,
+  );
   const normalizedPicks = editorResult.picks
     .map(normalizePick)
     .sort((a, b) => a.rank - b.rank);
@@ -228,15 +232,15 @@ export async function compose(): Promise<void> {
     return;
   }
 
-  // Partition into the four fixed sections. Rules:
-  // - Arcs ALWAYS go to conversation/worth_knowing (split by rank); an
-  //   arc is by definition a continuing multi-story thread, not an
-  //   emerging/uncertain lead.
-  // - Singles whose lead story meets "watch" criteria (low/medium
-  //   confidence OR an unreplicated/preclinical_only/insufficient_evidence
-  //   penalty factor) go to worth_watching regardless of rank.
-  // - Other singles: rank ≤ CONVERSATION_TOP_N → conversation, else
-  //   worth_knowing.
+  // Partition rules:
+  // - Arcs always route by rank (they're continuing threads, never
+  //   "still developing" placeholders).
+  // - Singles route by rank too: 1..CONVERSATION_TOP_N → conversation,
+  //   next ..WORTH_KNOWING_TOP_N → worth_knowing, 11+ → worth_watching.
+  // - Safety-net override: any item whose lead story has
+  //   confidence = "low" OR an evidence-weak penalty factor
+  //   (unreplicated, preclinical_only, insufficient_evidence) drops to
+  //   worth_watching regardless of rank.
   const allRows = builtItems.flatMap((b) => b.constituentRows);
   const leadIds = builtItems.map((b) => b.item.lead_story_id);
   const allFactors = await loadFactorsByStory(
@@ -244,6 +248,7 @@ export async function compose(): Promise<void> {
   );
 
   const CONVERSATION_TOP_N = 5;
+  const WORTH_KNOWING_TOP_N = 10;
   const conversation: ComposerItem[] = [];
   const worth_knowing: ComposerItem[] = [];
   const worth_watching: ComposerItem[] = [];
@@ -253,15 +258,16 @@ export async function compose(): Promise<void> {
     const conf = leadRow.point_in_time_confidence;
     const penalty = allFactors.get(b.item.lead_story_id)?.penalty ?? [];
     const matchesWatch = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
-    const watchWorthy =
-      b.item.kind === "single" &&
-      (conf === "low" || conf === "medium" || matchesWatch);
-    if (watchWorthy) {
+    const uncertaintyOverride =
+      b.item.kind === "single" && (conf === "low" || matchesWatch);
+    if (uncertaintyOverride) {
       worth_watching.push(b.item);
     } else if (b.item.rank <= CONVERSATION_TOP_N) {
       conversation.push(b.item);
-    } else {
+    } else if (b.item.rank <= WORTH_KNOWING_TOP_N) {
       worth_knowing.push(b.item);
+    } else {
+      worth_watching.push(b.item);
     }
   }
 
@@ -385,22 +391,28 @@ export async function compose(): Promise<void> {
   );
   const output = await composer.run(input);
 
-  // Collect every story_id that appears in ANY section item — that's
-  // what gets persisted on the issue and flipped to published_to_reader.
-  const storyIds = Array.from(
+  // Collect every story_id that appears in ANY section (including shrug)
+  // — that's what gets persisted on the issue and flipped to
+  // published_to_reader. Marking shrug items as published too prevents
+  // them from recurring in the next week's shrug pool.
+  const mainStoryIds = Array.from(
     new Set(
       [conversation, worth_knowing, worth_watching]
         .flat()
         .flatMap((it) => it.stories.map((s) => s.story_id)),
     ),
   );
+  const shrugStoryIds = shrug.map((s) => s.story_id);
+  const storyIds = Array.from(new Set([...mainStoryIds, ...shrugStoryIds]));
 
   const issueId = await persistIssue(
     output,
     storyIds,
     cfg,
+    editorInput,
     editorResult,
     shrug,
+    input,
   );
   console.log(
     `[compose] issue ${issueId} published: ${storyIds.length} stories, ${output.markdown.length} md chars`,
@@ -421,7 +433,7 @@ async function curateViaEditor(
     total: number;
   }>,
   themeMeta: Map<number, ThemeMeta>,
-): Promise<EditorOutput> {
+): Promise<{ output: EditorOutput; input: EditorInput }> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
 
@@ -445,6 +457,8 @@ async function curateViaEditor(
       half_life: p.row.half_life ?? 0,
       reach: p.row.reach ?? 0,
       non_obviousness: p.row.non_obviousness ?? 0,
+      structural_importance: out?.scores?.structural_importance ?? 0,
+      base_rate_per_year: out?.reasoning?.base_rate_per_year ?? 0,
       confidence:
         (p.row.point_in_time_confidence as
           | EditorInput["stories"][number]["confidence"]) ?? null,
@@ -454,6 +468,7 @@ async function curateViaEditor(
         (p.row.theme_relationship as
           | EditorInput["stories"][number]["theme_relationship"]) ?? null,
       scorer_one_liner: out?.summary ?? "",
+      steelman_important: out?.reasoning?.steelman_important ?? "",
       retrodiction_12mo: out?.reasoning?.retrodiction_12mo ?? "",
       factors_trigger: factors.trigger,
       factors_penalty: factors.penalty,
@@ -462,6 +477,7 @@ async function curateViaEditor(
 
   const input: EditorInput = {
     as_of_date: new Date().toISOString().slice(0, 10),
+    pool_composition: buildPoolComposition(editorStories),
     stories: editorStories,
     themes: buildThemesDigest(pool, editorStories, themeMeta),
   };
@@ -470,7 +486,55 @@ async function curateViaEditor(
   console.log(
     `[compose] editor picked ${result.picks.length} stories; cuts: ${result.cuts_summary}`,
   );
-  return { picks: result.picks, cuts_summary: result.cuts_summary };
+  return {
+    output: { picks: result.picks, cuts_summary: result.cuts_summary },
+    input,
+  };
+}
+
+// Pre-compute pool shape for the editor: category distribution,
+// confidence distribution, and explicit lists of the two cohorts
+// where editorial judgment matters most — quiet-but-significant
+// (Worth-knowing candidates) and loud-but-insignificant (the
+// zeitgeist stenography trap).
+const QUIET_ZEITGEIST_MAX = 2;
+const SIGNIFICANT_STRUCTURAL_MIN = 4;
+const LOUD_ZEITGEIST_MIN = 4;
+const INSIGNIFICANT_STRUCTURAL_MAX = 2;
+
+function buildPoolComposition(
+  stories: EditorInput["stories"],
+): EditorInput["pool_composition"] {
+  const byCategory: Record<string, number> = {};
+  const byConfidence = { low: 0, medium: 0, high: 0 };
+  const quiet: number[] = [];
+  const loud: number[] = [];
+  for (const s of stories) {
+    const cat = s.category ?? "unknown";
+    byCategory[cat] = (byCategory[cat] ?? 0) + 1;
+    if (s.confidence === "low") byConfidence.low += 1;
+    else if (s.confidence === "medium") byConfidence.medium += 1;
+    else if (s.confidence === "high") byConfidence.high += 1;
+    if (
+      s.zeitgeist <= QUIET_ZEITGEIST_MAX &&
+      s.structural_importance >= SIGNIFICANT_STRUCTURAL_MIN
+    ) {
+      quiet.push(s.story_id);
+    }
+    if (
+      s.zeitgeist >= LOUD_ZEITGEIST_MIN &&
+      s.structural_importance <= INSIGNIFICANT_STRUCTURAL_MAX
+    ) {
+      loud.push(s.story_id);
+    }
+  }
+  return {
+    total: stories.length,
+    by_category: byCategory,
+    by_confidence: byConfidence,
+    quiet_but_significant: quiet,
+    loud_but_insignificant: loud,
+  };
 }
 
 // Build the themes digest from the editor pool. Every theme with at
@@ -603,6 +667,15 @@ async function rowsForEditor() {
     .execute();
 }
 
+const PENALTY_LABELS: Record<string, string> = {
+  in_circle_hype: "in-circle hype",
+  manufactured_hype: "manufactured hype",
+  controversy_flash: "48-hour controversy",
+};
+function humanizePenaltyFactor(f: string): string {
+  return PENALTY_LABELS[f] ?? f.replace(/_/g, " ");
+}
+
 // Worth a shrug: scored-but-failed-gate items in the compose window
 // whose penalty factors include in_circle_hype / manufactured_hype /
 // controversy_flash. Ranked by how many sources carried it (higher =
@@ -672,7 +745,7 @@ async function loadShrugCandidates(
       title: v.title,
       source_url: v.source_url,
       category: v.category as ComposerInput["shrug"][number]["category"],
-      penalty_factors: [...v.penalty_factors],
+      penalty_factors: [...v.penalty_factors].map(humanizePenaltyFactor),
       source_count: v.source_count,
       scorer_one_liner: v.scorer_one_liner,
     }));
@@ -874,21 +947,26 @@ async function persistIssue(
   output: ComposerOutput,
   storyIds: number[],
   cfg: ConfigMap,
+  editorInput: EditorInput,
   editorResult: EditorOutput,
   shrugCandidates: ComposerInput["shrug"],
+  composerInput: ComposerInput,
 ): Promise<number> {
   return db.transaction().execute(async (tx) => {
     const issue = await tx
       .insertInto("issue")
       .values({
         is_event_driven: false,
+        title: output.title,
         composed_markdown: output.markdown,
         composed_html: output.html,
         story_ids: storyIds,
         composer_prompt_version: cfg["composer.prompt_version"],
         composer_model_id: cfg["composer.model_id"],
+        editor_input_jsonb: JSON.stringify(editorInput) as never,
         editor_output_jsonb: JSON.stringify(editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(shrugCandidates) as never,
+        composer_input_jsonb: JSON.stringify(composerInput) as never,
       })
       .returning("id")
       .executeTakeFirstOrThrow();

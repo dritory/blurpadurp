@@ -42,6 +42,12 @@ const ADMIN_STYLES = `
   .headline-cell .value { font-family: var(--sans); font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 4px; }
   .headline-cell.warn .value { color: var(--flash-err); }
   .bar { display: inline-block; height: 8px; background: var(--accent); opacity: 0.7; }
+
+  @media (max-width: 640px) {
+    .headline-row { grid-template-columns: 1fr; gap: 8px; margin: 8px 0 20px; }
+    .headline-cell { padding: 10px 14px; }
+    .headline-cell .value { font-size: 22px; }
+  }
 `;
 
 function fmtUsd(n: number): string {
@@ -82,6 +88,7 @@ export const AdminCosts: FC<{ data: CostDashboardData }> = ({ data }) => {
       </div>
 
       <h3>Last 14 days</h3>
+      <div class="adm-scroll">
       <table class="fx">
         <thead>
           <tr>
@@ -116,8 +123,10 @@ export const AdminCosts: FC<{ data: CostDashboardData }> = ({ data }) => {
           })}
         </tbody>
       </table>
+      </div>
 
       <h3>By stage (14d total)</h3>
+      <div class="adm-scroll">
       <table class="fx">
         <thead>
           <tr>
@@ -136,6 +145,7 @@ export const AdminCosts: FC<{ data: CostDashboardData }> = ({ data }) => {
           ))}
         </tbody>
       </table>
+      </div>
     </Layout>
   );
 };

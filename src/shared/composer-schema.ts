@@ -100,6 +100,7 @@ export const ComposerInputSchema = z.object({
 export type ComposerInput = z.infer<typeof ComposerInputSchema>;
 
 export const ComposerOutputSchema = z.object({
+  title: z.string().min(1).max(120),
   markdown: z.string(),
   html: z.string(),
 });

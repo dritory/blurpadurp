@@ -143,6 +143,34 @@ function renderUserMessage(input: EditorInput): string {
   lines.push(`as_of_date: ${input.as_of_date}`);
   lines.push(`pool_size: ${input.stories.length}`);
   lines.push(`target_picks: 10-15`, "");
+
+  // Pool composition: the shape the editor is working with. Surfaces
+  // the two cohorts where editorial judgment matters most — "quiet
+  // but significant" (Worth-knowing candidates) and "loud but
+  // insignificant" (stenography trap).
+  const pc = input.pool_composition;
+  lines.push("pool_composition:");
+  const catEntries = Object.entries(pc.by_category)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k}=${v}`);
+  lines.push(`  by_category: ${catEntries.join(" ")}`);
+  lines.push(
+    `  by_confidence: low=${pc.by_confidence.low} medium=${pc.by_confidence.medium} high=${pc.by_confidence.high}`,
+  );
+  lines.push(
+    `  quiet_but_significant (zeitgeist≤2 AND structural≥4) — ${pc.quiet_but_significant.length} stories: [${pc.quiet_but_significant.join(", ")}]`,
+  );
+  lines.push(
+    `    ↑ Worth-knowing candidates. Your bias should be FOR these — they're the consequential stories the feed won't surface.`,
+  );
+  lines.push(
+    `  loud_but_insignificant (zeitgeist≥4 AND structural≤2) — ${pc.loud_but_insignificant.length} stories: [${pc.loud_but_insignificant.join(", ")}]`,
+  );
+  lines.push(
+    `    ↑ Stenography trap. Pick 1–2 max to keep the reader in the loop; more is wire-service reprinting.`,
+  );
+  lines.push("");
+
   // Themes digest first — multi-story themes with day_span >= 2 are
   // obvious arc candidates. Gives the model structural visibility into
   // which stories belong together across the week.
@@ -195,6 +223,9 @@ function renderUserMessage(input: EditorInput): string {
     lines.push(
       `    zeitgeist: ${s.zeitgeist} half_life: ${s.half_life} reach: ${s.reach} non_obviousness: ${s.non_obviousness}`,
     );
+    lines.push(
+      `    structural_importance: ${s.structural_importance}  base_rate_per_year: ${s.base_rate_per_year}`,
+    );
     lines.push(`    confidence: ${s.confidence ?? "-"}`);
     lines.push(
       `    tier1_sources: ${s.tier1_sources} total_sources: ${s.total_sources}`,
@@ -203,6 +234,9 @@ function renderUserMessage(input: EditorInput): string {
       `    theme_relationship: ${s.theme_relationship ?? "new_theme"}`,
     );
     lines.push(`    scorer_one_liner: ${s.scorer_one_liner}`);
+    if (s.steelman_important.length > 0) {
+      lines.push(`    steelman_important: ${s.steelman_important}`);
+    }
     lines.push(`    retrodiction_12mo: ${s.retrodiction_12mo}`);
     if (s.factors_trigger.length > 0) {
       lines.push(`    factors.trigger: [${s.factors_trigger.join(", ")}]`);

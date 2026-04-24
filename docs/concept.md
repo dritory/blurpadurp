@@ -9,19 +9,28 @@ per week = better product.
 
 ## Mission
 
-**Let readers quit social media for keeping-up.**
+**Let readers quit social media for keeping up — on both what's being
+discussed and what actually matters.**
 
-Most people use social feeds to answer one question: *"What's everyone
-talking about?"* Blurpadurp replaces that function. A reader who follows
+Social feeds answer one question — *"What's everyone talking about?"* —
+and treat that as the whole job. It isn't. A reader who follows
 Blurpadurp should be able to hold their own in any interesting
 conversation — at lunch, at a dinner party, at the coffee machine, at
-Easter dinner — without opening TikTok, X, or Reddit.
+Easter dinner — *and* catch the slower, quieter stories that will still
+matter in twelve months: the law that passed on page four, the study
+that will redirect a field, the geopolitical shift nobody's trending.
+Both without opening TikTok, X, or Reddit.
 
-The gate is **current conversational relevance**, not long-term historical
-weight. We publish what informed adults will actually be discussing over
-the next 1–2 weeks. Long-term "structural" importance is scored separately
-and stored for retrospective curation, but it does not drive the weekly
-publish decision.
+The brief balances two axes:
+
+- **Conversational relevance** — what informed adults are actually
+  discussing this week. Keeps the reader in the loop.
+- **Durable significance** — what will still matter in twelve months.
+  Keeps the reader from missing the consequential.
+
+Strong on both leads the issue. Strong on one earns inclusion. *Worth
+knowing* is the section built for the latter — quiet-but-consequential
+items the algorithmic feed will never surface.
 
 The filter is the product. The filter is opinionated and global.
 
@@ -144,3 +153,24 @@ Delivery pattern refuses the engagement trap:
 
 The reader "gets" the meme without needing to watch. They aren't lost when
 someone references it — which is the whole point.
+
+## Blurp
+
+Blurp is Blurpadurp's mascot — a wizard octopus sitting in the header
+next to the wordmark (`public/blurp.svg`).
+
+He's been online a long time. He's fed up with social media and tired of
+the internet's nonsense, so he reads the feeds so you don't have to. Eight
+arms hold the chaos; a pointy hat holds the magic he uses to find the
+actual signal in all of it. He looks slightly overwhelmed and a little
+bit tired — because he is — but he's here, and he's with you.
+
+Blurp is visual only. He does not speak, sign off issues, or narrate
+anything. The composer's voice is the product's voice (wry, dry,
+observant — see above); Blurp is a silent companion, not a character
+voice. No "love, Blurp" sign-offs, no "Blurp says…" asides, no stickers.
+
+He is the one concession to warmth in an otherwise restrained visual
+design. That's on purpose: the product's ethic is severe (silence is a
+feature, the gate is strict), so the front door should feel like it's
+run by someone weary but kind, not by an algorithm.

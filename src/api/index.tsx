@@ -3,6 +3,7 @@
 
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { serveStatic } from "hono/bun";
 import { HTTPException } from "hono/http-exception";
 import { sql } from "kysely";
 import { readdir, stat } from "node:fs/promises";
@@ -18,8 +19,10 @@ import { summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
+import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
-import { verifyToken } from "../shared/tokens.ts";
+import { verifySvixSignature } from "../shared/svix.ts";
+import { signToken, verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import {
   AdminConfig,
@@ -55,10 +58,16 @@ import {
 } from "../views/admin-explore-story.tsx";
 import {
   AdminCaptureView,
+  AdminFixtureMarkdown,
   AdminFixturesList,
+  AdminReplayBrief,
   AdminReplayView,
   type FixtureFile,
 } from "../views/admin-fixtures.tsx";
+import {
+  AdminIssues,
+  type AdminIssueRow,
+} from "../views/admin-issues.tsx";
 import {
   AdminReview,
   type EditorReviewData,
@@ -70,10 +79,18 @@ import {
   type ThemeFilter,
 } from "../views/admin-themes.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
+import { renderConfirmationEmail } from "../views/email.ts";
+import {
+  ManagePage,
+  type Category as ManageCategory,
+  type ManageData,
+} from "../views/manage.tsx";
+import { Privacy } from "../views/privacy.tsx";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
+import { SubscribePage } from "../views/subscribe.tsx";
 import { ThemePage, type ThemeViewData } from "../views/theme.tsx";
 import { TokenResultPage } from "../views/token-result.tsx";
 
@@ -89,6 +106,16 @@ const subscribeLimiter = makeRateLimiter({
 });
 
 export const app = new Hono();
+
+// Static assets live in ./public — served under /assets/*. Safe to cache
+// aggressively; the logo and any supporting files are version-agnostic.
+app.use(
+  "/assets/*",
+  serveStatic({
+    root: "./public",
+    rewriteRequestPath: (path) => path.replace(/^\/assets\//, "/"),
+  }),
+);
 
 app.get("/health", async (c) => {
   const s = await loadPipelineStatus();
@@ -113,8 +140,16 @@ app.get("/health", async (c) => {
 
 app.get("/", async (c) => {
   const latest = await loadLatestIssue();
-  const flash = parseFlash(c.req.query("subscribed"), c.req.query("error"));
-  return c.html(<Home latest={latest} flash={flash} />);
+  return c.html(<Home latest={latest} flash={null} />);
+});
+
+app.get("/subscribe", (c) => {
+  const flash = parseFlash(
+    c.req.query("subscribed"),
+    c.req.query("error"),
+    c.req.query("already"),
+  );
+  return c.html(<SubscribePage flash={flash} />);
 });
 
 app.get("/archive", async (c) => {
@@ -131,6 +166,8 @@ app.get("/issue/:id", async (c) => {
 });
 
 app.get("/about", (c) => c.html(<About />));
+
+app.get("/privacy", (c) => c.html(<Privacy />));
 
 app.get("/theme/:id", async (c) => {
   const id = Number(c.req.param("id"));
@@ -151,12 +188,29 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     basicAuth({ username: adminUser, password: adminPassword }),
   );
 
+  app.get("/admin", (c) => c.redirect("/admin/issues", 302));
+
+  app.get("/admin/issues", async (c) => {
+    const issues = await loadAdminIssues();
+    return c.html(<AdminIssues issues={issues} />);
+  });
+
   app.get("/admin/review/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const data = await loadReview(id);
     if (data === null) return c.notFound();
-    return c.html(<AdminReview data={data} />);
+    const [replays, editorReplays] = await Promise.all([
+      loadReplaysForIssue(id),
+      loadEditorReplaysForIssue(id),
+    ]);
+    return c.html(
+      <AdminReview
+        data={data}
+        replays={replays}
+        editorReplays={editorReplays}
+      />,
+    );
   });
 
   app.get("/admin/status", async (c) => {
@@ -289,10 +343,35 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const name = c.req.param("name");
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) return c.notFound();
     const path = resolve("fixtures", name);
-    const text = await Bun.file(path)
-      .text()
-      .catch(() => null);
+    const text = await Bun.file(path).text().catch(() => null);
     if (text === null) return c.notFound();
+
+    const issueIdMatch = /^(?:composer|editor)-replay-i(\d+)-/.exec(name);
+    const issueId = issueIdMatch && issueIdMatch[1] !== undefined
+      ? Number(issueIdMatch[1])
+      : null;
+
+    // Composer-replay HTML: wrap the rendered brief in admin chrome so
+    // you can click back to the issue review without losing context.
+    if (name.endsWith(".html")) {
+      return c.html(
+        <AdminReplayBrief name={name} html={text} issueId={issueId} />,
+      );
+    }
+
+    // Composer- and editor-replay diffs: side-by-side markdown viewer.
+    if (name.endsWith(".diff.md")) {
+      return c.html(
+        <AdminFixtureMarkdown name={name} content={text} issueId={issueId} />,
+      );
+    }
+
+    // Editor-replay raw JSON — return as-is for inspection.
+    if (name.startsWith("editor-replay-") && name.endsWith(".json")) {
+      return c.body(text, 200, { "Content-Type": "application/json" });
+    }
+
+    // Scorer fixtures (JSONL).
     const rows = text
       .split("\n")
       .filter((l) => l.trim().length > 0)
@@ -310,9 +389,7 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       );
     }
     if ("raw_input" in first && "raw_output" in first) {
-      return c.html(
-        <AdminCaptureView name={name} rows={rows as CapturedRow[]} />,
-      );
+      return c.html(<AdminCaptureView name={name} rows={rows as CapturedRow[]} />);
     }
     return c.text("(unknown fixture format)", 200);
   });
@@ -348,7 +425,7 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       );
     }
     return c.redirect(
-      `/admin/config?saved=1&key=${encodeURIComponent(key)}`,
+      `/admin/config?saved=1&key=${encodeURIComponent(key)}#cfg-${encodeURIComponent(key)}`,
       303,
     );
   });
@@ -405,7 +482,7 @@ app.get("/sitemap.xml", async (c) => {
 app.get("/feed.xml", async (c) => {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .orderBy("published_at", "desc")
     .limit(FEED_MAX_ENTRIES)
     .execute();
@@ -414,6 +491,7 @@ app.get("/feed.xml", async (c) => {
     publishedAt: r.published_at,
     html: r.composed_html,
     isEventDriven: r.is_event_driven,
+    title: r.title,
   }));
   const updated = entries[0]?.publishedAt ?? new Date();
   const xml = renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
@@ -461,27 +539,294 @@ app.get("/unsubscribe/:token", async (c) => {
   return c.html(<TokenResultPage title="Unsubscribed" body="Unsubscribed. No more issues will be sent to this address." />);
 });
 
+// RFC 8058 one-click unsubscribe. Mail clients POST here when the user
+// hits the native Unsubscribe button (set via the List-Unsubscribe-Post
+// header in dispatch.ts).
+app.post("/unsubscribe/:token", async (c) => {
+  const res = verifyToken(c.req.param("token"));
+  if (!res.ok || res.payload.kind !== "unsubscribe-email") {
+    return c.text("invalid token", 400);
+  }
+  await db
+    .updateTable("email_subscription")
+    .set({ unsubscribed_at: new Date() })
+    .where("id", "=", res.payload.subscriptionId)
+    .where("unsubscribed_at", "is", null)
+    .execute();
+  return c.text("ok", 200);
+});
+
+app.get("/manage/:token", async (c) => {
+  const v = verifyToken(c.req.param("token"));
+  if (!v.ok || v.payload.kind !== "manage-email") {
+    return c.html(
+      <TokenResultPage
+        title="Link invalid"
+        body="That preferences link is invalid or expired. The next issue you receive will have a fresh one in the footer."
+        error
+      />,
+      400,
+    );
+  }
+  const data = await loadManageData(
+    v.payload.subscriptionId,
+    c.req.param("token"),
+    parseManageFlash(c.req.query("saved"), c.req.query("error")),
+  );
+  if (data === null) return c.notFound();
+  return c.html(<ManagePage data={data} />);
+});
+
+app.post("/manage/:token", async (c) => {
+  const v = verifyToken(c.req.param("token"));
+  if (!v.ok || v.payload.kind !== "manage-email") {
+    return c.html(
+      <TokenResultPage
+        title="Link invalid"
+        body="That preferences link is invalid or expired."
+        error
+      />,
+      400,
+    );
+  }
+  const token = c.req.param("token");
+  const body = await c.req.parseBody({ all: true });
+
+  // Unsubscribe shortcut.
+  if (body.unsubscribe === "1") {
+    await db
+      .updateTable("email_subscription")
+      .set({ unsubscribed_at: new Date() })
+      .where("id", "=", v.payload.subscriptionId)
+      .where("unsubscribed_at", "is", null)
+      .execute();
+    return c.html(
+      <TokenResultPage
+        title="Unsubscribed"
+        body="Unsubscribed. No more issues will be sent to this address."
+      />,
+    );
+  }
+
+  const time = typeof body.delivery_time_local === "string"
+    ? body.delivery_time_local.trim()
+    : "";
+  const tz = typeof body.timezone === "string" ? body.timezone.trim() : "";
+  const urgent = body.urgent_override === "1";
+  const muteRaw = body.mute;
+  const mutes = Array.isArray(muteRaw)
+    ? muteRaw.filter((v): v is string => typeof v === "string")
+    : typeof muteRaw === "string"
+      ? [muteRaw]
+      : [];
+
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(time)) {
+    return c.redirect(`/manage/${token}?error=bad_time`, 303);
+  }
+  if (!isValidTimezone(tz)) {
+    return c.redirect(`/manage/${token}?error=bad_tz`, 303);
+  }
+
+  // Normalize HH:MM -> HH:MM:00 so Postgres time parsing is happy.
+  const normTime = time.length === 5 ? `${time}:00` : time;
+
+  // Only accept category slugs that actually exist.
+  const validSlugs = new Set(
+    (await db.selectFrom("category").select("slug").execute()).map(
+      (r) => r.slug,
+    ),
+  );
+  const cleanMutes = Array.from(new Set(mutes.filter((m) => validSlugs.has(m))));
+
+  await db
+    .updateTable("email_subscription")
+    .set({
+      delivery_time_local: normTime,
+      timezone: tz,
+      urgent_override: urgent,
+      category_mutes: cleanMutes,
+    })
+    .where("id", "=", v.payload.subscriptionId)
+    .execute();
+
+  return c.redirect(`/manage/${token}?saved=1`, 303);
+});
+
 app.post("/subscribe", async (c) => {
   const ip = clientIp(c.req.raw.headers, null);
   if (!subscribeLimiter.take(ip)) {
-    return c.redirect("/?error=rate_limited", 303);
+    return c.redirect("/subscribe?error=rate_limited", 303);
   }
   const body = await c.req.parseBody();
   // Honeypot: bots fill every field; humans leave this hidden one empty.
   // Silently redirect as if it succeeded — no signal to the bot.
   if (typeof body.company === "string" && body.company.length > 0) {
-    return c.redirect("/?subscribed=1", 303);
+    return c.redirect("/subscribe?subscribed=1", 303);
   }
   const parsed = SubscribeSchema.safeParse({ email: body.email });
   if (!parsed.success) {
-    return c.redirect("/?error=invalid_email", 303);
+    return c.redirect("/subscribe?error=invalid_email", 303);
   }
-  await db
+  const email = parsed.data.email;
+
+  // Upsert and get the row id back. ON CONFLICT DO NOTHING returns no
+  // row when a conflict happens, so we follow with a SELECT for the
+  // already-existing case.
+  let row = await db
     .insertInto("email_subscription")
-    .values({ email: parsed.data.email })
+    .values({ email })
     .onConflict((oc) => oc.column("email").doNothing())
-    .execute();
-  return c.redirect("/?subscribed=1", 303);
+    .returning(["id", "confirmed_at"])
+    .executeTakeFirst();
+  if (row === undefined) {
+    row = await db
+      .selectFrom("email_subscription")
+      .where("email", "=", email)
+      .select(["id", "confirmed_at"])
+      .executeTakeFirst();
+  }
+  if (row === undefined) {
+    // Shouldn't happen — upsert failed and subsequent lookup also
+    // empty. Treat as a validation failure rather than leak a 500.
+    return c.redirect("/subscribe?error=invalid_email", 303);
+  }
+
+  if (row.confirmed_at !== null) {
+    // Already confirmed — don't spam them with another confirmation.
+    return c.redirect("/subscribe?subscribed=1&already=1", 303);
+  }
+
+  // Mint a signed /confirm/:token magic link and send it. Failure to
+  // send is logged but doesn't reveal itself to the user — we never
+  // tell a submitter whether their address was deliverable (prevents
+  // email-validity probing).
+  const token = signToken({
+    kind: "confirm-email",
+    subscriptionId: Number(row.id),
+  });
+  const confirmUrl = `${PUBLIC_URL}/confirm/${token}`;
+  const mail = renderConfirmationEmail({
+    brandUrl: PUBLIC_URL,
+    confirmUrl,
+  });
+  const res = await sendMail({
+    to: email,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text,
+  });
+  if (!res.ok) {
+    console.error(
+      `[subscribe] confirmation send failed for ${email}: ${res.error}`,
+    );
+  }
+  return c.redirect("/subscribe?subscribed=1", 303);
+});
+
+// Resend webhook endpoint. Register in the Resend dashboard as
+// https://<host>/webhooks/resend with event types email.bounced,
+// email.complained, email.delivered (optional). Set RESEND_WEBHOOK_SECRET
+// to the `whsec_...` value Resend generates.
+//
+// Hard bounces and complaints auto-unsubscribe. Soft bounces and
+// delivery notifications update dispatch_log only (for observability).
+app.post("/webhooks/resend", async (c) => {
+  const secret = getEnvOptional("RESEND_WEBHOOK_SECRET");
+  if (secret === undefined || secret.length === 0) {
+    console.error("[resend-webhook] RESEND_WEBHOOK_SECRET not set; rejecting");
+    return c.text("webhook not configured", 503);
+  }
+
+  const rawBody = await c.req.text();
+  const verify = verifySvixSignature({
+    body: rawBody,
+    svixId: c.req.header("svix-id") ?? "",
+    svixTimestamp: c.req.header("svix-timestamp") ?? "",
+    svixSignature: c.req.header("svix-signature") ?? "",
+    secret,
+  });
+  if (!verify.ok) {
+    console.warn(`[resend-webhook] rejected: ${verify.reason}`);
+    return c.text("invalid signature", 401);
+  }
+
+  let event: {
+    type?: string;
+    data?: {
+      email_id?: string;
+      to?: string | string[];
+      bounce?: { type?: string };
+    };
+  };
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return c.text("bad payload", 400);
+  }
+
+  const kind = event.type ?? "";
+  const data = event.data ?? {};
+  const emailId = data.email_id ?? null;
+  const recipients = Array.isArray(data.to)
+    ? data.to
+    : typeof data.to === "string"
+      ? [data.to]
+      : [];
+
+  // Map event → dispatch_log status string. Keep vocabulary stable so
+  // the admin costs/status pages can count categories.
+  let status: string | null = null;
+  let unsubscribe = false;
+  if (kind === "email.delivered") {
+    status = "delivered";
+  } else if (kind === "email.bounced") {
+    const bounceType = data.bounce?.type ?? "";
+    if (/hard|undetermined/i.test(bounceType)) {
+      status = "bounce_hard";
+      unsubscribe = true;
+    } else {
+      status = "bounce_soft";
+    }
+  } else if (kind === "email.complained") {
+    status = "complaint";
+    unsubscribe = true;
+  } else if (kind === "email.delivery_delayed") {
+    status = "delayed";
+  } else {
+    // Unknown / uninteresting event — acknowledge, don't retry.
+    console.log(`[resend-webhook] ignored event: ${kind}`);
+    return c.text("ok", 200);
+  }
+
+  // Update dispatch_log row if we can match by provider_message_id.
+  // Without a match the event is still useful — we can still
+  // unsubscribe on hard bounce / complaint by email.
+  if (emailId !== null && status !== null) {
+    const updated = await db
+      .updateTable("dispatch_log")
+      .set({ status })
+      .where("provider_message_id", "=", emailId)
+      .executeTakeFirst();
+    if (Number(updated.numUpdatedRows ?? 0) === 0) {
+      console.log(
+        `[resend-webhook] no dispatch_log match for provider_message_id=${emailId} (${kind})`,
+      );
+    }
+  }
+
+  if (unsubscribe && recipients.length > 0) {
+    const res = await db
+      .updateTable("email_subscription")
+      .set({ unsubscribed_at: new Date() })
+      .where("email", "in", recipients.map((r) => r.toLowerCase()))
+      .where("unsubscribed_at", "is", null)
+      .executeTakeFirst();
+    console.log(
+      `[resend-webhook] ${kind} → unsubscribed ${Number(res.numUpdatedRows ?? 0)} of ${recipients.length} recipient(s)`,
+    );
+  }
+
+  return c.text("ok", 200);
 });
 
 // --- data loaders ---
@@ -489,7 +834,7 @@ app.post("/subscribe", async (c) => {
 async function loadLatestIssue(): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .orderBy("published_at", "desc")
     .limit(1)
     .executeTakeFirst();
@@ -498,6 +843,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
     id: Number(row.id),
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
+    title: row.title,
     html: row.composed_html,
   };
 }
@@ -505,7 +851,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
 async function loadIssue(id: number): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "composed_html"])
+    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .where("id", "=", id)
     .executeTakeFirst();
   if (!row) return null;
@@ -513,6 +859,7 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     id: Number(row.id),
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
+    title: row.title,
     html: row.composed_html,
   };
 }
@@ -522,20 +869,26 @@ async function listFixtures(): Promise<FixtureFile[]> {
   const names = await readdir(dir).catch(() => [] as string[]);
   const out: FixtureFile[] = [];
   for (const name of names) {
-    if (!name.endsWith(".jsonl")) continue;
+    const isJsonl = name.endsWith(".jsonl");
+    const isComposerHtml = name.startsWith("composer-replay-") && name.endsWith(".html");
+    const isComposerDiff = name.startsWith("composer-replay-") && name.endsWith(".diff.md");
+    const isEditorDiff = name.startsWith("editor-replay-") && name.endsWith(".diff.md");
+    const isEditorJson = name.startsWith("editor-replay-") && name.endsWith(".json");
+    if (!isJsonl && !isComposerHtml && !isComposerDiff && !isEditorDiff && !isEditorJson) {
+      continue;
+    }
     const st = await stat(resolve(dir, name)).catch(() => null);
     if (st === null) continue;
-    const kind: FixtureFile["kind"] = name.startsWith("capture-")
-      ? "capture"
-      : name.startsWith("replay-")
-        ? "replay"
-        : "unknown";
-    out.push({
-      name,
-      sizeBytes: st.size,
-      mtime: st.mtime,
-      kind,
-    });
+    const kind: FixtureFile["kind"] = isComposerHtml || isComposerDiff
+      ? "composer-replay"
+      : isEditorDiff || isEditorJson
+        ? "editor-replay"
+        : name.startsWith("capture-")
+          ? "capture"
+          : name.startsWith("replay-")
+            ? "replay"
+            : "unknown";
+    out.push({ name, sizeBytes: st.size, mtime: st.mtime, kind });
   }
   out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
   return out;
@@ -1441,17 +1794,18 @@ function parseConfigFlash(
   saved: string | undefined,
   error: string | undefined,
   key: string | undefined,
-): { kind: "ok" | "error"; msg: string } | null {
-  const label = key !== undefined && key.length > 0 ? ` (${key})` : "";
-  if (saved) return { kind: "ok", msg: `Saved${label}.` };
+): { kind: "ok" | "error"; msg: string; key: string | null } | null {
+  const k = key !== undefined && key.length > 0 ? key : null;
+  const label = k !== null ? ` (${k})` : "";
+  if (saved) return { kind: "ok", msg: `Saved${label}.`, key: k };
   if (error === "bad_json") {
-    return { kind: "error", msg: `Value is not valid JSON${label}.` };
+    return { kind: "error", msg: `Value is not valid JSON${label}.`, key: k };
   }
   if (error === "unknown_key") {
-    return { kind: "error", msg: `Unknown config key${label}.` };
+    return { kind: "error", msg: `Unknown config key${label}.`, key: k };
   }
   if (error === "missing_key") {
-    return { kind: "error", msg: "Missing key in form submission." };
+    return { kind: "error", msg: "Missing key in form submission.", key: null };
   }
   return null;
 }
@@ -1596,27 +1950,175 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
   };
 }
 
+// Scan fixtures/ for composer-replay-i<N>-<stamp>.html files, group
+// their base names by issue id. One pass covers every issue.
+async function loadReplaysByIssue(): Promise<Map<number, Array<{ base: string; mtime: Date }>>> {
+  const dir = resolve("fixtures");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const out = new Map<number, Array<{ base: string; mtime: Date }>>();
+  for (const name of names) {
+    if (!name.startsWith("composer-replay-i")) continue;
+    if (!name.endsWith(".html")) continue;
+    const m = /^composer-replay-i(\d+)-(.+)\.html$/.exec(name);
+    if (!m || m[1] === undefined) continue;
+    const issueId = Number(m[1]);
+    const st = await stat(resolve(dir, name)).catch(() => null);
+    if (st === null) continue;
+    const base = name.slice(0, -".html".length);
+    const list = out.get(issueId) ?? [];
+    list.push({ base, mtime: st.mtime });
+    out.set(issueId, list);
+  }
+  for (const list of out.values()) {
+    list.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  }
+  return out;
+}
+
+async function loadManageData(
+  subscriptionId: number,
+  token: string,
+  flash: ManageData["flash"],
+): Promise<ManageData | null> {
+  const sub = await db
+    .selectFrom("email_subscription")
+    .select([
+      "email",
+      "delivery_time_local",
+      "timezone",
+      "urgent_override",
+      "category_mutes",
+    ])
+    .where("id", "=", subscriptionId)
+    .executeTakeFirst();
+  if (sub === undefined) return null;
+  const cats = await db
+    .selectFrom("category")
+    .select(["slug", "name"])
+    .orderBy("name", "asc")
+    .execute();
+  return {
+    token,
+    email: sub.email,
+    deliveryTimeLocal: sub.delivery_time_local,
+    timezone: sub.timezone,
+    urgentOverride: sub.urgent_override,
+    categoryMutes: sub.category_mutes,
+    categories: cats as ManageCategory[],
+    flash,
+  };
+}
+
+function parseManageFlash(
+  saved: string | undefined,
+  error: string | undefined,
+): ManageData["flash"] {
+  if (saved) return { kind: "ok", msg: "Preferences saved." };
+  if (error === "bad_time") {
+    return { kind: "error", msg: "Delivery time must be in HH:MM format." };
+  }
+  if (error === "bad_tz") {
+    return {
+      kind: "error",
+      msg: "That timezone isn't one we recognize. Use an IANA name like Europe/Oslo.",
+    };
+  }
+  return null;
+}
+
+// IANA timezone check. Intl.DateTimeFormat throws on unknown names;
+// the success path is the validation. No external tz table required.
+function isValidTimezone(tz: string): boolean {
+  if (tz.length === 0 || tz.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadReplaysForIssue(
+  issueId: number,
+): Promise<Array<{ base: string; mtime: Date }>> {
+  const all = await loadReplaysByIssue();
+  return all.get(issueId) ?? [];
+}
+
+// Editor replays are named editor-replay-i<N>-<stamp>.diff.md (and .json).
+// We key on the .diff.md since that's what the admin review page links to.
+async function loadEditorReplaysForIssue(
+  issueId: number,
+): Promise<Array<{ base: string; mtime: Date }>> {
+  const dir = resolve("fixtures");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const out: Array<{ base: string; mtime: Date }> = [];
+  for (const name of names) {
+    if (!name.startsWith(`editor-replay-i${issueId}-`)) continue;
+    if (!name.endsWith(".diff.md")) continue;
+    const st = await stat(resolve(dir, name)).catch(() => null);
+    if (st === null) continue;
+    const base = name.slice(0, -".diff.md".length);
+    out.push({ base, mtime: st.mtime });
+  }
+  out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  return out;
+}
+
+async function loadAdminIssues(): Promise<AdminIssueRow[]> {
+  const rows = await db
+    .selectFrom("issue")
+    .select([
+      "id",
+      "published_at",
+      "is_event_driven",
+      "composer_prompt_version",
+      "composer_model_id",
+      "story_ids",
+    ])
+    .orderBy("published_at", "desc")
+    .execute();
+  const replays = await loadReplaysByIssue();
+  return rows.map((r) => ({
+    id: Number(r.id),
+    publishedAt: r.published_at,
+    isEventDriven: r.is_event_driven,
+    composerPromptVersion: r.composer_prompt_version,
+    composerModelId: r.composer_model_id,
+    storyCount: (r.story_ids ?? []).length,
+    replays: replays.get(Number(r.id)) ?? [],
+  }));
+}
+
 async function loadArchive(): Promise<ArchiveEntry[]> {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven"])
+    .select(["id", "published_at", "is_event_driven", "title"])
     .orderBy("published_at", "desc")
     .execute();
   return rows.map((r) => ({
     id: Number(r.id),
     publishedAt: r.published_at,
     isEventDriven: r.is_event_driven,
+    title: r.title,
   }));
 }
 
 function parseFlash(
   subscribed: string | undefined,
   error: string | undefined,
+  already?: string | undefined,
 ): Flash {
+  if (subscribed && already) {
+    return {
+      kind: "ok",
+      msg: "Already confirmed. You'll get the next brief when the gate fires.",
+    };
+  }
   if (subscribed) {
     return {
       kind: "ok",
-      msg: "Subscribed. You'll get the next issue when the gate fires.",
+      msg: "Check your inbox for a confirmation link. You're not on the list until you click it.",
     };
   }
   if (error === "invalid_email") {

@@ -3,7 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
-import { AdminNav } from "./admin-nav.tsx";
+import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 
 export type GateFilter = "any" | "pass" | "fail" | "reject";
@@ -64,7 +64,7 @@ const STYLES = `
     padding: 6px 12px; font-size: 13px; font-family: var(--sans); border: 1px solid var(--rule); text-decoration: none; color: var(--ink-soft); background: #fff;
   }
 
-  table.x-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.x-table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 13px; }
   table.x-table th, table.x-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
   table.x-table th { font-family: var(--sans); font-weight: 600; font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
   table.x-table th a { color: inherit; text-decoration: none; }
@@ -127,7 +127,13 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
     <Layout title="Stories — Explorer">
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       <AdminNav current="explore" />
-      <h2>Explorer</h2>
+      <AdminCrumbs
+        trail={[
+          { label: "Explorer", href: "/admin/explore" },
+          { label: "Stories" },
+        ]}
+      />
+      <h2>Stories</h2>
       <ExplorerNav current="stories" />
 
       <div class="x-filters">
@@ -244,6 +250,7 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
         {Math.max(1, Math.ceil(total / pageSize))}
       </p>
 
+      <div class="adm-scroll">
       <table class="x-table">
         <thead>
           <tr>
@@ -308,6 +315,7 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
           })}
         </tbody>
       </table>
+      </div>
 
       {rows.length === 0 ? (
         <p style="margin-top: 20px;">

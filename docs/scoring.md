@@ -48,9 +48,14 @@ an in-circle signal, not zeitgeist.
 | **non_obviousness** (0–5) | Will the reader encounter this in their default channels anyway? | Penalty: subtracted |
 | **structural_importance** (0–5) | Does this change the world's long-term trajectory? | **Logged only — does NOT gate** |
 
-The gate is conversational relevance, not world-historical weight.
-`structural_importance` is captured on every story (for retrospective
-curation and future features) but is not part of the publish decision.
+The weekly publish *gate* is conversational relevance — a story nobody
+is discussing rarely earns space in a brief whose job is keeping the
+reader in the loop. `structural_importance` enters the editor's
+curation within the gated pool: the editor balances the two axes
+explicitly, biasing FOR quiet-but-significant picks (high structural,
+low zeitgeist) and sparing on loud-but-insignificant ones. *Worth
+knowing* is the section that holds the former. See `docs/editor-prompt.md`
+— the four-quadrant rubric is the heart of the editor's job.
 
 ### Gate formula
 
