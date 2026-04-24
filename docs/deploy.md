@@ -157,26 +157,43 @@ time and can't pass the gate. Chaining scores a final catchup pass
 right before the weekly compose, so nothing ingested up to an hour
 before the brief is dropped.
 
-Fly Machines support scheduled runs. Create one per job:
+Fly Machines support scheduled runs. `--schedule` only accepts the
+presets `hourly | daily | weekly | monthly | yearly` — no arbitrary
+cron. The exact hour "weekly" fires is Fly's choice and doesn't matter
+for this product: dispatch runs hourly and delivers each subscriber at
+their own `delivery_time_local`, so compose can complete any time on
+Sunday and everyone still gets it on their preferred morning.
 
 ```bash
 # hourly ingest
-fly machine run . --schedule hourly --command "bun run cli ingest"
+fly machine run . --schedule hourly --region ams \
+  --command "bun run cli ingest" -a blurpadurp
 
 # hourly dispatch — sends any issue published after a subscriber's
 # confirmed_at that hasn't been dispatched yet.
-fly machine run . --schedule hourly --command "bun run cli dispatch"
+fly machine run . --schedule hourly --region ams \
+  --command "bun run cli dispatch" -a blurpadurp
 
-# Weekly pre-compose: score catchup + compose in one shot. Sunday 16:00
-# UTC. Fly supports cron syntax on `--schedule`; if yours doesn't, fall
-# back to `--schedule weekly` and accept Fly's choice of hour.
-fly machine run . --schedule "0 16 * * 0" \
-  --command "sh -c 'bun run cli score && bun run cli compose'"
+# daily score — catchup pass on every unscored story. Fast when the
+# prefilter is on; the progressive scorer only spends the expensive
+# model on the top fraction.
+fly machine run . --schedule daily --region ams \
+  --command "bun run cli score" -a blurpadurp
 
-# Daily retention — prune unconfirmed subs (30d), anonymize unsubscribed
-# (90d), trim old dispatch_log (180d). Cheap, no API calls.
-fly machine run . --schedule daily --command "bun run cli retention"
+# weekly: chain another score pass + compose so the brief sees every
+# ingestion up to an hour before it fires.
+fly machine run . --schedule weekly --region ams \
+  --command "sh -c 'bun run cli score && bun run cli compose'" -a blurpadurp
+
+# daily retention — prune unconfirmed subs (30d), anonymize
+# unsubscribed (90d), trim old dispatch_log (180d). No API calls.
+fly machine run . --schedule daily --region ams \
+  --command "bun run cli retention" -a blurpadurp
 ```
+
+The `score` pass runs twice in a busy week (daily + chained into the
+weekly). That's intentional and idempotent — the second run skips
+anything already scored.
 
 These machines share the app's image + secrets. They exit after running,
 so there's no idle cost.
