@@ -19,8 +19,9 @@ import { summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
+import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
-import { verifyToken } from "../shared/tokens.ts";
+import { signToken, verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import {
   AdminConfig,
@@ -77,6 +78,7 @@ import {
   type ThemeFilter,
 } from "../views/admin-themes.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
+import { renderConfirmationEmail } from "../views/email.ts";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home, type Flash } from "../views/home.tsx";
@@ -135,7 +137,11 @@ app.get("/", async (c) => {
 });
 
 app.get("/subscribe", (c) => {
-  const flash = parseFlash(c.req.query("subscribed"), c.req.query("error"));
+  const flash = parseFlash(
+    c.req.query("subscribed"),
+    c.req.query("error"),
+    c.req.query("already"),
+  );
   return c.html(<SubscribePage flash={flash} />);
 });
 
@@ -539,11 +545,59 @@ app.post("/subscribe", async (c) => {
   if (!parsed.success) {
     return c.redirect("/subscribe?error=invalid_email", 303);
   }
-  await db
+  const email = parsed.data.email;
+
+  // Upsert and get the row id back. ON CONFLICT DO NOTHING returns no
+  // row when a conflict happens, so we follow with a SELECT for the
+  // already-existing case.
+  let row = await db
     .insertInto("email_subscription")
-    .values({ email: parsed.data.email })
+    .values({ email })
     .onConflict((oc) => oc.column("email").doNothing())
-    .execute();
+    .returning(["id", "confirmed_at"])
+    .executeTakeFirst();
+  if (row === undefined) {
+    row = await db
+      .selectFrom("email_subscription")
+      .where("email", "=", email)
+      .select(["id", "confirmed_at"])
+      .executeTakeFirst();
+  }
+  if (row === undefined) {
+    // Shouldn't happen — upsert failed and subsequent lookup also
+    // empty. Treat as a validation failure rather than leak a 500.
+    return c.redirect("/subscribe?error=invalid_email", 303);
+  }
+
+  if (row.confirmed_at !== null) {
+    // Already confirmed — don't spam them with another confirmation.
+    return c.redirect("/subscribe?subscribed=1&already=1", 303);
+  }
+
+  // Mint a signed /confirm/:token magic link and send it. Failure to
+  // send is logged but doesn't reveal itself to the user — we never
+  // tell a submitter whether their address was deliverable (prevents
+  // email-validity probing).
+  const token = signToken({
+    kind: "confirm-email",
+    subscriptionId: Number(row.id),
+  });
+  const confirmUrl = `${PUBLIC_URL}/confirm/${token}`;
+  const mail = renderConfirmationEmail({
+    brandUrl: PUBLIC_URL,
+    confirmUrl,
+  });
+  const res = await sendMail({
+    to: email,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text,
+  });
+  if (!res.ok) {
+    console.error(
+      `[subscribe] confirmation send failed for ${email}: ${res.error}`,
+    );
+  }
   return c.redirect("/subscribe?subscribed=1", 303);
 });
 
@@ -1762,11 +1816,18 @@ async function loadArchive(): Promise<ArchiveEntry[]> {
 function parseFlash(
   subscribed: string | undefined,
   error: string | undefined,
+  already?: string | undefined,
 ): Flash {
+  if (subscribed && already) {
+    return {
+      kind: "ok",
+      msg: "Already confirmed. You'll get the next brief when the gate fires.",
+    };
+  }
   if (subscribed) {
     return {
       kind: "ok",
-      msg: "Subscribed. You'll get the next issue when the gate fires.",
+      msg: "Check your inbox for a confirmation link. You're not on the list until you click it.",
     };
   }
   if (error === "invalid_email") {

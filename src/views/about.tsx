@@ -29,118 +29,83 @@ export const About: FC = () => (
       </div>
     </section>
 
-    <h2>What this is</h2>
+    <h2>What Blurpadurp is</h2>
     <p>
-      An automated, anti-algorithm curated brief. Delivers only the
-      highest-signal items from across news, science, culture, and internet
-      zeitgeist. Success metric is the <em>opposite</em> of engagement:
-      fewer minutes of the reader's time per week is a better product.
+      A filter, run by a tired wizard. One brief a week — sometimes —
+      cutting the noise you'd otherwise wade through on a feed to reach
+      the few stories actually worth knowing. The success metric is
+      inverted: fewer minutes of your time, not more. If nothing clears
+      the bar in a given week, nothing ships. Silence is a feature, not
+      an outage.
     </p>
 
-    <h2>Mission</h2>
+    <h2>What "worth knowing" means here</h2>
     <p>
-      <strong>
-        Let readers quit social media for keeping up — on both what's
-        being discussed and what actually matters.
-      </strong>
+      Two things, and most briefs get only one. There's what informed
+      adults are actually discussing this week — the conversation you'd
+      otherwise be locked out of without a feed. And there's what will
+      still matter in twelve months — the law that passed on page four,
+      the study that redirects a field, the quiet shift every loud story
+      is a downstream consequence of.
     </p>
     <p>
-      Social feeds answer one question — <em>"What's everyone talking
-      about?"</em> — and treat that as the whole job. It isn't. A reader
-      who follows Blurpadurp should be able to hold their own in any
-      interesting conversation <em>and</em> catch the slower, quieter
-      stories that will still matter in twelve months: the law that
-      passed on page four, the study that will redirect a field, the
-      geopolitical shift nobody's trending. Both without opening TikTok,
-      X, or Reddit.
+      A story strong on both leads the issue. Strong on one earns
+      inclusion. <em>Worth knowing</em> is the section built
+      specifically for the second kind: consequential items the
+      algorithmic feed will never surface, because surfacing them
+      wouldn't pay.
     </p>
-    <p>The brief balances two axes:</p>
-    <ul>
-      <li>
-        <strong>Conversational relevance</strong> — what informed adults
-        are actually discussing this week. Keeps the reader in the loop.
-      </li>
-      <li>
-        <strong>Durable significance</strong> — what will still matter
-        in twelve months. Keeps the reader from missing the consequential.
-      </li>
-    </ul>
-    <p>
-      Strong on both leads the issue. Strong on one earns inclusion.
-      <em>Worth knowing</em> is the section built for the latter.
-    </p>
-
-    <h2>Editorial principles</h2>
-    <ul>
-      <li>
-        <strong>Consequential only.</strong> No cherry-picked quotes, no
-        motive attribution, no "this could turn into something." Enforced
-        mechanically by a confidence gate.
-      </li>
-      <li>
-        <strong>Context, not interpretation.</strong> Opinionated on{" "}
-        <em>what belongs in the brief</em>, neutral on{" "}
-        <em>what to think of it</em>. We give readers enough context to
-        connect dots themselves; we do not tell them the conclusion.
-      </li>
-      <li>
-        <strong>Ride for the generalists.</strong> Ten categories, no
-        specialization. A reader should leave each issue with a wider
-        surface area, not a deeper trench.
-      </li>
-      <li>
-        <strong>Silence is a feature.</strong> If nothing clears the bar,
-        nothing publishes. No filler, no "slow news" recap.
-      </li>
-    </ul>
 
     <h2>What we refuse</h2>
-    <ul>
-      <li>Sports results (unless civic-scale — Olympics, World Cup finals).</li>
-      <li>Routine product launches, earnings beats, and horse-race polling.</li>
-      <li>Individual crime without a systemic angle.</li>
-      <li>Weather without unprecedented scale.</li>
-      <li>Award ceremonies (unless the outcome is the story).</li>
-      <li>Viral content trapped on a single platform.</li>
-      <li>
-        Celebrity personal lives (unless universally-known subject at a
-        life milestone, or a public-interest legal matter).
-      </li>
-      <li>
-        In-circle hype, manufactured hype, and controversy-flashes —
-        named and dismissed in the <em>Worth a shrug</em> section rather
-        than covered.
-      </li>
-    </ul>
-
-    <h2>How each issue is organised</h2>
     <p>
-      Every brief uses the same four sections. Any section may be empty;
-      missing sections are simply omitted.
+      Sports results unless they're civic-scale. Routine product
+      launches, quarterly earnings, horse-race polling. Individual crime
+      without a systemic angle. Weather that isn't unprecedented. Award
+      ceremonies where the outcome isn't the story. Viral content
+      trapped on a single platform. Celebrity lives, unless the subject
+      is universally known and the occasion is a genuine milestone or a
+      public-interest legal matter. And hype — the in-circle kind, the
+      manufactured kind, the 72-hour-outrage kind. Those we name in
+      <em>Worth a shrug</em> and move on.
     </p>
-    <ul>
-      <li>
-        <strong>This week's conversation.</strong> The items a reader will
-        be asked about.
-      </li>
-      <li>
-        <strong>Worth knowing.</strong> What matters even if nobody's
-        talking about it yet.
-      </li>
-      <li>
-        <strong>Worth watching.</strong> Emerging or uncertain threads.
-      </li>
-      <li>
-        <strong>Worth a shrug.</strong> The anti-FOMO section — hype the
-        algorithm pushed this week that we refused, named and dismissed.
-      </li>
-    </ul>
 
-    <h2>No accounts. No tracking.</h2>
+    <h2>Editorial stance</h2>
     <p>
-      Subscription is the identity — no passwords, no login anywhere.
-      Preferences are managed through signed links in your own email. No
-      analytics, no pixels, no third-party scripts.
+      Strong opinions on what deserves your attention. No opinion on
+      what to make of it. We'll tell you a story belongs in this week's
+      brief; we'll give you enough context to form your own read; we
+      will not tell you what the read should be. Closest analogues in
+      tone are <em>The Economist</em>'s Espresso and Matt Levine's Money
+      Stuff — wry, dry, observant, written by a sharp-eyed friend, not
+      an anchor reading a teleprompter.
+    </p>
+    <p>
+      Ten categories, no specialty beat. A reader should leave each
+      issue with a wider surface area, not a deeper trench in any one
+      direction. Context, not interpretation. No cherry-picked quotes,
+      no motive attribution, no "this could turn into something." If it
+      hasn't, it isn't in the brief.
+    </p>
+
+    <h2>How an issue is laid out</h2>
+    <p>
+      Four sections, always in the same order, any of them may be
+      empty. <strong>This week's conversation</strong> holds the items
+      you'd be expected to know about. <strong>Worth knowing</strong> is
+      what matters even if no one's talking yet. <strong>Worth
+      watching</strong> is threads still developing. <strong>Worth a
+      shrug</strong> is the week's hype, named and dismissed in one wry
+      line. A section only appears if something belongs in it — no
+      empty headings, no "nothing to report in X" filler.
+    </p>
+
+    <h2>No accounts, no tracking</h2>
+    <p>
+      Subscribing doesn't create an account. There's nothing to log
+      into. Preferences — muting a category, pausing delivery — are
+      managed through signed links sent to your own email. No
+      third-party scripts, no analytics, no pixels, no "you missed N
+      items." You can unsubscribe from any issue.
     </p>
   </Layout>
 );
