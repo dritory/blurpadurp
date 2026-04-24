@@ -166,30 +166,47 @@ Sunday and everyone still gets it on their preferred morning.
 
 ```bash
 # hourly ingest
-fly machine run . --schedule hourly --region ams \
-  --command "bun run cli ingest" -a blurpadurp
+fly machine run . --schedule hourly --region ams --name ingest \
+  -a blurpadurp -- bun run cli ingest
 
 # hourly dispatch — sends any issue published after a subscriber's
 # confirmed_at that hasn't been dispatched yet.
-fly machine run . --schedule hourly --region ams \
-  --command "bun run cli dispatch" -a blurpadurp
+fly machine run . --schedule hourly --region ams --name dispatch \
+  -a blurpadurp -- bun run cli dispatch
 
 # daily score — catchup pass on every unscored story. Fast when the
 # prefilter is on; the progressive scorer only spends the expensive
 # model on the top fraction.
-fly machine run . --schedule daily --region ams \
-  --command "bun run cli score" -a blurpadurp
+fly machine run . --schedule daily --region ams --name score \
+  -a blurpadurp -- bun run cli score
 
 # weekly: chain another score pass + compose so the brief sees every
 # ingestion up to an hour before it fires.
-fly machine run . --schedule weekly --region ams \
-  --command "sh -c 'bun run cli score && bun run cli compose'" -a blurpadurp
+fly machine run . --schedule weekly --region ams --name weekly \
+  -a blurpadurp -- /bin/sh -c 'bun run cli score && bun run cli compose'
 
 # daily retention — prune unconfirmed subs (30d), anonymize
 # unsubscribed (90d), trim old dispatch_log (180d). No API calls.
-fly machine run . --schedule daily --region ams \
-  --command "bun run cli retention" -a blurpadurp
+fly machine run . --schedule daily --region ams --name retention \
+  -a blurpadurp -- bun run cli retention
 ```
+
+**Syntax notes.** The `--` before the command is non-negotiable — it
+marks the end of flytcl's own flags. Without it, flyctl silently drops
+the command tokens and the machine boots with the Dockerfile's default
+CMD (the HTTP server), doing nothing on its schedule. Also use
+`--name` for each machine so `fly machine list` is readable; without
+it you get names like `morning-snowflake-207`.
+
+Verify immediately after creating each one:
+
+```bash
+fly machine status <id> -a blurpadurp
+```
+
+The VM block's `Command` field should show the command you passed. If
+it's empty, the `--` separator didn't take and the machine needs to be
+destroyed and recreated.
 
 The `score` pass runs twice in a busy week (daily + chained into the
 weekly). That's intentional and idempotent — the second run skips
