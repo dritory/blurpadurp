@@ -18,7 +18,7 @@ export const Home: FC<{ latest: IssueView | null; flash: Flash }> = ({
       <IssueBody issue={latest} />
     ) : (
       <p>
-        <em>No issues yet. The gate has not fired.</em>
+        <em>No issues yet. Blurp hasn't found anything worth sending.</em>
       </p>
     )}
   </Layout>

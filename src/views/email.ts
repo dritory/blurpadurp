@@ -110,7 +110,7 @@ export function renderBriefEmail(ctx: BriefEmailCtx): Rendered {
 ${titleHtml}
 ${ctx.issueHtml}
 <div class="footer">
-  <p>You're receiving this because you subscribed at <a href="${esc(ctx.brandUrl)}">${esc(hostOf(ctx.brandUrl))}</a>. One brief a week when the gate fires, nothing otherwise.</p>
+  <p>You're receiving this because you subscribed at <a href="${esc(ctx.brandUrl)}">${esc(hostOf(ctx.brandUrl))}</a>. One brief a week.</p>
   <p><a href="${esc(ctx.unsubscribeUrl)}">Unsubscribe</a> · <a href="${esc(ctx.manageUrl)}">Preferences</a> · <a href="${esc(ctx.issueUrl)}">Read on web</a> · <a href="${esc(privacyUrl)}">Privacy</a></p>
 </div>`;
   const html = docShell(subject, body);
@@ -138,7 +138,7 @@ export function renderConfirmationEmail(ctx: ConfirmEmailCtx): Rendered {
 <p class="brand">Blurpadurp</p>
 <p class="meta">One tap and you're done.</p>
 <p>
-  Confirm your email so Blurp can send you the brief when the gate fires.
+  Confirm your email so Blurp can send you the brief when there's something worth reading.
   If you didn't subscribe, ignore this — nothing happens without a click.
 </p>
 <p><a class="cta-btn" href="${esc(ctx.confirmUrl)}">Confirm subscription</a></p>
@@ -154,7 +154,7 @@ export function renderConfirmationEmail(ctx: ConfirmEmailCtx): Rendered {
   const text = [
     "BLURPADURP",
     "",
-    "Confirm your email so Blurp can send you the brief when the gate fires.",
+    "Confirm your email so Blurp can send you the brief when there's something worth reading.",
     "If you didn't subscribe, ignore this — nothing happens without a click.",
     "",
     `Tap to confirm: ${ctx.confirmUrl}`,

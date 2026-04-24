@@ -6,8 +6,8 @@ export const SubscribePage: FC<{ flash: Flash }> = ({ flash }) => (
   <Layout title="Subscribe — Blurpadurp" nav="subscribe">
     <h2 style="margin-top: 0;">Subscribe</h2>
     <p>
-      One brief a week when the gate fires, nothing otherwise. No account, no
-      tracking, no password. Unsubscribe from any issue.
+      One brief a week. No account, no tracking, no password.
+      Unsubscribe from any issue.
     </p>
     {flash !== null ? (
       <div class={`flash ${flash.kind === "error" ? "error" : ""}`}>

@@ -149,6 +149,7 @@ public.
 | `score` | chained into compose (see below) | Ensures every ingested story has a verdict before the week's brief is composed |
 | `compose` | weekly, Sunday afternoon UTC | Product cadence — one brief a week |
 | `dispatch` | hourly | New confirmations + breaking issues land near subscriber's delivery window |
+| `retention` | daily | GDPR storage-limitation policy: prune unconfirmed subs + anonymize long-unsubscribed rows + trim old dispatch_log entries |
 
 The `score` + `compose` chain matters: with ingest hourly and a daily
 score job, the last 24 hours of stories are always unscored at compose
@@ -171,6 +172,10 @@ fly machine run . --schedule hourly --command "bun run cli dispatch"
 # back to `--schedule weekly` and accept Fly's choice of hour.
 fly machine run . --schedule "0 16 * * 0" \
   --command "sh -c 'bun run cli score && bun run cli compose'"
+
+# Daily retention — prune unconfirmed subs (30d), anonymize unsubscribed
+# (90d), trim old dispatch_log (180d). Cheap, no API calls.
+fly machine run . --schedule daily --command "bun run cli retention"
 ```
 
 These machines share the app's image + secrets. They exit after running,

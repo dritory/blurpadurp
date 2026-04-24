@@ -1,0 +1,41 @@
+# flyctl launch added from .gitignore
+# editor / os
+**/.DS_Store
+**/.vscode
+**/.idea
+**/*.swp
+**/*.swo
+**/*~
+
+# deps
+**/node_modules
+**/.pnpm-store
+
+# build output
+**/dist
+**/build
+**/*.tsbuildinfo
+
+# local env
+**/.env
+**/.env.local
+**/.env.*.local
+
+# bun
+**/bun.lockb.bak
+
+# data (local docker volumes)
+**/data
+
+# local pg dumps
+**/backups
+
+# captured scorer fixtures (may contain raw source payloads)
+**/fixtures
+
+# legacy jekyll
+**/_site
+**/.sass-cache
+**/.jekyll-cache
+**/.jekyll-metadata
+fly.toml

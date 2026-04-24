@@ -14,7 +14,7 @@ export const Archive: FC<{ issues: ArchiveEntry[] }> = ({ issues }) => (
     <h2>Archive</h2>
     {issues.length === 0 ? (
       <p>
-        <em>No issues yet. The gate has not fired.</em>
+        <em>No issues yet. Blurp hasn't found anything worth sending.</em>
       </p>
     ) : (
       <ul class="archive-list">

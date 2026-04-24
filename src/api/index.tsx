@@ -21,6 +21,7 @@ import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
+import { securityHeaders } from "../shared/security-headers.ts";
 import { verifySvixSignature } from "../shared/svix.ts";
 import { signToken, verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
@@ -106,6 +107,16 @@ const subscribeLimiter = makeRateLimiter({
 });
 
 export const app = new Hono();
+
+// Security headers + per-request CSP nonce. Applied globally so admin
+// pages benefit too. HSTS off on localhost — turn it on for anything
+// with a trusted HTTPS cert.
+app.use(
+  "*",
+  securityHeaders({
+    hsts: getEnvOptional("NODE_ENV") === "production",
+  }),
+);
 
 // Static assets live in ./public — served under /assets/*. Safe to cache
 // aggressively; the logo and any supporting files are version-agnostic.
@@ -520,7 +531,7 @@ app.get("/confirm/:token", async (c) => {
     .returning("email")
     .executeTakeFirst();
   const msg = row
-    ? `Confirmed — ${row.email}. You'll get the next issue when the gate fires.`
+    ? `Confirmed — ${row.email}. You'll hear from Blurp when there's something worth reading.`
     : "Already confirmed. Nothing to do.";
   return c.html(<TokenResultPage title="Confirmed" body={msg} />);
 });
@@ -2112,7 +2123,7 @@ function parseFlash(
   if (subscribed && already) {
     return {
       kind: "ok",
-      msg: "Already confirmed. You'll get the next brief when the gate fires.",
+      msg: "Already confirmed. You'll hear from Blurp when there's something worth reading.",
     };
   }
   if (subscribed) {
