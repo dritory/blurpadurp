@@ -1,18 +1,62 @@
 # See https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/
+#
+# Pipeline:
+# 1. `fly deploy` rolls the `app` machine (the HTTP server). This is
+#    Fly's built-in behavior and it only touches machines in the
+#    default process group.
+# 2. Our named scheduled machines (ingest, dispatch, score, weekly,
+#    retention) have their own per-machine images and DO NOT follow
+#    `fly deploy`. Step two below updates each in-place with the new
+#    image tag. `fly machine update --image` preserves the schedule
+#    and doesn't trigger an off-cadence firing — so we don't
+#    accidentally send a duplicate issue just because we pushed code
+#    on a Sunday.
+# 3. Scheduled machines must already exist (one-time bootstrap — see
+#    scripts/setup-scheduled-machines.sh). If a named machine is
+#    missing, the update step warns and moves on.
 
 name: Fly Deploy
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
 jobs:
   deploy:
-    name: Deploy app
+    name: Deploy app + schedule machines
     runs-on: ubuntu-latest
-    concurrency: deploy-group    # optional: ensure only one action runs at a time
+    concurrency: deploy-group
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: blurpadurp
+      SCHEDULED_NAMES: "ingest dispatch score weekly retention"
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy app machine
+        run: flyctl deploy --remote-only -a "$FLY_APP"
+
+      - name: Update scheduled machines in place
+        run: |
+          set -euo pipefail
+          IMG=$(flyctl machines list -a "$FLY_APP" --json \
+                | jq -r '[.[] | select(.config.metadata["fly_process_group"]=="app")][0].config.image')
+          if [ -z "$IMG" ] || [ "$IMG" = "null" ]; then
+            echo "Could not read app image; skipping scheduled-machine update."
+            exit 0
+          fi
+          echo "Target image: $IMG"
+          for NAME in $SCHEDULED_NAMES; do
+            ID=$(flyctl machines list -a "$FLY_APP" --json \
+                 | jq -r ".[] | select(.name==\"$NAME\") | .id" | head -n1)
+            if [ -z "$ID" ]; then
+              echo "Skipping $NAME — no machine with that name. Run scripts/setup-scheduled-machines.sh to bootstrap."
+              continue
+            fi
+            echo "Updating $NAME ($ID) → $IMG"
+            flyctl machine update "$ID" --image "$IMG" --yes -a "$FLY_APP" || {
+              echo "WARNING: update failed for $NAME"
+            }
+          done
