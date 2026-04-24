@@ -164,39 +164,27 @@ for this product: dispatch runs hourly and delivers each subscriber at
 their own `delivery_time_local`, so compose can complete any time on
 Sunday and everyone still gets it on their preferred morning.
 
+Bootstrap the machines once. CI keeps them in sync from then on:
+
 ```bash
-# hourly ingest
-fly machine run . --schedule hourly --region ams --name ingest \
-  -a blurpadurp -- bun run cli ingest
-
-# hourly dispatch — sends any issue published after a subscriber's
-# confirmed_at that hasn't been dispatched yet.
-fly machine run . --schedule hourly --region ams --name dispatch \
-  -a blurpadurp -- bun run cli dispatch
-
-# daily score — catchup pass on every unscored story. Fast when the
-# prefilter is on; the progressive scorer only spends the expensive
-# model on the top fraction.
-fly machine run . --schedule daily --region ams --name score \
-  -a blurpadurp -- bun run cli score
-
-# weekly: chain another score pass + compose so the brief sees every
-# ingestion up to an hour before it fires.
-fly machine run . --schedule weekly --region ams --name weekly \
-  -a blurpadurp -- /bin/sh -c 'bun run cli score && bun run cli compose'
-
-# daily retention — prune unconfirmed subs (30d), anonymize
-# unsubscribed (90d), trim old dispatch_log (180d). No API calls.
-fly machine run . --schedule daily --region ams --name retention \
-  -a blurpadurp -- bun run cli retention
+scripts/setup-scheduled-machines.sh
 ```
+
+The script wraps five `fly machine run` calls, one per stage, with
+stable names (`ingest`, `dispatch`, `score`, `weekly`, `retention`).
+After the first run, subsequent code deploys update each machine's
+image in place via `.github/workflows/fly-deploy.yml` — schedules
+aren't reset, the machines don't re-fire on deploy (which matters for
+`weekly`: re-firing right after `fly deploy` would cause a duplicate
+issue for the week).
 
 **Syntax notes.** The `--` before the command is non-negotiable — it
 marks the end of flytcl's own flags. Without it, flyctl silently drops
 the command tokens and the machine boots with the Dockerfile's default
 CMD (the HTTP server), doing nothing on its schedule. Also use
 `--name` for each machine so `fly machine list` is readable; without
-it you get names like `morning-snowflake-207`.
+it you get names like `morning-snowflake-207`. The bootstrap script
+does both for you.
 
 Verify immediately after creating each one:
 
