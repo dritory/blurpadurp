@@ -11,6 +11,12 @@ import { resolve } from "node:path";
 import { z } from "zod";
 
 import { db } from "../db/index.ts";
+import {
+  discardDraft,
+  publishDraft,
+  recomposeDraft,
+  reeditDraft,
+} from "../pipeline/draft.ts";
 import type {
   CapturedRow,
   ReplayRow,
@@ -21,6 +27,7 @@ import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
+import { loadRawPrompt } from "../shared/prompts.ts";
 import { securityHeaders } from "../shared/security-headers.ts";
 import { verifySvixSignature } from "../shared/svix.ts";
 import { signToken, verifyToken } from "../shared/tokens.ts";
@@ -69,6 +76,11 @@ import {
   AdminIssues,
   type AdminIssueRow,
 } from "../views/admin-issues.tsx";
+import {
+  AdminPrompts,
+  type PromptEditorData,
+  type PromptStageKey,
+} from "../views/admin-prompts.tsx";
 import {
   AdminReview,
   type EditorReviewData,
@@ -215,13 +227,133 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       loadReplaysForIssue(id),
       loadEditorReplaysForIssue(id),
     ]);
+    const flash = parseReviewFlash(c.req.query());
     return c.html(
       <AdminReview
         data={data}
         replays={replays}
         editorReplays={editorReplays}
+        flash={flash}
       />,
     );
+  });
+
+  app.post("/admin/review/:id/publish", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const ok = await publishDraft(id);
+    if (!ok) return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
+    return c.redirect(`/admin/review/${id}?published=1`, 303);
+  });
+
+  app.post("/admin/review/:id/discard", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const ok = await discardDraft(id);
+    if (!ok) return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
+    return c.redirect("/admin/issues?discarded=1", 303);
+  });
+
+  app.post("/admin/review/:id/recompose", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    try {
+      const res = await recomposeDraft(id);
+      if (!res.ok)
+        return c.redirect(`/admin/review/${id}?error=${res.reason}`, 303);
+      return c.redirect(`/admin/review/${id}?recomposed=1`, 303);
+    } catch (err) {
+      console.error("[recompose]", err);
+      return c.redirect(`/admin/review/${id}?error=recompose_failed`, 303);
+    }
+  });
+
+  app.post("/admin/review/:id/annotate", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const body = await c.req.parseBody();
+    const slot = normalizeSlot(String(body.slot ?? "summary"));
+    const text = String(body.body ?? "").trim();
+    if (text.length === 0) {
+      return c.redirect(`/admin/review/${id}?error=empty_note`, 303);
+    }
+    await db
+      .insertInto("issue_annotation")
+      .values({ issue_id: id, slot, body: text })
+      .execute();
+    return c.redirect(`/admin/review/${id}?noted=1#notes`, 303);
+  });
+
+  app.post("/admin/review/:id/annotations/:aid/delete", async (c) => {
+    const id = Number(c.req.param("id"));
+    const aid = Number(c.req.param("aid"));
+    if (!Number.isFinite(id) || !Number.isFinite(aid)) return c.notFound();
+    await db
+      .deleteFrom("issue_annotation")
+      .where("id", "=", aid)
+      .where("issue_id", "=", id)
+      .execute();
+    return c.redirect(`/admin/review/${id}?deleted_note=1#notes`, 303);
+  });
+
+  app.get("/admin/prompts", async (c) => {
+    const stageParam = c.req.query("stage");
+    const stage: PromptStageKey =
+      stageParam === "editor" ? "editor" : "composer";
+    const data = await loadPromptEditor(stage, c.req.query());
+    return c.html(<AdminPrompts data={data} />);
+  });
+
+  app.post("/admin/prompts/:stage", async (c) => {
+    const stageParam = c.req.param("stage");
+    const stage: PromptStageKey =
+      stageParam === "editor" ? "editor" : "composer";
+    const body = await c.req.parseBody();
+    const action = String(body.action ?? "save");
+    const promptMd = String(body.prompt_md ?? "");
+
+    if (action === "download") {
+      return c.body(promptMd, 200, {
+        "Content-Type": "text/markdown; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${stage}-prompt.md"`,
+      });
+    }
+    if (action === "clear") {
+      await db
+        .deleteFrom("prompt_draft")
+        .where("stage", "=", stage)
+        .execute();
+      return c.redirect(`/admin/prompts?stage=${stage}&cleared=1`, 303);
+    }
+    // save
+    if (promptMd.trim().length === 0) {
+      return c.redirect(`/admin/prompts?stage=${stage}&error=empty`, 303);
+    }
+    await db
+      .insertInto("prompt_draft")
+      .values({ stage, prompt_md: promptMd, updated_at: new Date() })
+      .onConflict((oc) =>
+        oc.column("stage").doUpdateSet({
+          prompt_md: promptMd,
+          updated_at: new Date(),
+        }),
+      )
+      .execute();
+    return c.redirect(`/admin/prompts?stage=${stage}&saved=1`, 303);
+  });
+
+  app.post("/admin/review/:id/reedit", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    try {
+      const res = await reeditDraft(id);
+      if (!res.ok)
+        return c.redirect(`/admin/review/${id}?error=${res.reason}`, 303);
+      return c.redirect(`/admin/review/${id}?reedited=1`, 303);
+    } catch (err) {
+      console.error("[reedit]", err);
+      return c.redirect(`/admin/review/${id}?error=reedit_failed`, 303);
+    }
   });
 
   app.get("/admin/status", async (c) => {
@@ -463,6 +595,7 @@ app.get("/sitemap.xml", async (c) => {
   const issues = await db
     .selectFrom("issue")
     .select(["id", "published_at"])
+    .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(1000)
     .execute();
@@ -494,6 +627,7 @@ app.get("/feed.xml", async (c) => {
   const rows = await db
     .selectFrom("issue")
     .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(FEED_MAX_ENTRIES)
     .execute();
@@ -846,6 +980,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
     .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(1)
     .executeTakeFirst();
@@ -864,6 +999,7 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     .selectFrom("issue")
     .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
     .where("id", "=", id)
+    .where("is_draft", "=", false)
     .executeTakeFirst();
   if (!row) return null;
   return {
@@ -1059,7 +1195,11 @@ async function loadExplorerData(): Promise<ExplorerData> {
       .where("published_to_reader", "=", true)
       .executeTakeFirstOrThrow(),
     db.selectFrom("theme").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
-    db.selectFrom("issue").select(sql<string>`count(*)`.as("n")).executeTakeFirstOrThrow(),
+    db
+      .selectFrom("issue")
+      .select(sql<string>`count(*)`.as("n"))
+      .where("is_draft", "=", false)
+      .executeTakeFirstOrThrow(),
   ]);
   const corpusRow = {
     total: n(totalRow.n),
@@ -1867,6 +2007,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
     const issueRows = await db
       .selectFrom("issue")
       .select(["id", "story_ids"])
+      .where("is_draft", "=", false)
       .orderBy("published_at", "desc")
       .execute();
     for (const iss of issueRows) {
@@ -1906,9 +2047,11 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       "id",
       "published_at",
       "is_event_driven",
+      "is_draft",
       "composer_prompt_version",
       "composer_model_id",
       "story_ids",
+      "composed_html",
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
     ])
@@ -1946,14 +2089,29 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
     ]),
   );
 
+  const annotations = await db
+    .selectFrom("issue_annotation")
+    .select(["id", "slot", "body", "created_at"])
+    .where("issue_id", "=", id)
+    .orderBy("created_at", "desc")
+    .execute();
+
   return {
     issue: {
       id: Number(iss.id),
       publishedAt: iss.published_at,
       isEventDriven: iss.is_event_driven,
+      isDraft: iss.is_draft,
       composerPromptVersion: iss.composer_prompt_version,
       composerModelId: iss.composer_model_id,
+      composedHtml: iss.composed_html,
     },
+    annotations: annotations.map((a) => ({
+      id: Number(a.id),
+      slot: a.slot,
+      body: a.body,
+      createdAt: a.created_at,
+    })),
     editor: iss.editor_output_jsonb as EditorReviewData["editor"],
     storyTitles,
     storyThemes,
@@ -2083,10 +2241,12 @@ async function loadAdminIssues(): Promise<AdminIssueRow[]> {
       "id",
       "published_at",
       "is_event_driven",
+      "is_draft",
       "composer_prompt_version",
       "composer_model_id",
       "story_ids",
     ])
+    .orderBy("is_draft", "desc")
     .orderBy("published_at", "desc")
     .execute();
   const replays = await loadReplaysByIssue();
@@ -2094,6 +2254,7 @@ async function loadAdminIssues(): Promise<AdminIssueRow[]> {
     id: Number(r.id),
     publishedAt: r.published_at,
     isEventDriven: r.is_event_driven,
+    isDraft: r.is_draft,
     composerPromptVersion: r.composer_prompt_version,
     composerModelId: r.composer_model_id,
     storyCount: (r.story_ids ?? []).length,
@@ -2105,6 +2266,7 @@ async function loadArchive(): Promise<ArchiveEntry[]> {
   const rows = await db
     .selectFrom("issue")
     .select(["id", "published_at", "is_event_driven", "title"])
+    .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .execute();
   return rows.map((r) => ({
@@ -2141,6 +2303,92 @@ function parseFlash(
       msg: "Too many attempts. Give it a minute and try again.",
     };
   }
+  return null;
+}
+
+async function loadPromptEditor(
+  stage: PromptStageKey,
+  query: Record<string, string>,
+): Promise<PromptEditorData> {
+  const filePath = `docs/${stage}-prompt.md`;
+  const loaded = await loadRawPrompt(stage, filePath, "replay");
+  const staged =
+    loaded.source === "staged"
+      ? await db
+          .selectFrom("prompt_draft")
+          .select(["updated_at"])
+          .where("stage", "=", stage)
+          .executeTakeFirst()
+      : undefined;
+  const cfgRow = await db
+    .selectFrom("config")
+    .select("value")
+    .where("key", "=", `${stage}.prompt_version`)
+    .executeTakeFirst();
+  const liveVersion =
+    cfgRow !== undefined ? String(cfgRow.value).replace(/^"|"$/g, "") : null;
+  const flash = parsePromptFlash(query);
+  return {
+    stage,
+    promptText: loaded.raw,
+    source: loaded.source,
+    stagedUpdatedAt: staged?.updated_at ?? null,
+    liveVersion,
+    flash,
+  };
+}
+
+const VALID_SLOTS = new Set([
+  "opener",
+  "conversation",
+  "worth_knowing",
+  "worth_watching",
+  "shrug",
+  "summary",
+]);
+
+function normalizeSlot(raw: string): string {
+  return VALID_SLOTS.has(raw) ? raw : "summary";
+}
+
+function parsePromptFlash(
+  q: Record<string, string>,
+): { kind: "ok"; msg: string } | { kind: "err"; msg: string } | null {
+  if (q.saved === "1") return { kind: "ok", msg: "Staged." };
+  if (q.cleared === "1")
+    return { kind: "ok", msg: "Staged prompt cleared — falls back to file." };
+  if (q.error === "empty") return { kind: "err", msg: "Prompt is empty." };
+  return null;
+}
+
+function parseReviewFlash(
+  q: Record<string, string>,
+): { kind: "ok"; msg: string } | { kind: "err"; msg: string } | null {
+  if (q.published === "1") return { kind: "ok", msg: "Published." };
+  if (q.recomposed === "1")
+    return { kind: "ok", msg: "Re-composed. Review below." };
+  if (q.reedited === "1")
+    return { kind: "ok", msg: "Re-edited — new picks + prose." };
+  if (q.error === "not_draft")
+    return { kind: "err", msg: "Not a draft — already published." };
+  if (q.error === "missing_input")
+    return {
+      kind: "err",
+      msg: "No composer input persisted on this draft — try Re-edit instead.",
+    };
+  if (q.error === "no_pool")
+    return {
+      kind: "err",
+      msg: "Pool is empty — no passing stories to re-edit from.",
+    };
+  if (q.error === "recompose_failed")
+    return { kind: "err", msg: "Re-compose failed — check logs." };
+  if (q.error === "reedit_failed")
+    return { kind: "err", msg: "Re-edit failed — check logs." };
+  if (q.error === "empty_note")
+    return { kind: "err", msg: "Note body can't be empty." };
+  if (q.noted === "1") return { kind: "ok", msg: "Note added." };
+  if (q.deleted_note === "1") return { kind: "ok", msg: "Note deleted." };
   return null;
 }
 

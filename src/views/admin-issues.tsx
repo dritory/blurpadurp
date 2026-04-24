@@ -12,6 +12,7 @@ export interface AdminIssueRow {
   id: number;
   publishedAt: Date;
   isEventDriven: boolean;
+  isDraft: boolean;
   composerPromptVersion: string | null;
   composerModelId: string | null;
   storyCount: number;
@@ -31,6 +32,7 @@ const STYLES = `
   .replay-list .stamp { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   .hint { background: #fff; border: 1px solid var(--rule); padding: 10px 14px; margin: 0 0 20px; font-family: var(--sans); font-size: 13px; color: var(--ink-soft); }
   .hint code { font-family: ui-monospace, Menlo, Consolas, monospace; background: var(--paper); padding: 1px 5px; border: 1px solid var(--rule); font-size: 12px; color: var(--ink); }
+  .badge-draft { display: inline-block; font-family: var(--sans); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; background: #fff5d1; color: #6a5200; border: 1px solid #d4b84a; padding: 1px 6px; margin-left: 8px; border-radius: 2px; }
 `;
 
 export const AdminIssues: FC<{ issues: AdminIssueRow[] }> = ({ issues }) => (
@@ -63,7 +65,10 @@ export const AdminIssues: FC<{ issues: AdminIssueRow[] }> = ({ issues }) => (
         <tbody>
           {issues.map((i) => (
             <tr>
-              <td class="id">{i.id}</td>
+              <td class="id">
+                {i.id}
+                {i.isDraft ? <span class="badge-draft">draft</span> : null}
+              </td>
               <td>{formatIssueDate(i.publishedAt)}{i.isEventDriven ? " · event" : ""}</td>
               <td class="model">
                 {i.composerPromptVersion ?? "—"}

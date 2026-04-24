@@ -5,6 +5,7 @@ import type { FC } from "hono/jsx";
 
 export type AdminNavKey =
   | "issues"
+  | "prompts"
   | "explore"
   | "themes"
   | "fixtures"
@@ -17,6 +18,7 @@ export type AdminNavKey =
 
 const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: string }> = [
   { key: "issues", href: "/admin/issues", label: "Issues" },
+  { key: "prompts", href: "/admin/prompts", label: "Prompts" },
   { key: "explore", href: "/admin/explore", label: "Explore" },
   { key: "themes", href: "/admin/themes", label: "Themes" },
   { key: "fixtures", href: "/admin/fixtures", label: "Fixtures" },

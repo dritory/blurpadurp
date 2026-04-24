@@ -26,6 +26,9 @@ export function makeEditor(config: {
   modelId: string;
   promptPath: string;
   maxTokens: number;
+  /** Pre-extracted system prompt. Overrides the file read — used by
+   * the admin replay path so a DB-staged prompt can drive re-edit. */
+  systemPromptText?: string;
 }): AIStage<EditorInput, EditorOutput> {
   return {
     name: "editor",
@@ -34,7 +37,8 @@ export function makeEditor(config: {
     promptPath: config.promptPath,
 
     async run(input: EditorInput): Promise<EditorOutput> {
-      const system = await loadSystemPrompt(config.promptPath);
+      const system =
+        config.systemPromptText ?? (await loadSystemPrompt(config.promptPath));
       const userMessage = renderUserMessage(input);
       const input_hash = createHash("sha256")
         .update(JSON.stringify({ system, userMessage }))

@@ -9,6 +9,7 @@ import { sql } from "kysely";
 import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
+import { loadSystemPromptText, type PromptMode } from "../shared/prompts.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
 import type {
   ComposerInput,
@@ -17,6 +18,7 @@ import type {
 } from "../shared/composer-schema.ts";
 import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
+import { withLock } from "../shared/pipeline-lock.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
 // Penalty factors that push an otherwise-picked story into the Worth
@@ -63,7 +65,7 @@ const EDITOR_PROMPT_PATH = "docs/editor-prompt.md";
 // archive URLs). Independent of published_at, which can be NULL.
 const COMPOSE_INGEST_WINDOW_MS = 14 * 24 * 3600_000;
 
-type ConfigMap = {
+export type ConfigMap = {
   "composer.model_id": string;
   "composer.prompt_version": string;
   "composer.max_tokens": number;
@@ -74,18 +76,98 @@ type ConfigMap = {
 };
 
 export async function compose(): Promise<void> {
+  await withLock("compose", 15 * 60_000, runCompose);
+}
+
+async function runCompose(): Promise<void> {
+  // One open draft at a time. If a previous run produced a draft that
+  // hasn't been published or discarded yet, bail — the operator needs
+  // to resolve it. Prevents the next cron firing from stealing fresh
+  // stories into a parallel draft.
+  const existingDraft = await db
+    .selectFrom("issue")
+    .select("id")
+    .where("is_draft", "=", true)
+    .executeTakeFirst();
+  if (existingDraft !== undefined) {
+    console.log(
+      `[compose] open draft #${existingDraft.id} exists — publish or discard it first, skipping`,
+    );
+    return;
+  }
+
+  const draft = await produceDraft();
+  if (draft === null) return;
+
+  const issueId = await persistIssue(
+    draft.output,
+    draft.storyIds,
+    draft.cfg,
+    draft.editorInput,
+    draft.editorResult,
+    draft.shrug,
+    draft.composerInput,
+  );
+  console.log(
+    `[compose] draft issue ${issueId} created: ${draft.storyIds.length} stories, ${draft.output.markdown.length} md chars — publish via /admin/review/${issueId}`,
+  );
+}
+
+// Result of a full editor → composer run. Returned by produceDraft so
+// both the initial compose and re-edit share the same code path.
+export interface DraftProduction {
+  output: ComposerOutput;
+  storyIds: number[];
+  cfg: ConfigMap;
+  editorInput: EditorInput;
+  editorResult: EditorOutput;
+  shrug: ComposerInput["shrug"];
+  composerInput: ComposerInput;
+}
+
+// Run the pool query + editor + composer. Returns null if the pool is
+// empty or the editor produced no valid picks — caller decides what to
+// do (compose entry logs and bails; re-edit would surface an error).
+//
+// mode='live' reads prompts from docs/*-prompt.md; mode='replay' checks
+// prompt_draft first so admin-staged edits drive the re-edit. The
+// returned composer_prompt_version is tagged with "-staged" when
+// replay picks up a staged prompt so the provenance is recoverable.
+export async function produceDraft(
+  mode: PromptMode = "live",
+): Promise<DraftProduction | null> {
   const cfg = await loadConfig();
+  const composerPrompt = await loadSystemPromptText(
+    "composer",
+    COMPOSER_PROMPT_PATH,
+    mode,
+  );
+  const editorPrompt = await loadSystemPromptText(
+    "editor",
+    EDITOR_PROMPT_PATH,
+    mode,
+  );
+  const composerVersion =
+    composerPrompt.source === "staged"
+      ? `${cfg["composer.prompt_version"]}-staged`
+      : cfg["composer.prompt_version"];
+  const editorVersion =
+    editorPrompt.source === "staged"
+      ? `${cfg["editor.prompt_version"]}-staged`
+      : cfg["editor.prompt_version"];
   const composer = makeComposer({
-    version: cfg["composer.prompt_version"],
+    version: composerVersion,
     modelId: cfg["composer.model_id"],
     promptPath: COMPOSER_PROMPT_PATH,
     maxTokens: cfg["composer.max_tokens"],
+    systemPromptText: composerPrompt.text,
   });
   const editor = makeEditor({
-    version: cfg["editor.prompt_version"],
+    version: editorVersion,
     modelId: cfg["editor.model_id"],
     promptPath: EDITOR_PROMPT_PATH,
     maxTokens: cfg["editor.max_tokens"],
+    systemPromptText: editorPrompt.text,
   });
 
   const cutoff = new Date(Date.now() - COMPOSE_INGEST_WINDOW_MS);
@@ -120,7 +202,7 @@ export async function compose(): Promise<void> {
 
   if (rows.length === 0) {
     console.log("[compose] no passing, unpublished stories — skipping");
-    return;
+    return null;
   }
 
   // Editor picks the shortlist from the top-N passers. Pool is ranked by
@@ -229,7 +311,7 @@ export async function compose(): Promise<void> {
 
   if (builtItems.length === 0) {
     console.log("[compose] editor returned no valid picks — aborting");
-    return;
+    return null;
   }
 
   // Partition rules:
@@ -405,18 +487,19 @@ export async function compose(): Promise<void> {
   const shrugStoryIds = shrug.map((s) => s.story_id);
   const storyIds = Array.from(new Set([...mainStoryIds, ...shrugStoryIds]));
 
-  const issueId = await persistIssue(
+  return {
     output,
     storyIds,
-    cfg,
+    cfg: {
+      ...cfg,
+      "composer.prompt_version": composerVersion,
+      "editor.prompt_version": editorVersion,
+    },
     editorInput,
     editorResult,
     shrug,
-    input,
-  );
-  console.log(
-    `[compose] issue ${issueId} published: ${storyIds.length} stories, ${output.markdown.length} md chars`,
-  );
+    composerInput: input,
+  };
 }
 
 // Build an EditorInput from the ranked pool (tier-1 count pre-computed
@@ -900,6 +983,7 @@ async function loadThemeMeta(themeIds: number[]): Promise<Map<number, ThemeMeta>
       sql<string>`count(distinct issue.id)`.as("n"),
     ])
     .where("story.theme_id", "in", themeIds)
+    .where("issue.is_draft", "=", false)
     .groupBy("story.theme_id")
     .execute();
   const priorCountMap = new Map<number, number>();
@@ -952,6 +1036,9 @@ async function persistIssue(
   shrugCandidates: ComposerInput["shrug"],
   composerInput: ComposerInput,
 ): Promise<number> {
+  // Create as a draft. Stories stay published_to_reader=false until the
+  // admin publishes; that lets the draft be re-composed/re-edited
+  // without locking the pool. See src/pipeline/draft.ts for publish.
   return db.transaction().execute(async (tx) => {
     const issue = await tx
       .insertInto("issue")
@@ -967,21 +1054,53 @@ async function persistIssue(
         editor_output_jsonb: JSON.stringify(editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(shrugCandidates) as never,
         composer_input_jsonb: JSON.stringify(composerInput) as never,
+        is_draft: true,
       })
       .returning("id")
       .executeTakeFirstOrThrow();
 
-    await tx
-      .updateTable("story")
-      .set({
-        published_to_reader: true,
-        published_to_reader_at: new Date(),
-      })
-      .where("id", "in", storyIds)
-      .execute();
+    const issueId = Number(issue.id);
+    const pickRows = buildPickRows(issueId, composerInput);
+    if (pickRows.length > 0) {
+      await tx.insertInto("issue_pick").values(pickRows).execute();
+    }
 
-    return Number(issue.id);
+    return issueId;
   });
+}
+
+// Flatten composerInput sections into issue_pick rows. Arcs expand to
+// one row per constituent story, all sharing the arc's section + rank
+// (so release-on-re-edit catches every story).
+export function buildPickRows(
+  issueId: number,
+  input: ComposerInput,
+): Array<{ issue_id: number; story_id: number; section: string; rank: number }> {
+  const rows: Array<{
+    issue_id: number;
+    story_id: number;
+    section: string;
+    rank: number;
+  }> = [];
+  const seen = new Set<number>();
+  const push = (storyId: number, section: string, rank: number) => {
+    if (seen.has(storyId)) return;
+    seen.add(storyId);
+    rows.push({ issue_id: issueId, story_id: storyId, section, rank });
+  };
+  for (const item of input.conversation) {
+    for (const s of item.stories) push(s.story_id, "conversation", item.rank);
+  }
+  for (const item of input.worth_knowing) {
+    for (const s of item.stories) push(s.story_id, "worth_knowing", item.rank);
+  }
+  for (const item of input.worth_watching) {
+    for (const s of item.stories) push(s.story_id, "worth_watching", item.rank);
+  }
+  for (let i = 0; i < input.shrug.length; i++) {
+    push(input.shrug[i]!.story_id, "shrug", i + 1);
+  }
+  return rows;
 }
 
 async function loadConfig(): Promise<ConfigMap> {

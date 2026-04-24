@@ -18,12 +18,17 @@
 
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
+import { withLock } from "../shared/pipeline-lock.ts";
 
 const UNCONFIRMED_TTL_MS = 30 * 24 * 3600 * 1000;
 const UNSUBSCRIBED_ANON_TTL_MS = 90 * 24 * 3600 * 1000;
 const DISPATCH_LOG_TTL_MS = 180 * 24 * 3600 * 1000;
 
 export async function retention(): Promise<void> {
+  await withLock("retention", 5 * 60_000, runRetention);
+}
+
+async function runRetention(): Promise<void> {
   const now = Date.now();
   const unconfirmedCutoff = new Date(now - UNCONFIRMED_TTL_MS);
   const unsubscribedCutoff = new Date(now - UNSUBSCRIBED_ANON_TTL_MS);

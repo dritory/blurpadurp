@@ -58,6 +58,11 @@ ingest → score → editor → compose → (dispatch)
 6. **Prompts are version-bumped via config migration.** File header
    + `config.scorer.prompt_version` / `composer.prompt_version` /
    `editor.prompt_version` must match. Cache is keyed on version.
+   The admin `/admin/prompts` page can stage a composer/editor prompt
+   in the `prompt_draft` table, but this **only** affects draft
+   Re-compose / Re-edit actions — the scheduled pipeline always reads
+   `docs/*-prompt.md`. Export-to-file + git commit is still the only
+   path to live prompt changes.
 7. **Hard prohibitions in the scorer are load-bearing.** Don't
    weaken the "no hindsight" / "no invented justifications" rules
    in `docs/scoring-prompt.md` without replacing them with

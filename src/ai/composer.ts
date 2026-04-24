@@ -25,6 +25,9 @@ export function makeComposer(config: {
   modelId: string;
   promptPath: string;
   maxTokens: number;
+  /** Pre-extracted system prompt. Overrides the file read — used by
+   * the admin replay path so a DB-staged prompt can drive re-compose. */
+  systemPromptText?: string;
 }): AIStage<ComposerInput, ComposerOutput> {
   return {
     name: "composer",
@@ -33,7 +36,8 @@ export function makeComposer(config: {
     promptPath: config.promptPath,
 
     async run(input: ComposerInput): Promise<ComposerOutput> {
-      const system = await loadSystemPrompt(config.promptPath);
+      const system =
+        config.systemPromptText ?? (await loadSystemPrompt(config.promptPath));
       const userMessage = renderUserMessage(input);
       const input_hash = createHash("sha256")
         .update(JSON.stringify({ system, userMessage }))

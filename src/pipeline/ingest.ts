@@ -10,10 +10,15 @@ import type {
   NormalizedStoryInput,
 } from "../connectors/types.ts";
 import { db } from "../db/index.ts";
+import { withLock } from "../shared/pipeline-lock.ts";
 
 const DEFAULT_SCOPE = "global";
 
 export async function ingest(): Promise<void> {
+  await withLock("ingest", 10 * 60_000, runIngest);
+}
+
+async function runIngest(): Promise<void> {
   if (connectors.length === 0) {
     console.log("no connectors registered; nothing to ingest");
     return;

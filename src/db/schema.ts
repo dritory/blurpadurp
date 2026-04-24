@@ -101,6 +101,28 @@ export interface Database {
     editor_output_jsonb: Jsonb | null;
     shrug_candidates_jsonb: Jsonb | null;
     composer_input_jsonb: Jsonb | null;
+    is_draft: Generated<boolean>;
+  };
+
+  issue_pick: {
+    issue_id: number;
+    story_id: number;
+    section: string;
+    rank: number;
+  };
+
+  issue_annotation: {
+    id: Id;
+    issue_id: number;
+    slot: string;
+    body: string;
+    created_at: Created;
+  };
+
+  prompt_draft: {
+    stage: string;
+    prompt_md: string;
+    updated_at: Created;
   };
 
   email_subscription: {
@@ -203,5 +225,11 @@ export interface Database {
     label: "yes" | "maybe" | "no" | "skip";
     notes: string | null;
     labeled_at: Created;
+  };
+
+  pipeline_lock: {
+    stage_name: string;
+    acquired_at: Created;
+    expires_at: Date;
   };
 }

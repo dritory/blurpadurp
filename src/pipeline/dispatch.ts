@@ -16,12 +16,17 @@
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
+import { withLock } from "../shared/pipeline-lock.ts";
 import { signToken } from "../shared/tokens.ts";
 import { renderBriefEmail } from "../views/email.ts";
 
 const RECENCY_WINDOW_MS = 7 * 24 * 3600 * 1000;
 
 export async function dispatch(): Promise<void> {
+  await withLock("dispatch", 15 * 60_000, runDispatch);
+}
+
+async function runDispatch(): Promise<void> {
   const brandUrl =
     getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
   const cutoff = new Date(Date.now() - RECENCY_WINDOW_MS);
@@ -45,6 +50,7 @@ export async function dispatch(): Promise<void> {
       "e.email as email",
     ])
     .where("i.published_at", ">=", cutoff)
+    .where("i.is_draft", "=", false)
     .where("e.confirmed_at", "is not", null)
     .where("e.unsubscribed_at", "is", null)
     // Only send issues published at or after the subscriber confirmed.
