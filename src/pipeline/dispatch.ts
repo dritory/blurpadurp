@@ -47,6 +47,11 @@ export async function dispatch(): Promise<void> {
     .where("i.published_at", ">=", cutoff)
     .where("e.confirmed_at", "is not", null)
     .where("e.unsubscribed_at", "is", null)
+    // Only send issues published at or after the subscriber confirmed.
+    // A new subscriber should see issues *going forward*, not the whole
+    // 7-day backlog dumped in one blast. The public archive (/archive)
+    // is how they catch up on what they missed.
+    .whereRef("i.published_at", ">=", "e.confirmed_at")
     .where(({ not, exists, selectFrom }) =>
       not(
         exists(
@@ -104,13 +109,19 @@ export async function dispatch(): Promise<void> {
       kind: "unsubscribe-email",
       subscriptionId: subId,
     });
+    const manageToken = signToken({
+      kind: "manage-email",
+      subscriptionId: subId,
+    });
     const unsubscribeUrl = `${brandUrl}/unsubscribe/${unsubToken}`;
+    const manageUrl = `${brandUrl}/manage/${manageToken}`;
     const issueUrl = `${brandUrl}/issue/${issueId}`;
 
     const mail = renderBriefEmail({
       brandUrl,
       issueUrl,
       unsubscribeUrl,
+      manageUrl,
       title: p.issue_title,
       date: new Date(p.published_at),
       issueHtml: p.composed_html,
@@ -136,6 +147,7 @@ export async function dispatch(): Promise<void> {
         .set({
           status: res.noop === true ? "noop" : "sent",
           error: null,
+          provider_message_id: res.id,
         })
         .where("id", "=", claim.id)
         .execute();

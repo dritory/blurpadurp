@@ -137,6 +137,7 @@ export interface Database {
     dispatched_at: Created;
     status: string;
     error: string | null;
+    provider_message_id: string | null;
   };
 
   ai_call_log: {

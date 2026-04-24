@@ -21,6 +21,7 @@ import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
+import { verifySvixSignature } from "../shared/svix.ts";
 import { signToken, verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import {
@@ -79,6 +80,11 @@ import {
 } from "../views/admin-themes.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
+import {
+  ManagePage,
+  type Category as ManageCategory,
+  type ManageData,
+} from "../views/manage.tsx";
 import { Privacy } from "../views/privacy.tsx";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
@@ -533,6 +539,119 @@ app.get("/unsubscribe/:token", async (c) => {
   return c.html(<TokenResultPage title="Unsubscribed" body="Unsubscribed. No more issues will be sent to this address." />);
 });
 
+// RFC 8058 one-click unsubscribe. Mail clients POST here when the user
+// hits the native Unsubscribe button (set via the List-Unsubscribe-Post
+// header in dispatch.ts).
+app.post("/unsubscribe/:token", async (c) => {
+  const res = verifyToken(c.req.param("token"));
+  if (!res.ok || res.payload.kind !== "unsubscribe-email") {
+    return c.text("invalid token", 400);
+  }
+  await db
+    .updateTable("email_subscription")
+    .set({ unsubscribed_at: new Date() })
+    .where("id", "=", res.payload.subscriptionId)
+    .where("unsubscribed_at", "is", null)
+    .execute();
+  return c.text("ok", 200);
+});
+
+app.get("/manage/:token", async (c) => {
+  const v = verifyToken(c.req.param("token"));
+  if (!v.ok || v.payload.kind !== "manage-email") {
+    return c.html(
+      <TokenResultPage
+        title="Link invalid"
+        body="That preferences link is invalid or expired. The next issue you receive will have a fresh one in the footer."
+        error
+      />,
+      400,
+    );
+  }
+  const data = await loadManageData(
+    v.payload.subscriptionId,
+    c.req.param("token"),
+    parseManageFlash(c.req.query("saved"), c.req.query("error")),
+  );
+  if (data === null) return c.notFound();
+  return c.html(<ManagePage data={data} />);
+});
+
+app.post("/manage/:token", async (c) => {
+  const v = verifyToken(c.req.param("token"));
+  if (!v.ok || v.payload.kind !== "manage-email") {
+    return c.html(
+      <TokenResultPage
+        title="Link invalid"
+        body="That preferences link is invalid or expired."
+        error
+      />,
+      400,
+    );
+  }
+  const token = c.req.param("token");
+  const body = await c.req.parseBody({ all: true });
+
+  // Unsubscribe shortcut.
+  if (body.unsubscribe === "1") {
+    await db
+      .updateTable("email_subscription")
+      .set({ unsubscribed_at: new Date() })
+      .where("id", "=", v.payload.subscriptionId)
+      .where("unsubscribed_at", "is", null)
+      .execute();
+    return c.html(
+      <TokenResultPage
+        title="Unsubscribed"
+        body="Unsubscribed. No more issues will be sent to this address."
+      />,
+    );
+  }
+
+  const time = typeof body.delivery_time_local === "string"
+    ? body.delivery_time_local.trim()
+    : "";
+  const tz = typeof body.timezone === "string" ? body.timezone.trim() : "";
+  const urgent = body.urgent_override === "1";
+  const muteRaw = body.mute;
+  const mutes = Array.isArray(muteRaw)
+    ? muteRaw.filter((v): v is string => typeof v === "string")
+    : typeof muteRaw === "string"
+      ? [muteRaw]
+      : [];
+
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(time)) {
+    return c.redirect(`/manage/${token}?error=bad_time`, 303);
+  }
+  if (!isValidTimezone(tz)) {
+    return c.redirect(`/manage/${token}?error=bad_tz`, 303);
+  }
+
+  // Normalize HH:MM -> HH:MM:00 so Postgres time parsing is happy.
+  const normTime = time.length === 5 ? `${time}:00` : time;
+
+  // Only accept category slugs that actually exist.
+  const validSlugs = new Set(
+    (await db.selectFrom("category").select("slug").execute()).map(
+      (r) => r.slug,
+    ),
+  );
+  const cleanMutes = Array.from(new Set(mutes.filter((m) => validSlugs.has(m))));
+
+  await db
+    .updateTable("email_subscription")
+    .set({
+      delivery_time_local: normTime,
+      timezone: tz,
+      urgent_override: urgent,
+      category_mutes: cleanMutes,
+    })
+    .where("id", "=", v.payload.subscriptionId)
+    .execute();
+
+  return c.redirect(`/manage/${token}?saved=1`, 303);
+});
+
 app.post("/subscribe", async (c) => {
   const ip = clientIp(c.req.raw.headers, null);
   if (!subscribeLimiter.take(ip)) {
@@ -602,6 +721,112 @@ app.post("/subscribe", async (c) => {
     );
   }
   return c.redirect("/subscribe?subscribed=1", 303);
+});
+
+// Resend webhook endpoint. Register in the Resend dashboard as
+// https://<host>/webhooks/resend with event types email.bounced,
+// email.complained, email.delivered (optional). Set RESEND_WEBHOOK_SECRET
+// to the `whsec_...` value Resend generates.
+//
+// Hard bounces and complaints auto-unsubscribe. Soft bounces and
+// delivery notifications update dispatch_log only (for observability).
+app.post("/webhooks/resend", async (c) => {
+  const secret = getEnvOptional("RESEND_WEBHOOK_SECRET");
+  if (secret === undefined || secret.length === 0) {
+    console.error("[resend-webhook] RESEND_WEBHOOK_SECRET not set; rejecting");
+    return c.text("webhook not configured", 503);
+  }
+
+  const rawBody = await c.req.text();
+  const verify = verifySvixSignature({
+    body: rawBody,
+    svixId: c.req.header("svix-id") ?? "",
+    svixTimestamp: c.req.header("svix-timestamp") ?? "",
+    svixSignature: c.req.header("svix-signature") ?? "",
+    secret,
+  });
+  if (!verify.ok) {
+    console.warn(`[resend-webhook] rejected: ${verify.reason}`);
+    return c.text("invalid signature", 401);
+  }
+
+  let event: {
+    type?: string;
+    data?: {
+      email_id?: string;
+      to?: string | string[];
+      bounce?: { type?: string };
+    };
+  };
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return c.text("bad payload", 400);
+  }
+
+  const kind = event.type ?? "";
+  const data = event.data ?? {};
+  const emailId = data.email_id ?? null;
+  const recipients = Array.isArray(data.to)
+    ? data.to
+    : typeof data.to === "string"
+      ? [data.to]
+      : [];
+
+  // Map event → dispatch_log status string. Keep vocabulary stable so
+  // the admin costs/status pages can count categories.
+  let status: string | null = null;
+  let unsubscribe = false;
+  if (kind === "email.delivered") {
+    status = "delivered";
+  } else if (kind === "email.bounced") {
+    const bounceType = data.bounce?.type ?? "";
+    if (/hard|undetermined/i.test(bounceType)) {
+      status = "bounce_hard";
+      unsubscribe = true;
+    } else {
+      status = "bounce_soft";
+    }
+  } else if (kind === "email.complained") {
+    status = "complaint";
+    unsubscribe = true;
+  } else if (kind === "email.delivery_delayed") {
+    status = "delayed";
+  } else {
+    // Unknown / uninteresting event — acknowledge, don't retry.
+    console.log(`[resend-webhook] ignored event: ${kind}`);
+    return c.text("ok", 200);
+  }
+
+  // Update dispatch_log row if we can match by provider_message_id.
+  // Without a match the event is still useful — we can still
+  // unsubscribe on hard bounce / complaint by email.
+  if (emailId !== null && status !== null) {
+    const updated = await db
+      .updateTable("dispatch_log")
+      .set({ status })
+      .where("provider_message_id", "=", emailId)
+      .executeTakeFirst();
+    if (Number(updated.numUpdatedRows ?? 0) === 0) {
+      console.log(
+        `[resend-webhook] no dispatch_log match for provider_message_id=${emailId} (${kind})`,
+      );
+    }
+  }
+
+  if (unsubscribe && recipients.length > 0) {
+    const res = await db
+      .updateTable("email_subscription")
+      .set({ unsubscribed_at: new Date() })
+      .where("email", "in", recipients.map((r) => r.toLowerCase()))
+      .where("unsubscribed_at", "is", null)
+      .executeTakeFirst();
+    console.log(
+      `[resend-webhook] ${kind} → unsubscribed ${Number(res.numUpdatedRows ?? 0)} of ${recipients.length} recipient(s)`,
+    );
+  }
+
+  return c.text("ok", 200);
 });
 
 // --- data loaders ---
@@ -1748,6 +1973,69 @@ async function loadReplaysByIssue(): Promise<Map<number, Array<{ base: string; m
     list.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
   }
   return out;
+}
+
+async function loadManageData(
+  subscriptionId: number,
+  token: string,
+  flash: ManageData["flash"],
+): Promise<ManageData | null> {
+  const sub = await db
+    .selectFrom("email_subscription")
+    .select([
+      "email",
+      "delivery_time_local",
+      "timezone",
+      "urgent_override",
+      "category_mutes",
+    ])
+    .where("id", "=", subscriptionId)
+    .executeTakeFirst();
+  if (sub === undefined) return null;
+  const cats = await db
+    .selectFrom("category")
+    .select(["slug", "name"])
+    .orderBy("name", "asc")
+    .execute();
+  return {
+    token,
+    email: sub.email,
+    deliveryTimeLocal: sub.delivery_time_local,
+    timezone: sub.timezone,
+    urgentOverride: sub.urgent_override,
+    categoryMutes: sub.category_mutes,
+    categories: cats as ManageCategory[],
+    flash,
+  };
+}
+
+function parseManageFlash(
+  saved: string | undefined,
+  error: string | undefined,
+): ManageData["flash"] {
+  if (saved) return { kind: "ok", msg: "Preferences saved." };
+  if (error === "bad_time") {
+    return { kind: "error", msg: "Delivery time must be in HH:MM format." };
+  }
+  if (error === "bad_tz") {
+    return {
+      kind: "error",
+      msg: "That timezone isn't one we recognize. Use an IANA name like Europe/Oslo.",
+    };
+  }
+  return null;
+}
+
+// IANA timezone check. Intl.DateTimeFormat throws on unknown names;
+// the success path is the validation. No external tz table required.
+function isValidTimezone(tz: string): boolean {
+  if (tz.length === 0 || tz.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function loadReplaysForIssue(
