@@ -16,6 +16,7 @@ import type {
 } from "./types.ts";
 
 const FEEDS: Record<string, string> = {
+  // World / hard news
   bbc_world: "https://feeds.bbci.co.uk/news/world/rss.xml",
   bbc_business: "https://feeds.bbci.co.uk/news/business/rss.xml",
   guardian_world: "https://www.theguardian.com/world/rss",
@@ -24,20 +25,40 @@ const FEEDS: Record<string, string> = {
   france24_en: "https://www.france24.com/en/rss",
   dw_en: "https://rss.dw.com/rdf/rss-en-all",
   nyt_home: "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
-  // reuters_world — public Reuters RSS deprecated (406). Wire content
-  // only reaches us via GDELT syndication links.
-  // ap_top — URL returns 404; AP public RSS is unreliable.
   ft_home: "https://www.ft.com/rss/home",
   politico: "https://www.politico.com/rss/politicopicks.xml",
   axios_news: "https://www.axios.com/feeds/feed.rss",
   japantimes_news: "https://www.japantimes.co.jp/feed/",
   jpost: "https://www.jpost.com/rss/rssfeedsheadlines.aspx",
   scmp_world: "https://www.scmp.com/rss/91/feed",
-  // nature_news — 406, Accept-header sensitive. Revisit if sci coverage
-  // matters more.
   economist_world: "https://www.economist.com/international/rss.xml",
-  // semafor — 404, no public feed found.
   propublica: "https://feeds.propublica.org/propublica/main",
+
+  // Tech (added to balance the politics-heavy world-news roster)
+  arstechnica: "https://arstechnica.com/feed/",
+  the_verge: "https://www.theverge.com/rss/index.xml",
+  mit_tech_review: "https://www.technologyreview.com/feed/",
+  four04_media: "https://www.404media.co/rss/",
+
+  // Science
+  quanta: "https://www.quantamagazine.org/feed/",
+  sciencedaily: "https://www.sciencedaily.com/rss/top.xml",
+  new_scientist: "https://www.newscientist.com/feed/home/",
+  nature_news: "https://www.nature.com/nature.rss",
+
+  // Environment / climate
+  carbon_brief: "https://www.carbonbrief.org/feed/",
+  inside_climate: "https://insideclimatenews.org/feed/",
+  grist: "https://grist.org/feed/",
+
+  // Health
+  stat_news: "https://www.statnews.com/feed/",
+  kff_health: "https://kffhealthnews.org/feed/",
+
+  // Deregistered (kept here as documentation):
+  //   reuters_world — public RSS deprecated (406)
+  //   ap_top        — URL returns 404
+  //   semafor       — no public feed found
 };
 
 const PARSER = new Parser({
@@ -45,6 +66,10 @@ const PARSER = new Parser({
   headers: {
     "User-Agent":
       "Mozilla/5.0 (compatible; Blurpadurp/0.1; +https://blurpadurp.com)",
+    // Nature/Science and similar "strict" feed servers reject narrow
+    // Accept lists with 406. The wildcard fallback at the end covers
+    // them while keeping the explicit RSS/Atom types up front.
+    Accept: "application/rss+xml,application/atom+xml,application/xml,text/xml,*/*",
   },
 });
 
@@ -54,6 +79,14 @@ const PARSER = new Parser({
 // reprints from prior years into its RSS). A 30-day window gives enough
 // slack for mid-pipeline delays without admitting actual archive items.
 const MAX_RSS_AGE_MS = 30 * 24 * 3600_000;
+
+// Some high-trust feeds omit pubDate as a matter of convention (Nature
+// in particular). For these, accept items without a pubDate and let
+// the compose-layer ingest window (14 days from ingested_at) enforce
+// freshness instead. Keep this list short and trusted.
+const FEEDS_ALLOW_MISSING_PUBDATE = new Set<string>([
+  "nature_news",
+]);
 
 interface RssRaw {
   outlet: string;
@@ -94,11 +127,13 @@ export const rss: Connector = {
     let droppedNoDate = 0;
     let droppedTooOld = 0;
 
+    const allowMissingDate = FEEDS_ALLOW_MISSING_PUBDATE.has(scope);
     const items = feed.items
       .filter((i) => typeof i.link === "string" && i.link.length > 0)
       .filter((i) => {
         const d = i.pubDate ? safeDate(i.pubDate) : null;
         if (d === null) {
+          if (allowMissingDate) return true; // freshness enforced downstream
           droppedNoDate++;
           return false;
         }
