@@ -29,6 +29,10 @@ const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: strin
 ];
 
 const STYLES = `
+  /* Admin shell wider than the public 680px reading column. Tables
+     routinely need 1080–1300px before they overflow gracefully. */
+  body:has(.adm-nav) .wrap { max-width: 1280px; }
+
   .adm-nav {
     display: flex; flex-wrap: wrap; gap: 6px;
     padding: 10px 0 14px; margin: 0 0 20px;

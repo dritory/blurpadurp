@@ -59,7 +59,18 @@ import {
   type StoryFilter,
   type GateFilter,
   type SortKey,
+  type SortDir,
 } from "../views/admin-explore-stories.tsx";
+import {
+  AdminExploreDropped,
+  type DroppedData,
+  type DroppedFilter,
+} from "../views/admin-explore-dropped.tsx";
+import {
+  AdminExploreBalance,
+  type BalanceData,
+  type BalanceFilter,
+} from "../views/admin-explore-balance.tsx";
 import {
   AdminExploreStory,
   type StoryDrilldown,
@@ -383,6 +394,16 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const d = await loadStoryDrilldown(id);
     if (d === null) return c.notFound();
     return c.html(<AdminExploreStory d={d} />);
+  });
+
+  app.get("/admin/explore/dropped", async (c) => {
+    const data = await loadDroppedData(parseDroppedFilter(c.req.query()));
+    return c.html(<AdminExploreDropped data={data} />);
+  });
+
+  app.get("/admin/explore/balance", async (c) => {
+    const data = await loadBalanceData(parseBalanceFilter(c.req.query()));
+    return c.html(<AdminExploreBalance data={data} />);
   });
 
   app.get("/admin/explore/gate", async (c) => {
@@ -1394,11 +1415,23 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
   )
     ? (q.gate as GateFilter)
     : undefined;
-  const sort = (["composite", "published", "scored", "ingested"] as const).includes(
-    q.sort as SortKey,
-  )
+  const sort = (
+    [
+      "composite",
+      "zeitgeist",
+      "half_life",
+      "structural",
+      "non_obviousness",
+      "reach",
+      "published",
+      "scored",
+      "ingested",
+    ] as const
+  ).includes(q.sort as SortKey)
     ? (q.sort as SortKey)
     : undefined;
+  const dir: SortDir | undefined =
+    q.dir === "asc" || q.dir === "desc" ? (q.dir as SortDir) : undefined;
   const page = Math.max(1, Number(q.page) || 1);
   const minComposite = q.min !== undefined && q.min !== "" ? Number(q.min) : undefined;
   const maxComposite = q.max !== undefined && q.max !== "" ? Number(q.max) : undefined;
@@ -1410,6 +1443,7 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
     factor: q.factor || undefined,
     gate,
     sort,
+    dir,
     page,
     minComposite:
       minComposite !== undefined && Number.isFinite(minComposite)
@@ -1477,14 +1511,22 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
   const total = Number(countRow.n);
 
   const sort: SortKey = filter.sort ?? "composite";
-  const sortCol =
-    sort === "composite"
-      ? ("story.composite" as const)
-      : sort === "published"
-        ? ("story.published_at" as const)
-        : sort === "scored"
-          ? ("story.scored_at" as const)
-          : ("story.ingested_at" as const);
+  const dir: SortDir = filter.dir ?? "desc";
+  const sortColMap: Record<SortKey, string> = {
+    composite: "story.composite",
+    zeitgeist: "story.zeitgeist_score",
+    half_life: "story.half_life",
+    structural: "story.structural_importance",
+    non_obviousness: "story.non_obviousness",
+    reach: "story.reach",
+    published: "story.published_at",
+    scored: "story.scored_at",
+    ingested: "story.ingested_at",
+  };
+  const sortCol = sortColMap[sort];
+  // NULLS LAST so unscored stories don't dominate the default DESC view
+  // — they go to the bottom regardless of direction.
+  const orderExpr = sql`${sql.raw(sortCol)} ${sql.raw(dir.toUpperCase())} NULLS LAST, story.id DESC`;
 
   const rawRows = await q
     .select([
@@ -1495,13 +1537,18 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       "theme.id as theme_id",
       "theme.name as theme_name",
       "story.composite",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.structural_importance",
+      "story.non_obviousness",
+      "story.reach",
       "story.point_in_time_confidence",
       "story.passed_gate",
       "story.early_reject",
       "story.published_at",
       "story.scored_at",
     ])
-    .orderBy(sortCol, "desc")
+    .orderBy(orderExpr)
     .limit(pageSize)
     .offset((page - 1) * pageSize)
     .execute();
@@ -1554,6 +1601,11 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       themeId: r.theme_id !== null ? Number(r.theme_id) : null,
       themeName: r.theme_name,
       composite: r.composite !== null ? Number(r.composite) : null,
+      zeitgeist: r.zeitgeist_score,
+      halfLife: r.half_life,
+      structural: r.structural_importance,
+      nonObviousness: r.non_obviousness,
+      reach: r.reach,
       confidence: r.point_in_time_confidence,
       passedGate: r.passed_gate,
       earlyReject: r.early_reject,
@@ -1622,6 +1674,275 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     factors,
     rawInput: row.raw_input,
     rawOutput: row.raw_output,
+  };
+}
+
+function parseDroppedFilter(q: Record<string, string>): DroppedFilter {
+  const win = Number(q.window);
+  const windowDays = [7, 14, 30, 60, 90].includes(win) ? win : 30;
+  return { windowDays, category: q.category || undefined };
+}
+
+async function loadDroppedData(filter: DroppedFilter): Promise<DroppedData> {
+  const since = new Date(Date.now() - filter.windowDays * 24 * 3600_000);
+
+  let base = db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since);
+  if (filter.category) {
+    base = base.where("category.slug", "=", filter.category);
+  }
+
+  // Aggregate counts in one pass.
+  const totalsRows = await base
+    .select([
+      sql<string>`count(*)`.as("scored"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = true)`.as("passed"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = false AND story.early_reject = false)`.as("dropped"),
+      sql<string>`count(*) FILTER (WHERE story.early_reject = true)`.as("rejected"),
+    ])
+    .executeTakeFirstOrThrow();
+
+  // Composite arrays + component means split by gate outcome.
+  const droppedScores = await base
+    .select([
+      "story.composite",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.reach",
+      "story.non_obviousness",
+      "story.structural_importance",
+    ])
+    .where("story.passed_gate", "=", false)
+    .where("story.early_reject", "=", false)
+    .execute();
+  const passedScores = await base
+    .select([
+      "story.composite",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.reach",
+      "story.non_obviousness",
+      "story.structural_importance",
+    ])
+    .where("story.passed_gate", "=", true)
+    .execute();
+
+  const compMean = (rows: typeof droppedScores) => ({
+    zeitgeist: avg(rows.map((r) => r.zeitgeist_score ?? 0)),
+    halfLife: avg(rows.map((r) => r.half_life ?? 0)),
+    reach: avg(rows.map((r) => r.reach ?? 0)),
+    nonObviousness: avg(rows.map((r) => r.non_obviousness ?? 0)),
+    structural: avg(rows.map((r) => r.structural_importance ?? 0)),
+  });
+
+  // Penalty factor frequency on dropped stories.
+  let penaltyQ = db
+    .selectFrom("story_factor as sf")
+    .innerJoin("story as s", "s.id", "sf.story_id")
+    .leftJoin("category as c", "c.id", "s.category_id")
+    .where("sf.kind", "=", "penalty")
+    .where("s.scored_at", ">=", since)
+    .where("s.passed_gate", "=", false)
+    .where("s.early_reject", "=", false);
+  if (filter.category) {
+    penaltyQ = penaltyQ.where("c.slug", "=", filter.category);
+  }
+  const penaltyRows = await penaltyQ
+    .select([
+      "sf.factor as factor",
+      sql<string>`count(*)`.as("n"),
+    ])
+    .groupBy("sf.factor")
+    .orderBy(sql`count(*)`, "desc")
+    .limit(20)
+    .execute();
+
+  // Per-category drop rate (only categories with >=5 scored in window).
+  const byCatRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since)
+    .select([
+      sql<string>`coalesce(category.slug, 'unknown')`.as("category"),
+      sql<string>`count(*)`.as("scored"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = true)`.as("passed"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = false AND story.early_reject = false)`.as("dropped"),
+    ])
+    .groupBy(sql`coalesce(category.slug, 'unknown')`)
+    .having(sql<string>`count(*)`, ">=", "5")
+    .orderBy(sql`count(*) FILTER (WHERE story.passed_gate = false AND story.early_reject = false)::float / NULLIF(count(*),0)`, "desc")
+    .execute();
+
+  // Top drops: highest-composite stories that didn't pass.
+  let topQ = db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since)
+    .where("story.passed_gate", "=", false)
+    .where("story.early_reject", "=", false);
+  if (filter.category) {
+    topQ = topQ.where("category.slug", "=", filter.category);
+  }
+  const topRows = await topQ
+    .select([
+      "story.id",
+      "story.title",
+      "category.slug as category_slug",
+      "story.composite",
+      "story.point_in_time_confidence",
+    ])
+    .orderBy(sql`story.composite DESC NULLS LAST`)
+    .limit(40)
+    .execute();
+  const topIds = topRows.map((r) => Number(r.id));
+  const topFactors = topIds.length
+    ? await db
+        .selectFrom("story_factor")
+        .select(["story_id", "factor"])
+        .where("story_id", "in", topIds)
+        .where("kind", "=", "penalty")
+        .execute()
+    : [];
+  const factorByStory = new Map<number, string[]>();
+  for (const f of topFactors) {
+    const k = Number(f.story_id);
+    factorByStory.set(k, [...(factorByStory.get(k) ?? []), f.factor]);
+  }
+
+  const cats = await db
+    .selectFrom("category")
+    .select("slug")
+    .orderBy("slug")
+    .execute();
+
+  return {
+    filter,
+    categories: cats.map((c) => c.slug),
+    totals: {
+      scored: Number(totalsRows.scored),
+      passed: Number(totalsRows.passed),
+      dropped: Number(totalsRows.dropped),
+      early_rejected: Number(totalsRows.rejected),
+    },
+    composites: {
+      dropped: droppedScores.map((r) => Number(r.composite ?? 0)),
+      passed: passedScores.map((r) => Number(r.composite ?? 0)),
+    },
+    components: {
+      dropped: compMean(droppedScores),
+      passed: compMean(passedScores),
+    },
+    penaltiesOnDropped: penaltyRows.map((r) => ({
+      label: r.factor,
+      value: Number(r.n),
+    })),
+    byCategory: byCatRows.map((r) => ({
+      category: String(r.category),
+      scored: Number(r.scored),
+      passed: Number(r.passed),
+      dropped: Number(r.dropped),
+      dropRate: Number(r.scored) > 0 ? Number(r.dropped) / Number(r.scored) : 0,
+    })),
+    topDrops: topRows.map((r) => ({
+      id: Number(r.id),
+      title: r.title,
+      category: r.category_slug,
+      composite: r.composite !== null ? Number(r.composite) : 0,
+      confidence: r.point_in_time_confidence,
+      factors: factorByStory.get(Number(r.id)) ?? [],
+    })),
+  };
+}
+
+function avg(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function parseBalanceFilter(q: Record<string, string>): BalanceFilter {
+  const win = Number(q.window);
+  const windowWeeks = [4, 8, 12, 26, 52].includes(win) ? win : 12;
+  return { windowWeeks };
+}
+
+async function loadBalanceData(filter: BalanceFilter): Promise<BalanceData> {
+  const since = new Date(Date.now() - filter.windowWeeks * 7 * 24 * 3600_000);
+
+  // Per-category totals across the window.
+  const byCatRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.ingested_at", ">=", since)
+    .select([
+      sql<string>`coalesce(category.slug, 'unknown')`.as("category"),
+      sql<string>`count(*)`.as("ingested"),
+      sql<string>`count(*) FILTER (WHERE story.scored_at IS NOT NULL)`.as("scored"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = true)`.as("passed"),
+      sql<string>`count(*) FILTER (WHERE story.published_to_reader = true)`.as("published"),
+    ])
+    .groupBy(sql`coalesce(category.slug, 'unknown')`)
+    .orderBy(sql`count(*) FILTER (WHERE story.passed_gate = true)`, "desc")
+    .execute();
+
+  const byCategory = byCatRows.map((r) => ({
+    category: String(r.category),
+    ingested: Number(r.ingested),
+    scored: Number(r.scored),
+    passed: Number(r.passed),
+    published: Number(r.published),
+  }));
+
+  // Concentration index (Herfindahl). Computed on passers.
+  const totalPassed = byCategory.reduce((a, c) => a + c.passed, 0);
+  const hhi =
+    totalPassed > 0
+      ? byCategory.reduce((a, c) => {
+          const share = c.passed / totalPassed;
+          return a + share * share;
+        }, 0)
+      : 0;
+
+  // Per-week × category passers, for stacked timeline.
+  const weeklyRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since)
+    .where("story.passed_gate", "=", true)
+    .select([
+      sql<string>`to_char(date_trunc('week', story.scored_at), 'YYYY-MM-DD')`.as("week"),
+      sql<string>`coalesce(category.slug, 'unknown')`.as("category"),
+      sql<string>`count(*)`.as("n"),
+    ])
+    .groupBy(["week", "category"])
+    .orderBy("week", "asc")
+    .execute();
+
+  const weekSet = new Set<string>();
+  const catSet = new Set<string>();
+  const cellMap = new Map<string, number>();
+  for (const r of weeklyRows) {
+    weekSet.add(String(r.week));
+    catSet.add(String(r.category));
+    cellMap.set(`${r.week}|${r.category}`, Number(r.n));
+  }
+  const weeks = [...weekSet].sort();
+  const cats = [...catSet].sort();
+  const weekly = weeks.map((week) => ({
+    week,
+    counts: Object.fromEntries(
+      cats.map((cat) => [cat, cellMap.get(`${week}|${cat}`) ?? 0]),
+    ),
+  }));
+
+  return {
+    filter,
+    byCategory,
+    weekly,
+    categories: cats,
+    hhi,
+    totalPassed,
   };
 }
 

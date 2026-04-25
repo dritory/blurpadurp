@@ -7,7 +7,17 @@ import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { ExplorerNav } from "./admin-explore.tsx";
 
 export type GateFilter = "any" | "pass" | "fail" | "reject";
-export type SortKey = "composite" | "published" | "scored" | "ingested";
+export type SortKey =
+  | "composite"
+  | "zeitgeist"
+  | "half_life"
+  | "structural"
+  | "non_obviousness"
+  | "reach"
+  | "published"
+  | "scored"
+  | "ingested";
+export type SortDir = "asc" | "desc";
 
 export interface StoryFilter {
   category?: string;
@@ -19,6 +29,7 @@ export interface StoryFilter {
   factor?: string;
   q?: string;
   sort?: SortKey;
+  dir?: SortDir;
   page?: number;
 }
 
@@ -30,6 +41,11 @@ export interface StoryRow {
   themeId: number | null;
   themeName: string | null;
   composite: number | null;
+  zeitgeist: number | null;
+  halfLife: number | null;
+  structural: number | null;
+  nonObviousness: number | null;
+  reach: number | null;
   confidence: string | null;
   passedGate: boolean;
   earlyReject: boolean;
@@ -64,12 +80,15 @@ const STYLES = `
     padding: 6px 12px; font-size: 13px; font-family: var(--sans); border: 1px solid var(--rule); text-decoration: none; color: var(--ink-soft); background: #fff;
   }
 
-  table.x-table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 13px; }
+  table.x-table { width: 100%; min-width: 1080px; border-collapse: collapse; font-size: 13px; }
   table.x-table th, table.x-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
   table.x-table th { font-family: var(--sans); font-weight: 600; font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
-  table.x-table th a { color: inherit; text-decoration: none; }
+  table.x-table th a { color: inherit; text-decoration: none; cursor: pointer; }
+  table.x-table th a:hover { color: var(--ink); }
   table.x-table th a.sorted { color: var(--ink); }
   table.x-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.x-table td.score { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-soft); font-size: 12px; }
+  table.x-table td.score.bold { color: var(--ink); font-weight: 600; font-size: 13px; }
   table.x-table .chip { display: inline-block; padding: 1px 6px; border-radius: 2px; font-family: var(--sans); font-size: 10px; margin-right: 3px; background: rgba(0,0,0,0.06); color: var(--ink-soft); }
   table.x-table .pass { color: #4a6b4a; font-weight: 600; }
   table.x-table .fail { color: #a63a3a; }
@@ -97,23 +116,30 @@ function qs(f: StoryFilter, overrides: Partial<StoryFilter> = {}): string {
   if (merged.factor) parts.push(`factor=${encodeURIComponent(merged.factor)}`);
   if (merged.q) parts.push(`q=${encodeURIComponent(merged.q)}`);
   if (merged.sort) parts.push(`sort=${merged.sort}`);
+  if (merged.dir) parts.push(`dir=${merged.dir}`);
   if (merged.page !== undefined) parts.push(`page=${merged.page}`);
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 
+// Click an unsorted column → sort by it desc (most-useful default).
+// Click the already-sorted column → flip direction.
 const SortLink: FC<{
   column: SortKey;
   label: string;
   filter: StoryFilter;
 }> = ({ column, label, filter }) => {
-  const sorted = (filter.sort ?? "composite") === column;
+  const currentSort = filter.sort ?? "composite";
+  const currentDir = filter.dir ?? "desc";
+  const sorted = currentSort === column;
+  const nextDir: SortDir = sorted && currentDir === "desc" ? "asc" : "desc";
+  const arrow = !sorted ? "" : currentDir === "desc" ? " ↓" : " ↑";
   return (
     <a
       class={sorted ? "sorted" : ""}
-      href={`/admin/explore/stories${qs(filter, { sort: column, page: 1 })}`}
+      href={`/admin/explore/stories${qs(filter, { sort: column, dir: nextDir, page: 1 })}`}
     >
       {label}
-      {sorted ? " ↓" : ""}
+      {arrow}
     </a>
   );
 };
@@ -236,6 +262,7 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
             </select>
           </div>
           <input type="hidden" name="sort" value={filter.sort ?? "composite"} />
+          <input type="hidden" name="dir" value={filter.dir ?? "desc"} />
           <div class="actions">
             <button type="submit">Filter</button>
             <a href="/admin/explore/stories" class="reset">
@@ -264,6 +291,21 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
             <th class="num">
               <SortLink column="composite" label="Comp" filter={filter} />
             </th>
+            <th class="num">
+              <SortLink column="zeitgeist" label="Zeit" filter={filter} />
+            </th>
+            <th class="num">
+              <SortLink column="half_life" label="HL" filter={filter} />
+            </th>
+            <th class="num">
+              <SortLink column="structural" label="Stru" filter={filter} />
+            </th>
+            <th class="num">
+              <SortLink column="non_obviousness" label="NonO" filter={filter} />
+            </th>
+            <th class="num">
+              <SortLink column="reach" label="Reach" filter={filter} />
+            </th>
             <th>Conf</th>
             <th>Gate</th>
             <th>Factors</th>
@@ -276,6 +318,7 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
               : r.passedGate
                 ? "pass"
                 : "fail";
+            const fmt = (n: number | null) => (n === null ? "—" : n.toFixed(0));
             return (
               <tr>
                 <td>
@@ -297,9 +340,14 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
                     "—"
                   )}
                 </td>
-                <td class="num">
+                <td class="score bold">
                   {r.composite !== null ? r.composite.toFixed(0) : "—"}
                 </td>
+                <td class="score">{fmt(r.zeitgeist)}</td>
+                <td class="score">{fmt(r.halfLife)}</td>
+                <td class="score">{fmt(r.structural)}</td>
+                <td class="score">{fmt(r.nonObviousness)}</td>
+                <td class="score">{fmt(r.reach)}</td>
                 <td>{r.confidence ?? "—"}</td>
                 <td class={gateLabel}>{gateLabel}</td>
                 <td>

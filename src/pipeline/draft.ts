@@ -21,6 +21,8 @@
 // draft's picks entirely. Use when the editorial choices themselves
 // are what you want to iterate.
 
+import { sql } from "kysely";
+
 import { makeComposer } from "../ai/composer.ts";
 import { db } from "../db/index.ts";
 import type { ComposerInput } from "../shared/composer-schema.ts";
@@ -49,6 +51,28 @@ export async function publishDraft(issueId: number): Promise<boolean> {
         .updateTable("story")
         .set({ published_to_reader: true, published_to_reader_at: new Date() })
         .where("id", "in", storyIds)
+        .execute();
+
+      // Bump per-theme counter (used by /admin/themes for "stories
+      // published" column). One increment per distinct theme — count
+      // the stories that just flipped, not the issue, so an arc that
+      // bundles three stories on the same theme adds three.
+      await tx
+        .updateTable("theme")
+        .set((eb) => ({
+          n_stories_published: eb("n_stories_published", "+", sql<number>`(
+            SELECT count(*)::int FROM story s
+            WHERE s.theme_id = theme.id AND s.id IN (${sql.join(storyIds)})
+          )`),
+        }))
+        .where(({ exists, selectFrom }) =>
+          exists(
+            selectFrom("story as s")
+              .select("s.id")
+              .whereRef("s.theme_id", "=", "theme.id")
+              .where("s.id", "in", storyIds),
+          ),
+        )
         .execute();
     }
     return true;
