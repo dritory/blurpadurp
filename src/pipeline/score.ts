@@ -307,7 +307,12 @@ async function processStory(
           .execute();
         return neighbor.id;
       }
-      return await createThemeFromStory(story.id, embeddingVec, output);
+      return await createThemeFromStory(
+        story.id,
+        story.title,
+        embeddingVec,
+        output,
+      );
     });
   }
   if (finalThemeId !== null) {
@@ -635,6 +640,7 @@ async function persistScorerResult(
 
 async function createThemeFromStory(
   storyId: number,
+  storyTitle: string,
   embeddingVec: string,
   output: ScorerOutput,
 ): Promise<number | null> {
@@ -643,11 +649,20 @@ async function createThemeFromStory(
   // no valid category. Story stays theme-less; it's still scored.
   if (categoryId === null) return null;
 
+  // Theme name = scorer summary if non-empty, else fall back to the
+  // story's own title. Haiku sometimes returns an empty summary even
+  // for non-early-rejected stories (the schema permits null/empty),
+  // and "" makes the theme indistinguishable in the admin themes view.
+  // The title is always non-empty so this guarantees a usable label.
+  const nameFromSummary = output.summary.trim();
+  const themeName = (nameFromSummary !== "" ? nameFromSummary : storyTitle)
+    .slice(0, 200);
+
   const row = await db
     .insertInto("theme")
     .values({
       category_id: categoryId,
-      name: output.summary.slice(0, 200),
+      name: themeName,
       description: null,
       centroid_embedding: embeddingVec,
     })
