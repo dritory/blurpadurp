@@ -28,10 +28,13 @@ ingest → score → editor → compose → (dispatch)
 ```
 
 - **ingest** pulls from connectors (`src/connectors/*.ts`). RSS (16
-  newsroom feeds) and Reddit r/OutOfTheLoop are live. GDELT was
-  deregistered — too much tabloid/foreign-language noise to be worth
-  the filtering cost. Connector file is preserved if you want to
-  revisit.
+  newsroom feeds), Reddit r/OutOfTheLoop, and GDELT are live. GDELT
+  brings the regional + multi-language signal the curated feeds miss
+  but also drags in tabloid/wire noise — `source_blocklist`
+  (migration 035) is the trim mechanism: hosts get blocked at the
+  ingest boundary and never spend embedding/scoring credits. Manage
+  via `/admin/sources` or the "Block source" button on the story
+  drilldown.
 - **score** runs Haiku on each unscored story via a rubric prompt
   (`docs/scoring-prompt.md`). Gate is mechanical, not AI.
   Progressive scoring (cheap prefilter → expensive final) is

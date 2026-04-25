@@ -28,6 +28,7 @@ import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { loadRawPrompt } from "../shared/prompts.ts";
+import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
 import { securityHeaders } from "../shared/security-headers.ts";
 import { verifySvixSignature } from "../shared/svix.ts";
 import { signToken, verifyToken } from "../shared/tokens.ts";
@@ -116,6 +117,7 @@ import {
   type GraphNode,
   type ThemeGraphData,
 } from "../views/admin-theme-graph.tsx";
+import { AdminSources, type SourcesData } from "../views/admin-sources.tsx";
 import {
   AdminEditorSandbox,
   type EditorSandboxData,
@@ -529,6 +531,57 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .where("id", "=", themeId)
       .execute();
     return c.redirect(`/admin/themes?filter=${filter}&saved=1`, 303);
+  });
+
+  app.get("/admin/sources", async (c) => {
+    const win = Number(c.req.query("window"));
+    const windowDays = [7, 14, 30, 60, 90].includes(win) ? win : 30;
+    const data = await loadSourcesData(windowDays, c.req.query());
+    return c.html(<AdminSources data={data} />);
+  });
+
+  app.post("/admin/sources/block", async (c) => {
+    const body = await c.req.parseBody();
+    const raw = String(body.host ?? "").trim();
+    const reasonRaw = String(body.reason ?? "").trim();
+    const back = c.req.header("HX-Current-URL") ?? "/admin/sources";
+    const fallback = back.includes("/admin/sources")
+      ? "/admin/sources"
+      : back;
+    if (raw.length === 0) {
+      return c.redirect(`${fallback}?error=empty_host`, 303);
+    }
+    // Accept either a bare host or a full URL — try URL first.
+    let host: string | null = null;
+    try {
+      const u = new URL(raw);
+      host = normalizeHost(u.hostname);
+    } catch {
+      // Not a URL — treat as a host string. Still strip any leading
+      // protocol-ish noise the user may have typed.
+      host = normalizeHost(raw.replace(/^https?:\/\//, "").split("/")[0]!);
+    }
+    if (host === null || host.length === 0 || !host.includes(".")) {
+      return c.redirect(`${fallback}?error=bad_host`, 303);
+    }
+    await db
+      .insertInto("source_blocklist")
+      .values({ host, reason: reasonRaw.length > 0 ? reasonRaw : null })
+      .onConflict((oc) => oc.column("host").doNothing())
+      .execute();
+    return c.redirect(`${fallback}?blocked=${encodeURIComponent(host)}`, 303);
+  });
+
+  app.post("/admin/sources/unblock", async (c) => {
+    const body = await c.req.parseBody();
+    const host = normalizeHost(String(body.host ?? "").trim());
+    if (host.length === 0)
+      return c.redirect("/admin/sources?error=empty_host", 303);
+    await db
+      .deleteFrom("source_blocklist")
+      .where("host", "=", host)
+      .execute();
+    return c.redirect(`/admin/sources?unblocked=${encodeURIComponent(host)}`, 303);
   });
 
   app.get("/admin/eval", async (c) => {
@@ -1726,6 +1779,7 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     summary: row.summary,
     sourceName: row.source_name,
     sourceUrl: row.source_url,
+    sourceHost: extractHost(row.source_url),
     additionalSourceUrls: row.additional_source_urls ?? [],
     publishedAt: row.published_at,
     ingestedAt: row.ingested_at,
@@ -2252,6 +2306,99 @@ function parseFlashGeneric(
   if (saved) return { kind: "ok", msg: "Saved." };
   if (error === "bad_id") return { kind: "error", msg: "Bad theme id." };
   return null;
+}
+
+async function loadSourcesData(
+  windowDays: number,
+  q: Record<string, string>,
+): Promise<SourcesData> {
+  const since = new Date(Date.now() - windowDays * 24 * 3600_000);
+
+  const blocklistRows = await db
+    .selectFrom("source_blocklist")
+    .select(["host", "reason", "blocked_at"])
+    .orderBy("blocked_at", "desc")
+    .execute();
+  const blockedSet = new Set(blocklistRows.map((r) => normalizeHost(r.host)));
+
+  // Per-host stats over the window. Pull source_url + flags, group in
+  // memory by extracted host (regexp-based grouping in Postgres is
+  // fragile compared to the JS URL parser the rest of the pipeline
+  // uses).
+  const rows = await db
+    .selectFrom("story")
+    .select([
+      "source_url",
+      "passed_gate",
+      "published_to_reader",
+    ])
+    .where("ingested_at", ">=", since)
+    .where("source_url", "is not", null)
+    .execute();
+
+  const stats = new Map<
+    string,
+    { ingested: number; passed: number; published: number }
+  >();
+  for (const r of rows) {
+    const host = extractHost(r.source_url);
+    if (host === null) continue;
+    const e =
+      stats.get(host) ?? { ingested: 0, passed: 0, published: 0 };
+    e.ingested++;
+    if (r.passed_gate) e.passed++;
+    if (r.published_to_reader) e.published++;
+    stats.set(host, e);
+  }
+
+  // For each host, decide whether it's directly blocked, blocked by a
+  // parent (subdomain rollup), or clean. Mirrors the runtime check in
+  // src/shared/source-blocklist.ts.
+  const findParentBlock = (host: string): string | null => {
+    const labels = host.split(".");
+    for (let i = 1; i < labels.length - 1; i++) {
+      const parent = labels.slice(i).join(".");
+      if (blockedSet.has(parent)) return parent;
+    }
+    return null;
+  };
+
+  const hosts = [...stats.entries()]
+    .map(([host, s]) => {
+      const isBlocked = blockedSet.has(host);
+      const blockedByParent = isBlocked ? null : findParentBlock(host);
+      return {
+        host,
+        ingested: s.ingested,
+        passed: s.passed,
+        published: s.published,
+        isBlocked,
+        blockedByParent,
+      };
+    })
+    .sort((a, b) => b.ingested - a.ingested);
+
+  const flash =
+    q.blocked !== undefined
+      ? ({ kind: "ok", msg: `Blocked ${q.blocked}.` } as const)
+      : q.unblocked !== undefined
+        ? ({ kind: "ok", msg: `Unblocked ${q.unblocked}.` } as const)
+        : q.error === "empty_host"
+          ? ({ kind: "err", msg: "Host can't be empty." } as const)
+          : q.error === "bad_host"
+            ? ({ kind: "err", msg: "That doesn't look like a host." } as const)
+            : null;
+
+  return {
+    windowDays,
+    blocklist: blocklistRows.map((r) => ({
+      host: r.host,
+      reason: r.reason,
+      blockedAt: r.blocked_at,
+    })),
+    hosts,
+    flash,
+  };
 }
 
 async function loadThemesData(

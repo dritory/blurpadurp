@@ -2,19 +2,19 @@
 // in a new file and add it here. Nothing else in the pipeline changes.
 
 import type { Connector } from "./types.ts";
+import { gdelt } from "./gdelt.ts";
 import { redditOotl } from "./reddit-ootl.ts";
 import { rss } from "./rss.ts";
 
-// GDELT is deregistered: most of its DOC/BigQuery output was tabloid
-// wire content, foreign-language noise, and "viral but unverified"
-// rumors that we spent calls filtering out. The 16-feed RSS connector
-// + Reddit r/OutOfTheLoop covers the editorially-curated zeitgeist
-// without the noise. The connector file (./gdelt.ts) is preserved for
-// reference / future re-enable; it's not imported here so the BigQuery
-// client doesn't try to initialize at boot.
+// GDELT brings the regional + multi-language signal that the curated
+// RSS feeds can't. It also brings tabloid wire content and foreign-
+// language noise — so the source_blocklist table (migration 035) is
+// the trim mechanism: hosts get blocked at the ingest boundary and
+// never spend embedding/scoring credits. Manage via /admin/sources.
 export const connectors: Connector[] = [
   rss,
   redditOotl,
+  gdelt,
   // wikipediaCurrentEvents,
   // youtubeTrending,
   // knowYourMeme,

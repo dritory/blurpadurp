@@ -12,6 +12,7 @@ export interface StoryDrilldown {
   summary: string | null;
   sourceName: string;
   sourceUrl: string | null;
+  sourceHost: string | null;
   additionalSourceUrls: string[];
   publishedAt: Date | null;
   ingestedAt: Date;
@@ -143,9 +144,32 @@ export const AdminExploreStory: FC<{ d: StoryDrilldown }> = ({ d }) => {
         <dt>Source URL</dt>
         <dd>
           {d.sourceUrl !== null ? (
-            <a href={d.sourceUrl} rel="noopener noreferrer" target="_blank">
-              {d.sourceUrl} ↗
-            </a>
+            <>
+              <a href={d.sourceUrl} rel="noopener noreferrer" target="_blank">
+                {d.sourceUrl} ↗
+              </a>
+              {d.sourceHost !== null ? (
+                <form
+                  method="post"
+                  action="/admin/sources/block"
+                  data-confirm={`Block ${d.sourceHost}? Future ingest skips it (and all subdomains).`}
+                  style="display:inline; margin-left:10px;"
+                >
+                  <input type="hidden" name="host" value={d.sourceHost} />
+                  <input
+                    type="hidden"
+                    name="reason"
+                    value={`blocked from story #${d.id}`}
+                  />
+                  <button
+                    type="submit"
+                    style="padding:3px 10px; font-family:var(--sans); font-size:12px; background:#fff; color:#8a2a2a; border:1px solid #d4a4a4; cursor:pointer;"
+                  >
+                    block {d.sourceHost}
+                  </button>
+                </form>
+              ) : null}
+            </>
           ) : (
             "—"
           )}
