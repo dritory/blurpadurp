@@ -110,6 +110,12 @@ import {
   type ThemeDetailData,
   type ThemeMember,
 } from "../views/admin-theme-detail.tsx";
+import {
+  AdminThemeGraph,
+  type GraphEdge,
+  type GraphNode,
+  type ThemeGraphData,
+} from "../views/admin-theme-graph.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
 import {
@@ -449,6 +455,34 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       confidenceFloor: cf,
     });
     return c.html(<AdminExploreGate d={data} />);
+  });
+
+  app.get("/admin/explore/graph", async (c) => {
+    const q = c.req.query();
+    // Defaults tuned post-embedding-upgrade. With better cohesion the
+    // signal moved up — at the old 0.65 every theme had 10+ neighbors,
+    // graph became unreadable. 0.80 keeps only meaningfully-similar
+    // pairs. Singletons hidden by default since 735/873 are singletons
+    // and they swamp the multi-story themes visually; toggle them on
+    // to investigate "did this story attach to anything?" cases.
+    const minCosineRaw = Number(q.min_cosine ?? "0.80");
+    const minCosine = Number.isFinite(minCosineRaw)
+      ? Math.max(0.5, Math.min(0.99, minCosineRaw))
+      : 0.80;
+    const category = typeof q.category === "string" && q.category !== ""
+      ? q.category
+      : null;
+    // Hide singletons by default. The form uses an inverted checkbox
+    // (`show_singletons`) since unchecked HTML checkboxes are omitted
+    // from the form payload — there's no clean way to default a
+    // `hide_singletons` checkbox to true without a hidden-field hack.
+    const hideSingletons = q.show_singletons !== "1";
+    const data = await loadThemeGraphData({
+      minCosine,
+      category,
+      hideSingletons,
+    });
+    return c.html(<AdminThemeGraph data={data} />);
   });
 
   app.get("/admin/themes", async (c) => {
@@ -2406,6 +2440,109 @@ async function loadThemeDetail(id: number): Promise<ThemeDetailData | null> {
       hasCentroid: themeRow.has_centroid,
     },
     members,
+  };
+}
+
+async function loadThemeGraphData(filters: {
+  minCosine: number;
+  category: string | null;
+  hideSingletons: boolean;
+}): Promise<ThemeGraphData> {
+  // Fetch every theme (member count + cohesion). Filter by category
+  // and singletons in JS so the dataset is consistent across the
+  // edge query (which doesn't know about either filter).
+  const themesQ = await db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "category.slug as category_slug",
+      sql<string>`(SELECT count(*)::text FROM story s WHERE s.theme_id = theme.id)`.as(
+        "n_stories",
+      ),
+      sql<string | null>`(
+        SELECT
+          CASE WHEN count(*) >= 2
+            THEN AVG(1 - (s.embedding <=> theme.centroid_embedding))::text
+            ELSE NULL
+          END
+        FROM story s
+        WHERE s.theme_id = theme.id
+          AND s.embedding IS NOT NULL
+          AND theme.centroid_embedding IS NOT NULL
+      )`.as("cohesion"),
+    ])
+    .where("theme.centroid_embedding", "is not", null)
+    .execute();
+
+  let nodes: GraphNode[] = themesQ.map((r) => ({
+    id: Number(r.id),
+    name: r.name,
+    category: r.category_slug,
+    n_stories: Number(r.n_stories),
+    cohesion: r.cohesion !== null ? Number(r.cohesion) : null,
+  }));
+  if (filters.category !== null) {
+    nodes = nodes.filter((n) => n.category === filters.category);
+  }
+  if (filters.hideSingletons) {
+    nodes = nodes.filter((n) => n.n_stories >= 2);
+  }
+  const visibleIds = new Set(nodes.map((n) => n.id));
+
+  // For each visible theme, find top-K nearest other themes via
+  // lateral join. K=5 keeps the visible graph manageable; the cosine
+  // threshold further trims. After the embedding upgrade every theme
+  // has many close neighbors, so K can be small without losing
+  // signal — the strongest connections survive.
+  const minCos = filters.minCosine;
+  const edgeRows = await db.executeQuery(
+    sql<{ a_id: number; b_id: number; cosine: string }>`
+      SELECT a.id::int AS a_id, nbr.id::int AS b_id, nbr.cos::text AS cosine
+      FROM theme a
+      CROSS JOIN LATERAL (
+        SELECT b.id, 1 - (a.centroid_embedding <=> b.centroid_embedding) AS cos
+        FROM theme b
+        WHERE b.id <> a.id
+          AND b.centroid_embedding IS NOT NULL
+        ORDER BY a.centroid_embedding <=> b.centroid_embedding
+        LIMIT 5
+      ) nbr
+      WHERE a.centroid_embedding IS NOT NULL
+        AND nbr.cos >= ${minCos}
+    `.compile(db),
+  );
+
+  // Dedupe undirected edges (a→b and b→a are the same connection).
+  const seen = new Set<string>();
+  const edges: GraphEdge[] = [];
+  for (const r of edgeRows.rows) {
+    const a = Math.min(r.a_id, r.b_id);
+    const b = Math.max(r.a_id, r.b_id);
+    if (!visibleIds.has(a) || !visibleIds.has(b)) continue;
+    const key = `${a}-${b}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push({ a, b, cosine: Number(r.cosine) });
+  }
+
+  // Categories present in the data — drives the category filter
+  // dropdown. Keep alphabetical for predictable order.
+  const categories = Array.from(
+    new Set(
+      themesQ
+        .map((r) => r.category_slug)
+        .filter((c): c is string => c !== null),
+    ),
+  ).sort();
+
+  return {
+    nodes,
+    edges,
+    filters,
+    totals: { themes: nodes.length, edges: edges.length },
+    categories,
   };
 }
 
