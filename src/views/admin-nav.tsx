@@ -1,7 +1,20 @@
 // Shared navigation for all /admin/* pages. Sits under the public
 // header so admins can hop between tools without typing URLs.
+//
+// Carries the admin "shell" assets too: HTMX (for surgical form/list
+// updates without full reloads) and the wider/denser CSS overrides
+// applied via :has(.adm-nav). Per-page client islands declare
+// themselves via the `clientBundles` prop — admin pages can drop a
+// CodeMirror editor or a JSON tree island onto a page without
+// affecting public routes.
 
 import type { FC } from "hono/jsx";
+
+// Pin the HTMX version. Bumping is a deliberate decision — read the
+// release notes; HTMX patches occasionally change selector semantics.
+const HTMX_SRC = "https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js";
+const HTMX_SRI =
+  "sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+";
 
 export type AdminNavKey =
   | "issues"
@@ -29,9 +42,43 @@ const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: strin
 ];
 
 const STYLES = `
-  /* Admin shell wider than the public 680px reading column. Tables
-     routinely need 1080–1300px before they overflow gracefully. */
-  body:has(.adm-nav) .wrap { max-width: 1280px; }
+  /* Admin shell wider than the public 680px reading column. Tables,
+     editor inputs, and side-by-side panels routinely need 1400px+
+     before they overflow gracefully. Capped at 1600 so the eye still
+     has a comfortable scan width on big monitors. */
+  body:has(.adm-nav) .wrap {
+    max-width: min(1600px, calc(100vw - 32px));
+    padding-left: 16px; padding-right: 16px;
+  }
+  /* Density bump: admin pages run tables, inputs, and metadata-heavy
+     UI. Tighter line-height + slightly smaller default text leaves
+     room for more information per screen without sacrificing
+     readability. Applies only to admin pages via :has(.adm-nav). */
+  body:has(.adm-nav) {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  body:has(.adm-nav) table {
+    font-size: 13px;
+  }
+  body:has(.adm-nav) table th,
+  body:has(.adm-nav) table td {
+    padding: 6px 10px;
+  }
+  body:has(.adm-nav) h2 { margin-top: 0.6em; }
+  body:has(.adm-nav) h3 { margin-top: 1.2em; margin-bottom: 0.4em; }
+  /* Two-column admin layouts get an .adm-grid wrapper. Stacks on
+     narrow viewports without the consumer having to write media
+     queries. */
+  .adm-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+  }
+  .adm-grid > * { min-width: 0; }
+  @media (max-width: 900px) {
+    .adm-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  }
 
   .adm-nav {
     display: flex; flex-wrap: wrap; gap: 6px;
@@ -86,9 +133,21 @@ const STYLES = `
   }
 `;
 
-export const AdminNav: FC<{ current: AdminNavKey }> = ({ current }) => (
+export const AdminNav: FC<{
+  current: AdminNavKey;
+  /** Per-page client bundles to include after HTMX. Paths are URL-
+   * absolute (e.g. "/assets/admin/prompt-editor.js"). Each bundle is
+   * loaded with `defer` so DOM is ready when it runs. Public pages
+   * never see these — they're only emitted on admin pages by
+   * construction (this component is admin-only). */
+  clientBundles?: string[];
+}> = ({ current, clientBundles = [] }) => (
   <>
     <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+    <script src={HTMX_SRC} integrity={HTMX_SRI} crossorigin="anonymous" defer />
+    {clientBundles.map((src) => (
+      <script src={src} defer />
+    ))}
     <nav class="adm-nav" aria-label="Admin">
       {ITEMS.map((i) => (
         <a href={i.href} class={current === i.key ? "current" : ""}>
