@@ -2460,15 +2460,23 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
   const cutoffMs = Date.now() - 14 * 24 * 3600_000;
   const cutoff = new Date(cutoffMs);
 
-  const poolSizeRow = await db
+  const cfgRows = await db
     .selectFrom("config")
-    .select("value")
-    .where("key", "=", "editor.pool_size")
-    .executeTakeFirst();
+    .select(["key", "value"])
+    .where("key", "in", [
+      "editor.pool_size",
+      "editor.pool_max_category_fraction",
+    ])
+    .execute();
+  const cfgMap = new Map(cfgRows.map((r) => [r.key, r.value]));
   const poolSize =
-    poolSizeRow !== undefined && typeof poolSizeRow.value === "number"
-      ? poolSizeRow.value
+    typeof cfgMap.get("editor.pool_size") === "number"
+      ? (cfgMap.get("editor.pool_size") as number)
       : 60;
+  const maxCategoryFraction =
+    typeof cfgMap.get("editor.pool_max_category_fraction") === "number"
+      ? (cfgMap.get("editor.pool_max_category_fraction") as number)
+      : 1.0;
 
   const rows = await db
     .selectFrom("story")
@@ -2491,7 +2499,7 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .orderBy("story.composite", "desc")
     .execute();
 
-  const result = selectEditorPool(rows, poolSize);
+  const result = selectEditorPool(rows, poolSize, { maxCategoryFraction });
 
   // Per-category passer + in-pool counts. The "in pool" count comes
   // from the selected buckets; "passers" from the full row set. Lets

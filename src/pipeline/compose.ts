@@ -74,6 +74,7 @@ export type ConfigMap = {
   "editor.prompt_version": string;
   "editor.max_tokens": number;
   "editor.pool_size": number;
+  "editor.pool_max_category_fraction": number;
   "compose.min_publish_gap_hours": number;
 };
 
@@ -233,7 +234,9 @@ export async function produceDraft(
   // top themes by max-composite + tier1, includes every gate-passing
   // member of each selected theme, fills until pool_size. Shared with
   // /admin/explore/editor sandbox so tuning is visible in both places.
-  const poolResult = selectEditorPool(rows, cfg["editor.pool_size"]);
+  const poolResult = selectEditorPool(rows, cfg["editor.pool_size"], {
+    maxCategoryFraction: cfg["editor.pool_max_category_fraction"],
+  });
   const pool = poolResult.pool;
   const themesIncluded = poolResult.included
     .filter((b) => b.themeId !== null)
@@ -1133,5 +1136,8 @@ async function loadConfig(): Promise<ConfigMap> {
   for (const k of required) {
     if (map[k] === undefined) throw new Error(`missing config key: ${k}`);
   }
+  // Soft cap added in migration 033. Default 1.0 (no cap) so a repo
+  // without the migration still composes single-category pools.
+  map["editor.pool_max_category_fraction"] ??= 1.0;
   return map as ConfigMap;
 }

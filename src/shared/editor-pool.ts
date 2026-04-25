@@ -17,6 +17,7 @@ export interface PoolRowShape {
   composite: string | number | null;
   source_url: string | null;
   additional_source_urls: string[];
+  category_slug?: string | null;
 }
 
 export interface PoolEntry<R extends PoolRowShape> {
@@ -47,9 +48,18 @@ export interface PoolResult<R extends PoolRowShape> {
   totalThemes: number;
 }
 
+export interface PoolOptions {
+  /** Cap any single category's pool stories to this fraction of
+   *  poolSize. 0.5 = max 50% from any one category. Set to 1.0 (or
+   *  greater) to disable capping. Stories without a category slug
+   *  share a virtual "—" bucket. */
+  maxCategoryFraction?: number;
+}
+
 export function selectEditorPool<R extends PoolRowShape>(
   rows: R[],
   poolSize: number,
+  opts: PoolOptions = {},
 ): PoolResult<R> {
   const annotated: PoolEntry<R>[] = rows.map((r) => {
     const allUrls = [
@@ -90,13 +100,33 @@ export function selectEditorPool<R extends PoolRowShape>(
   const pool: PoolEntry<R>[] = [];
   const included: PoolBucket<R>[] = [];
   const excluded: PoolBucket<R>[] = [];
+
+  // Soft per-category cap. Walks themes in rank order; skips a theme
+  // whose category is already at its share. Capped themes go to
+  // excluded, not into pool — caller can still see them in the
+  // sandbox. The cap NEVER promotes weak themes; it only blocks
+  // over-represented strong ones.
+  const fraction =
+    opts.maxCategoryFraction !== undefined
+      ? opts.maxCategoryFraction
+      : 1.0;
+  const perCategoryCap = Math.ceil(poolSize * fraction);
+  const perCategoryCount = new Map<string, number>();
+
   for (const bucket of ranked) {
     if (pool.length >= poolSize) {
       excluded.push(bucket);
       continue;
     }
+    const cat = bucket.rows[0]?.row.category_slug ?? "—";
+    const used = perCategoryCount.get(cat) ?? 0;
+    if (fraction < 1.0 && used >= perCategoryCap) {
+      excluded.push(bucket);
+      continue;
+    }
     pool.push(...bucket.rows);
     included.push(bucket);
+    perCategoryCount.set(cat, used + bucket.rows.length);
   }
 
   return {
