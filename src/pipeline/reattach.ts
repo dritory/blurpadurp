@@ -42,9 +42,15 @@ interface NeighborTheme {
 export async function reattach(): Promise<void> {
   const cfg = await loadAttachConfig();
   console.log(
-    `[reattach] threshold=${cfg.attachThreshold}; processing singletons…`,
+    `[reattach] singleton-attach threshold=${cfg.attachThreshold}; merge threshold=${cfg.mergeThreshold}`,
   );
 
+  await runSingletonPhase(cfg);
+  await runThemeMergePhase(cfg);
+}
+
+async function runSingletonPhase(cfg: AttachConfig): Promise<void> {
+  console.log(`[reattach] phase 1: consolidating singletons`);
   const singletons = await loadSingletons();
   console.log(`[reattach] ${singletons.length} singleton themes`);
 
@@ -104,25 +110,137 @@ export async function reattach(): Promise<void> {
   }
 
   console.log(
-    `[reattach] done — merged=${merged} confirmed=${confirmed} rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
+    `[reattach] phase 1 done — merged=${merged} confirmed=${confirmed} rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
   );
 }
 
-async function loadAttachConfig(): Promise<{ attachThreshold: number }> {
-  const row = await db
+// Phase 2: collapse near-duplicate themes themselves. Walks every
+// remaining theme, finds its best non-self centroid neighbor, runs
+// Haiku theme-confirm if cosine clears the merge threshold, and
+// merges (lower id absorbs the higher one) on confirmation. Catches
+// cases like "Apple CEO succession" + "Tim Cook stepping down"
+// living separately at 0.95 cosine.
+//
+// Order: themes by id ascending so absorbers are stable. After a
+// merge, subsequent iterations re-fetch (the absorbed theme is
+// gone). The absorber's centroid recomputes after each merge so
+// the next iteration sees the updated state.
+async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
+  console.log(`[reattach] phase 2: merging near-duplicate themes`);
+  const ids = await db
+    .selectFrom("theme")
+    .select("id")
+    .orderBy("id", "asc")
+    .execute();
+  console.log(`[reattach] scanning ${ids.length} themes`);
+
+  let merged = 0;
+  let rejectedByLlm = 0;
+  let belowThreshold = 0;
+  let noNeighbor = 0;
+  let processed = 0;
+
+  for (const { id } of ids) {
+    processed++;
+    if (processed % 25 === 0) {
+      console.log(
+        `[reattach] phase 2: ${processed}/${ids.length} processed; merged=${merged}`,
+      );
+    }
+    const t = await db
+      .selectFrom("theme")
+      .select(["id", "name", "centroid_embedding"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (!t || t.centroid_embedding === null) continue;
+
+    const neighbor = await findBestThemeNeighbor(
+      Number(t.id),
+      t.centroid_embedding,
+    );
+    if (neighbor === null) {
+      noNeighbor++;
+      continue;
+    }
+    if (neighbor.cosine < cfg.mergeThreshold) {
+      belowThreshold++;
+      continue;
+    }
+
+    // Convention: lower id absorbs. Skip if this iteration's theme
+    // would be the one absorbed (we'll handle the pair when we reach
+    // the lower-id theme).
+    const absorberId = Math.min(Number(t.id), neighbor.id);
+    const absorbedId = Math.max(Number(t.id), neighbor.id);
+    if (absorberId !== Number(t.id)) continue;
+
+    // Haiku-confirm using a representative story from the absorbed
+    // theme as the "incoming" and the absorber theme as the candidate.
+    // Reuses the existing confirmThemeContinuation; not a perfect
+    // semantic match (the prompt is story→theme, not theme↔theme) but
+    // close enough since the representative story IS the strongest
+    // signal of the absorbed theme's content.
+    const repr = await loadRepresentativeStory(absorbedId);
+    if (repr === null) continue;
+    const recentSummaries = await loadRecentSummaries(absorberId);
+    const absorberTheme = await db
+      .selectFrom("theme")
+      .select(["name", "description"])
+      .where("id", "=", absorberId)
+      .executeTakeFirst();
+    if (!absorberTheme) continue;
+
+    let isContinuation: boolean;
+    try {
+      const result = await confirmThemeContinuation({
+        story_title: repr.title,
+        story_summary: repr.summary,
+        theme_name: absorberTheme.name,
+        theme_description: absorberTheme.description,
+        recent_summaries: recentSummaries,
+        cosine_similarity: neighbor.cosine,
+      });
+      isContinuation = result.is_continuation;
+    } catch (err) {
+      console.warn(
+        `[reattach] theme-merge confirm failed for ${absorberId}↔${absorbedId}: ${err instanceof Error ? err.message : err}`,
+      );
+      continue;
+    }
+    if (!isContinuation) {
+      rejectedByLlm++;
+      continue;
+    }
+
+    await mergeThemeInto(absorbedId, absorberId);
+    await recomputeThemeCentroid(absorberId);
+    merged++;
+  }
+
+  console.log(
+    `[reattach] phase 2 done — merged=${merged} rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
+  );
+}
+
+interface AttachConfig {
+  attachThreshold: number;
+  mergeThreshold: number;
+}
+
+async function loadAttachConfig(): Promise<AttachConfig> {
+  const rows = await db
     .selectFrom("config")
     .select(["key", "value"])
-    .where("key", "=", "theme.attach_threshold")
-    .executeTakeFirst();
-  const v = row?.value;
-  const parsed =
-    typeof v === "number"
-      ? v
-      : typeof v === "string"
-        ? Number(v)
-        : null;
+    .where("key", "in", ["theme.attach_threshold", "theme.merge_threshold"])
+    .execute();
+  const parse = (v: unknown, fallback: number): number => {
+    const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const map = new Map(rows.map((r) => [r.key, r.value]));
   return {
-    attachThreshold: parsed !== null && Number.isFinite(parsed) ? parsed : 0.7,
+    attachThreshold: parse(map.get("theme.attach_threshold"), 0.7),
+    mergeThreshold: parse(map.get("theme.merge_threshold"), 0.85),
   };
 }
 
@@ -208,6 +326,82 @@ async function loadRecentSummaries(themeId: number): Promise<string[]> {
     if (s.trim().length > 0) out.push(s);
   }
   return out;
+}
+
+// For a given theme, find the best non-self theme by centroid cosine.
+// Used by phase 2.
+async function findBestThemeNeighbor(
+  themeId: number,
+  centroid: string,
+): Promise<{ id: number; cosine: number } | null> {
+  const row = await db
+    .selectFrom("theme")
+    .select([
+      "id",
+      sql<number>`1 - (centroid_embedding <=> ${centroid}::vector)`.as("sim"),
+    ])
+    .where("centroid_embedding", "is not", null)
+    .where("id", "!=", themeId)
+    .orderBy(sql`centroid_embedding <=> ${centroid}::vector`)
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) return null;
+  return { id: Number(row.id), cosine: row.sim };
+}
+
+// A representative member of a theme — used as the "new story" when
+// we reuse confirmThemeContinuation for theme-to-theme judgments.
+// Highest-composite story is the strongest proxy for "what this
+// theme is about"; falls back to the most recent on no scored
+// composite.
+async function loadRepresentativeStory(themeId: number): Promise<{
+  title: string;
+  summary: string | null;
+} | null> {
+  const row = await db
+    .selectFrom("story")
+    .select(["title", "summary", "raw_output"])
+    .where("theme_id", "=", themeId)
+    .orderBy(sql`composite DESC NULLS LAST, ingested_at DESC`)
+    .limit(1)
+    .executeTakeFirst();
+  if (!row) return null;
+  // Prefer the scorer's summary text over raw RSS description for
+  // the LLM's view — same reason as the embedding upgrade.
+  const raw = row.raw_output as
+    | { summary?: string; one_line_summary?: string }
+    | null;
+  const scorerSummary =
+    raw?.summary ?? raw?.one_line_summary ?? null;
+  return {
+    title: row.title,
+    summary: scorerSummary ?? row.summary,
+  };
+}
+
+// Move every story from `fromThemeId` into `intoThemeId`, then delete
+// the now-empty source. Wrapped in a tx so readers never see an
+// orphaned story or a half-merged theme.
+async function mergeThemeInto(
+  fromThemeId: number,
+  intoThemeId: number,
+): Promise<void> {
+  // Carry the destination's category to the moved stories so the
+  // story.category_id stays consistent with story.theme_id.
+  const dest = await db
+    .selectFrom("theme")
+    .select(["category_id"])
+    .where("id", "=", intoThemeId)
+    .executeTakeFirst();
+  if (!dest) return;
+  await db.transaction().execute(async (tx) => {
+    await tx
+      .updateTable("story")
+      .set({ theme_id: intoThemeId, category_id: dest.category_id })
+      .where("theme_id", "=", fromThemeId)
+      .execute();
+    await tx.deleteFrom("theme").where("id", "=", fromThemeId).execute();
+  });
 }
 
 // Move the lone member to the destination theme, snap its category to

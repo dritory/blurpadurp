@@ -242,6 +242,7 @@ INSERT INTO config (key, value) VALUES
   ('gate.confidence_floor',        '"medium"'::jsonb),
   ('theme.attach_threshold',       '0.70'::jsonb),
   ('theme.create_recheck_threshold','0.88'::jsonb),
+  ('theme.merge_threshold',        '0.85'::jsonb),
   ('cadence.interval',             '"weekly"'::jsonb),
   ('cadence.run_at_utc',           '"Sunday 20:00"'::jsonb),
   ('compose.min_publish_gap_hours','144'::jsonb),
