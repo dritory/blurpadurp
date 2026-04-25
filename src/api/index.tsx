@@ -116,6 +116,12 @@ import {
   type GraphNode,
   type ThemeGraphData,
 } from "../views/admin-theme-graph.tsx";
+import {
+  AdminEditorSandbox,
+  type EditorSandboxData,
+  type SandboxBucket,
+} from "../views/admin-editor-sandbox.tsx";
+import { selectEditorPool } from "../shared/editor-pool.ts";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
 import {
@@ -455,6 +461,11 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       confidenceFloor: cf,
     });
     return c.html(<AdminExploreGate d={data} />);
+  });
+
+  app.get("/admin/explore/editor", async (c) => {
+    const data = await loadEditorSandboxData();
+    return c.html(<AdminEditorSandbox data={data} />);
   });
 
   app.get("/admin/explore/graph", async (c) => {
@@ -2440,6 +2451,105 @@ async function loadThemeDetail(id: number): Promise<ThemeDetailData | null> {
       hasCentroid: themeRow.has_centroid,
     },
     members,
+  };
+}
+
+async function loadEditorSandboxData(): Promise<EditorSandboxData> {
+  // Same window as compose.ts (14 days). If this drifts, both should
+  // move together — keep in sync if you ever extract.
+  const cutoffMs = Date.now() - 14 * 24 * 3600_000;
+  const cutoff = new Date(cutoffMs);
+
+  const poolSizeRow = await db
+    .selectFrom("config")
+    .select("value")
+    .where("key", "=", "editor.pool_size")
+    .executeTakeFirst();
+  const poolSize =
+    poolSizeRow !== undefined && typeof poolSizeRow.value === "number"
+      ? poolSizeRow.value
+      : 60;
+
+  const rows = await db
+    .selectFrom("story")
+    .leftJoin("theme", "theme.id", "story.theme_id")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      "story.id as story_id",
+      "story.title",
+      "story.composite",
+      "story.point_in_time_confidence",
+      "story.theme_id",
+      "story.source_url",
+      "story.additional_source_urls",
+      "theme.name as theme_name",
+      "category.slug as category_slug",
+    ])
+    .where("story.passed_gate", "=", true)
+    .where("story.published_to_reader", "=", false)
+    .where("story.ingested_at", ">=", cutoff)
+    .orderBy("story.composite", "desc")
+    .execute();
+
+  const result = selectEditorPool(rows, poolSize);
+
+  // Per-category passer + in-pool counts. The "in pool" count comes
+  // from the selected buckets; "passers" from the full row set. Lets
+  // the operator see at a glance which categories are over/under-
+  // represented in the pool relative to their gate-pass volume.
+  const inPoolRowIds = new Set<number>();
+  for (const b of result.included) {
+    for (const e of b.rows) inPoolRowIds.add(Number(e.row.story_id));
+  }
+  const catCounts = new Map<string, { passers: number; inPool: number }>();
+  for (const r of rows) {
+    const key = r.category_slug ?? "—";
+    const e = catCounts.get(key) ?? { passers: 0, inPool: 0 };
+    e.passers++;
+    if (inPoolRowIds.has(Number(r.story_id))) e.inPool++;
+    catCounts.set(key, e);
+  }
+  const byCategory = [...catCounts.entries()]
+    .map(([category, v]) => ({ category, ...v }))
+    .sort((a, b) => b.passers - a.passers);
+
+  const toBucket = (
+    b: (typeof result.included)[number],
+  ): SandboxBucket => {
+    const first = b.rows[0]?.row;
+    const themeName =
+      b.themeId !== null
+        ? (first?.theme_name ?? `theme #${b.themeId}`)
+        : null;
+    return {
+      themeId: b.themeId,
+      themeName,
+      category: first?.category_slug ?? null,
+      storyCount: b.rows.length,
+      maxComposite: b.maxComposite,
+      tier1Total: b.tier1Total,
+      stories: b.rows.map((e) => ({
+        id: Number(e.row.story_id),
+        title: e.row.title,
+        composite:
+          e.row.composite !== null ? Number(e.row.composite) : null,
+        confidence: e.row.point_in_time_confidence,
+        sourceUrl: e.row.source_url,
+        tier1Sources: e.tier1,
+        totalSources: e.total,
+      })),
+    };
+  };
+
+  return {
+    poolSize,
+    ingestWindowDays: 14,
+    totalPassers: result.totalPassers,
+    totalThemes: result.totalThemes,
+    poolStories: result.pool.length,
+    included: result.included.map(toBucket),
+    excluded: result.excluded.map(toBucket),
+    byCategory,
   };
 }
 

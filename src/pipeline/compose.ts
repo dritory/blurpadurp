@@ -10,6 +10,7 @@ import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
 import { loadSystemPromptText, type PromptMode } from "../shared/prompts.ts";
+import { selectEditorPool } from "../shared/editor-pool.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
 import type {
   ComposerInput,
@@ -228,75 +229,17 @@ export async function produceDraft(
     return null;
   }
 
-  // Theme-first pool selection. Old approach (top-N stories by
-  // tier1+composite) often left arcs invisible: the editor saw 1 strong
-  // story per theme and never realized the other 4 stories of the same
-  // theme also passed the gate. New approach groups gate-passers by
-  // theme, ranks themes, and pulls in every gate-passing member of the
-  // top themes until we hit the pool cap. Editor reasons about arcs as
-  // first-class objects.
-  const annotated = rows.map((r) => {
-    const allUrls = [
-      ...(r.source_url ? [r.source_url] : []),
-      ...(r.additional_source_urls ?? []),
-    ];
-    return {
-      row: r,
-      tier1: countTier1(allUrls),
-      total: allUrls.length,
-    };
-  });
-
-  // Group by theme. Stories with theme_id=NULL get a synthetic per-row
-  // bucket so they still compete for pool slots (as singletons).
-  type Bucket = {
-    themeId: number | null;
-    rows: typeof annotated;
-    maxComposite: number;
-    tier1Total: number;
-  };
-  const themeBuckets = new Map<string, Bucket>();
-  for (const a of annotated) {
-    const key =
-      a.row.theme_id !== null ? `t${a.row.theme_id}` : `s${a.row.story_id}`;
-    const existing = themeBuckets.get(key);
-    const composite = a.row.composite !== null ? Number(a.row.composite) : 0;
-    if (existing === undefined) {
-      themeBuckets.set(key, {
-        themeId: a.row.theme_id !== null ? Number(a.row.theme_id) : null,
-        rows: [a],
-        maxComposite: composite,
-        tier1Total: a.tier1,
-      });
-    } else {
-      existing.rows.push(a);
-      existing.maxComposite = Math.max(existing.maxComposite, composite);
-      existing.tier1Total += a.tier1;
-    }
-  }
-  // Rank themes by max-composite (best-story signal) then tier1 total
-  // (cumulative source quality). Larger themes naturally rise because
-  // they have more chances at high-composite members AND more tier-1
-  // coverage; the multi-story arcs the editor wants are top-ranked.
-  const rankedThemes = [...themeBuckets.values()].sort((a, b) => {
-    if (b.maxComposite !== a.maxComposite) return b.maxComposite - a.maxComposite;
-    return b.tier1Total - a.tier1Total;
-  });
-
-  // Fill the pool by themes, in rank order, until poolSize stories.
-  // Including ALL gate-passing members of a selected theme so the editor
-  // sees full arcs. May overshoot poolSize slightly when a single theme
-  // is large; that's preferable to truncating an arc.
-  const targetPoolSize = cfg["editor.pool_size"];
-  const pool: typeof annotated = [];
-  const themesIncluded: number[] = [];
-  for (const bucket of rankedThemes) {
-    if (pool.length >= targetPoolSize) break;
-    pool.push(...bucket.rows);
-    if (bucket.themeId !== null) themesIncluded.push(bucket.themeId);
-  }
+  // Theme-first pool selection (see src/shared/editor-pool.ts). Picks
+  // top themes by max-composite + tier1, includes every gate-passing
+  // member of each selected theme, fills until pool_size. Shared with
+  // /admin/explore/editor sandbox so tuning is visible in both places.
+  const poolResult = selectEditorPool(rows, cfg["editor.pool_size"]);
+  const pool = poolResult.pool;
+  const themesIncluded = poolResult.included
+    .filter((b) => b.themeId !== null)
+    .map((b) => b.themeId!);
   console.log(
-    `[compose] ${rows.length} passers across ${themeBuckets.size} themes → editor pool of ${pool.length} stories from ${themesIncluded.length} themes (+ ${pool.length - themesIncluded.length} singletons)`,
+    `[compose] ${poolResult.totalPassers} passers across ${poolResult.totalThemes} themes → editor pool of ${pool.length} stories from ${themesIncluded.length} themes (+ ${pool.length - themesIncluded.length} singletons)`,
   );
 
   // Preload per-theme metadata for every theme in the pool — used both
