@@ -7,6 +7,13 @@ primary_region = "ams"
 
 [build]
 
+# Runs once per deploy after the image builds, before any app machine
+# rolls. If it exits non-zero the deploy aborts — so code can't ship
+# referencing columns a migration hasn't applied yet. Has access to
+# all Fly secrets (DATABASE_URL etc).
+[deploy]
+  release_command = "bun run migrate"
+
 [env]
   PORT = "3000"
   NODE_ENV = "production"

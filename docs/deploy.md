@@ -123,12 +123,22 @@ A 200 with JSON + `db_ok: true` confirms the DB is reachable.
 
 ## 6. Run migrations on the deployed DB
 
+Migrations run automatically on each deploy via Fly's `release_command`
+hook (configured in `fly.toml` as `release_command = "bun run migrate"`).
+The hook runs in a one-off temporary machine after the new image
+builds but before any app machine rolls — if migrations fail, the
+deploy aborts and the old code keeps running. So in normal operation
+you don't run migrations by hand; `git push` is enough.
+
+If you need to apply a migration out-of-band (recovery, manual fix):
+
 ```bash
 fly ssh console -C "bun run migrate"
 ```
 
-(Or run locally against the Fly DB: `fly proxy 5432:5432 -a blurpadurp-db`
-in one terminal, then `DATABASE_URL=postgres://... bun run migrate`.)
+Or run locally against the production DB: `fly proxy 5432:5432 -a
+blurpadurp-db` in one terminal, then `DATABASE_URL=postgres://...
+bun run migrate`.
 
 ## 7. Stage 2: hide from crawlers
 

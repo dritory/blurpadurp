@@ -242,6 +242,7 @@ INSERT INTO config (key, value) VALUES
   ('gate.confidence_floor',        '"medium"'::jsonb),
   ('cadence.interval',             '"weekly"'::jsonb),
   ('cadence.run_at_utc',           '"Sunday 20:00"'::jsonb),
+  ('compose.min_publish_gap_hours','144'::jsonb),
   ('budget.daily_usd_cap',         '5'::jsonb);
 
 -- ============================================================
