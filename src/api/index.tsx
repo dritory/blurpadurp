@@ -95,6 +95,7 @@ import {
 import {
   AdminReview,
   AnnotationsList,
+  decorateBriefHtml,
   type Annotation,
   type EditorReviewData,
 } from "../views/admin-review.tsx";
@@ -287,24 +288,25 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const body = await c.req.parseBody();
     const slot = normalizeSlot(String(body.slot ?? "summary"));
     const text = String(body.body ?? "").trim();
+    const rawAnchor = String(body.anchor_key ?? "").trim();
+    const anchorKey = rawAnchor.length > 0 ? rawAnchor : null;
     const isHtmx = c.req.header("HX-Request") === "true";
+    const renderList = async () => {
+      const list = await loadAnnotations(id);
+      const snippets = await loadIssueSnippets(id);
+      return c.html(
+        <AnnotationsList issueId={id} annotations={list} snippets={snippets} />,
+      );
+    };
     if (text.length === 0) {
-      // Empty note: HTMX gets a no-op (200 with current list); a plain
-      // browser POST gets redirected back with an error flash.
-      if (isHtmx) {
-        const list = await loadAnnotations(id);
-        return c.html(<AnnotationsList issueId={id} annotations={list} />);
-      }
+      if (isHtmx) return renderList();
       return c.redirect(`/admin/review/${id}?error=empty_note`, 303);
     }
     await db
       .insertInto("issue_annotation")
-      .values({ issue_id: id, slot, body: text })
+      .values({ issue_id: id, slot, body: text, anchor_key: anchorKey })
       .execute();
-    if (isHtmx) {
-      const list = await loadAnnotations(id);
-      return c.html(<AnnotationsList issueId={id} annotations={list} />);
-    }
+    if (isHtmx) return renderList();
     return c.redirect(`/admin/review/${id}?noted=1#notes`, 303);
   });
 
@@ -319,7 +321,10 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .execute();
     if (c.req.header("HX-Request") === "true") {
       const list = await loadAnnotations(id);
-      return c.html(<AnnotationsList issueId={id} annotations={list} />);
+      const snippets = await loadIssueSnippets(id);
+      return c.html(
+        <AnnotationsList issueId={id} annotations={list} snippets={snippets} />,
+      );
     }
     return c.redirect(`/admin/review/${id}?deleted_note=1#notes`, 303);
   });
@@ -2383,7 +2388,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
 async function loadAnnotations(issueId: number): Promise<Annotation[]> {
   const rows = await db
     .selectFrom("issue_annotation")
-    .select(["id", "slot", "body", "created_at"])
+    .select(["id", "slot", "body", "anchor_key", "created_at"])
     .where("issue_id", "=", issueId)
     .orderBy("created_at", "desc")
     .execute();
@@ -2391,8 +2396,24 @@ async function loadAnnotations(issueId: number): Promise<Annotation[]> {
     id: Number(r.id),
     slot: r.slot,
     body: r.body,
+    anchorKey: r.anchor_key,
     createdAt: r.created_at,
   }));
+}
+
+// Look up the issue's composedHtml just to extract anchor snippets.
+// HTMX annotate/delete responses re-render the sidebar fragment, which
+// needs the snippet labels to keep group headings in sync.
+async function loadIssueSnippets(
+  issueId: number,
+): Promise<Array<{ key: string; text: string }>> {
+  const row = await db
+    .selectFrom("issue")
+    .select("composed_html")
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (!row) return [];
+  return decorateBriefHtml(row.composed_html).snippets;
 }
 
 async function loadReview(id: number): Promise<EditorReviewData | null> {
@@ -2446,7 +2467,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
 
   const annotations = await db
     .selectFrom("issue_annotation")
-    .select(["id", "slot", "body", "created_at"])
+    .select(["id", "slot", "body", "anchor_key", "created_at"])
     .where("issue_id", "=", id)
     .orderBy("created_at", "desc")
     .execute();
@@ -2465,6 +2486,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       id: Number(a.id),
       slot: a.slot,
       body: a.body,
+      anchorKey: a.anchor_key,
       createdAt: a.created_at,
     })),
     editor: iss.editor_output_jsonb as EditorReviewData["editor"],
