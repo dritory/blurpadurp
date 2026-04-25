@@ -160,7 +160,6 @@ const NoteGroup: FC<{
     <ul class="annot-list">
       {notes.map((a) => (
         <li>
-          <span class="annot-slot">{slotLabel(a.slot)}</span>
           <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
             {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}Z
           </span>
@@ -183,25 +182,6 @@ const NoteGroup: FC<{
     </ul>
   </div>
 );
-
-function slotLabel(slot: string): string {
-  switch (slot) {
-    case "summary":
-      return "Overall";
-    case "opener":
-      return "Opener";
-    case "conversation":
-      return "Conversation";
-    case "worth_knowing":
-      return "Worth knowing";
-    case "worth_watching":
-      return "Worth watching";
-    case "shrug":
-      return "Shrug";
-    default:
-      return slot;
-  }
-}
 
 export interface EditorReviewData {
   issue: {
@@ -336,6 +316,19 @@ export const AdminReview: FC<{
             outline: 1px solid #e5e2d4;
             outline-offset: 2px;
           }
+          /* Sticky highlight on the currently-selected anchor — confirms
+             which element the next note will attach to. Persists until
+             the operator clicks another anchor, hits "clear", or the
+             form submits successfully. */
+          .draft-preview [data-anchor-id].anchor-selected {
+            background: #ecf3e6;
+            outline: 1px solid #9bc79b;
+            outline-offset: 2px;
+          }
+          .draft-preview [data-anchor-id].anchor-selected:hover,
+          .draft-preview [data-anchor-id].anchor-selected.anchor-hover {
+            background: #dfeed4;
+          }
           /* Anchor highlight when scrolled into view from the sidebar. */
           .draft-preview [data-anchor-id].anchor-flash {
             background: #fff5d1 !important;
@@ -463,14 +456,6 @@ export const AdminReview: FC<{
                 </button>
               </div>
               <input type="hidden" name="anchor_key" value="" />
-              <select name="slot">
-                <option value="summary">Overall</option>
-                <option value="opener">Opener</option>
-                <option value="conversation">Conversation</option>
-                <option value="worth_knowing">Worth knowing</option>
-                <option value="worth_watching">Worth watching</option>
-                <option value="shrug">Shrug</option>
-              </select>
               <textarea
                 name="body"
                 placeholder="What's working, what's not, what to try next time…"

@@ -17,7 +17,22 @@
 const ANCHOR_SELECTOR = "[data-anchor-id]";
 const FORM_SELECTOR = "form.annot-form";
 const FLASH_CLASS = "anchor-flash";
+const SELECTED_CLASS = "anchor-selected";
 const FLASH_DURATION_MS = 900;
+
+function clearSelectedAnchor(): void {
+  document
+    .querySelectorAll<HTMLElement>(`.${SELECTED_CLASS}`)
+    .forEach((el) => el.classList.remove(SELECTED_CLASS));
+}
+
+function markSelectedAnchor(key: string): void {
+  clearSelectedAnchor();
+  const target = document.querySelector<HTMLElement>(
+    `${ANCHOR_SELECTOR}[data-anchor-id="${cssEscape(key)}"]`,
+  );
+  if (target !== null) target.classList.add(SELECTED_CLASS);
+}
 
 function setupAnchorClicks(): void {
   const form = document.querySelector<HTMLFormElement>(FORM_SELECTOR);
@@ -46,9 +61,11 @@ function setupAnchorClicks(): void {
     if (key === null) {
       indicator.classList.remove("has-anchor");
       indicatorText.textContent = "General comment";
+      clearSelectedAnchor();
     } else {
       indicator.classList.add("has-anchor");
       indicatorText.textContent = snippet ?? key;
+      markSelectedAnchor(key);
     }
   };
 
@@ -91,6 +108,17 @@ function setupAnchorClicks(): void {
       textarea.focus();
     });
   }
+
+  // After a successful HTMX submit the form is reset by the inline
+  // hx-on handler in admin-review.tsx — mirror that by dropping the
+  // sticky highlight too. Listening on the form scopes us to this
+  // form's responses, not other HTMX traffic on the page.
+  form.addEventListener("htmx:afterRequest", (ev) => {
+    const detail = (ev as CustomEvent<{ successful?: boolean }>).detail;
+    if (detail?.successful === true) {
+      clearSelectedAnchor();
+    }
+  });
 
   // Sidebar group headings link back to their anchor — scroll the
   // brief to that element and briefly flash it.
