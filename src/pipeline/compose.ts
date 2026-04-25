@@ -73,6 +73,7 @@ export type ConfigMap = {
   "editor.prompt_version": string;
   "editor.max_tokens": number;
   "editor.pool_size": number;
+  "compose.min_publish_gap_hours": number;
 };
 
 export async function compose(): Promise<void> {
@@ -94,6 +95,28 @@ async function runCompose(): Promise<void> {
       `[compose] open draft #${existingDraft.id} exists — publish or discard it first, skipping`,
     );
     return;
+  }
+
+  // Cadence guard. Once a draft is published, refuse to start another
+  // regular compose until the configured gap has elapsed since the last
+  // non-event-driven publication. Drafts don't count (they didn't ship);
+  // event-driven issues don't count (they're a separate cadence).
+  const cfgForGap = await loadConfig();
+  const gapHours = cfgForGap["compose.min_publish_gap_hours"];
+  const lastPublished = await db
+    .selectFrom("issue")
+    .select(({ fn }) => fn.max("published_at").as("last"))
+    .where("is_draft", "=", false)
+    .where("is_event_driven", "=", false)
+    .executeTakeFirst();
+  if (lastPublished?.last) {
+    const ageHours = (Date.now() - lastPublished.last.getTime()) / 3600_000;
+    if (ageHours < gapHours) {
+      console.log(
+        `[compose] last regular issue published ${ageHours.toFixed(1)}h ago (gap=${gapHours}h); skipping`,
+      );
+      return;
+    }
   }
 
   const draft = await produceDraft();
@@ -1119,6 +1142,7 @@ async function loadConfig(): Promise<ConfigMap> {
     "editor.prompt_version",
     "editor.max_tokens",
     "editor.pool_size",
+    "compose.min_publish_gap_hours",
   ] as const;
   for (const k of required) {
     if (map[k] === undefined) throw new Error(`missing config key: ${k}`);
