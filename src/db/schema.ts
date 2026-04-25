@@ -116,6 +116,7 @@ export interface Database {
     issue_id: number;
     slot: string;
     body: string;
+    anchor_key: string | null;
     created_at: Created;
   };
 

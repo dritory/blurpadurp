@@ -10,6 +10,7 @@ import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
 import { loadSystemPromptText, type PromptMode } from "../shared/prompts.ts";
+import { selectEditorPool } from "../shared/editor-pool.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
 import type {
   ComposerInput,
@@ -73,6 +74,8 @@ export type ConfigMap = {
   "editor.prompt_version": string;
   "editor.max_tokens": number;
   "editor.pool_size": number;
+  "editor.pool_max_themes": number;
+  "editor.pool_max_category_fraction": number;
   "compose.min_publish_gap_hours": number;
 };
 
@@ -228,32 +231,20 @@ export async function produceDraft(
     return null;
   }
 
-  // Editor picks the shortlist from the top-N passers. Pool is ranked by
-  // tier-1 coverage then composite — gives the editor the highest-quality
-  // slice to curate rather than raw NumMentions leaders.
-  const ranked = rows
-    .map((r) => {
-      const allUrls = [
-        ...(r.source_url ? [r.source_url] : []),
-        ...(r.additional_source_urls ?? []),
-      ];
-      return {
-        row: r,
-        tier1: countTier1(allUrls),
-        total: allUrls.length,
-      };
-    })
-    .sort((a, b) => {
-      if (b.tier1 !== a.tier1) return b.tier1 - a.tier1;
-      const ca = a.row.composite !== null ? Number(a.row.composite) : 0;
-      const cb = b.row.composite !== null ? Number(b.row.composite) : 0;
-      return cb - ca;
-    });
-
-  const poolSize = Math.min(cfg["editor.pool_size"], ranked.length);
-  const pool = ranked.slice(0, poolSize);
+  // Theme-first pool selection (see src/shared/editor-pool.ts). Picks
+  // top themes by max-composite + tier1, includes every gate-passing
+  // member of each selected theme, fills until pool_size. Shared with
+  // /admin/explore/editor sandbox so tuning is visible in both places.
+  const poolResult = selectEditorPool(rows, cfg["editor.pool_max_themes"], {
+    maxCategoryFraction: cfg["editor.pool_max_category_fraction"],
+    maxStorySafetyCap: cfg["editor.pool_size"] * 4, // generous; primary cap is themes
+  });
+  const pool = poolResult.pool;
+  const themesIncluded = poolResult.included
+    .filter((b) => b.themeId !== null)
+    .map((b) => b.themeId!);
   console.log(
-    `[compose] ${rows.length} passers → editor pool of ${poolSize}`,
+    `[compose] ${poolResult.totalPassers} passers across ${poolResult.totalThemes} themes → editor pool of ${pool.length} stories from ${themesIncluded.length} themes (+ ${pool.length - themesIncluded.length} singletons)`,
   );
 
   // Preload per-theme metadata for every theme in the pool — used both
@@ -1147,5 +1138,10 @@ async function loadConfig(): Promise<ConfigMap> {
   for (const k of required) {
     if (map[k] === undefined) throw new Error(`missing config key: ${k}`);
   }
+  // Soft cap added in migration 033. Default 1.0 (no cap) so a repo
+  // without the migration still composes single-category pools.
+  map["editor.pool_max_category_fraction"] ??= 1.0;
+  // Theme-count primary cap, added in migration 034. Default 20.
+  map["editor.pool_max_themes"] ??= 20;
   return map as ConfigMap;
 }

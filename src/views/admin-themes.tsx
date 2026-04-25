@@ -13,6 +13,17 @@ export interface ThemeRow {
   firstSeenAt: Date;
   lastPublishedAt: Date | null;
   nStoriesPublished: number;
+  /** Live count of stories currently pointing at this theme. Distinct
+   * from nStoriesPublished, which is a denormalized counter that only
+   * tracks gate-passers. nStories is what the network graph cares
+   * about. */
+  nStories: number;
+  /** Average cosine similarity of member stories' embeddings to the
+   * theme's centroid. NULL when fewer than 2 members or no centroid.
+   * Sloppy themes (over-merging unrelated stories) score low; tight
+   * clusters score high. Singletons score 1 by definition (story IS
+   * the centroid) so we suppress them as a signal. */
+  cohesion: number | null;
   rollingAvg: number | null;
   rolling30d: number | null;
   trajectory: "new" | "rising" | "stable" | "falling";
@@ -42,6 +53,14 @@ const STYLES = `
   table.t-table .traj.falling { background: rgba(166, 58, 58, 0.15); color: #7a2929; }
   table.t-table .traj.new { background: rgba(197, 162, 74, 0.2); color: #6b551c; }
 
+  /* Cohesion banding — visual triage. Tight = green, sloppy = red.
+     Singletons surface as "—" (cohesion is meaningless for n=1). */
+  table.t-table td.cohesion { font-variant-numeric: tabular-nums; }
+  table.t-table td.cohesion-tight   { color: #2b4f2b; }
+  table.t-table td.cohesion-decent  { color: var(--ink); }
+  table.t-table td.cohesion-loose   { color: #8a5e2a; }
+  table.t-table td.cohesion-sloppy  { color: #8a2a2a; font-weight: 600; }
+
   form.toggle { display: inline; }
   form.toggle button {
     padding: 6px 12px; min-height: 30px; font-size: 12px; font-family: var(--sans);
@@ -56,6 +75,21 @@ const STYLES = `
     form.toggle button { padding: 8px 12px; min-height: 36px; }
   }
 `;
+
+function formatCohesion(c: number | null): string {
+  if (c === null) return "—";
+  return c.toFixed(2);
+}
+
+// Banding thresholds match the description above the table — see
+// admin-themes hint text. Adjust together if you change one.
+function cohesionClass(c: number | null): string {
+  if (c === null) return "";
+  if (c >= 0.9) return "-tight";
+  if (c >= 0.8) return "-decent";
+  if (c >= 0.7) return "-loose";
+  return "-sloppy";
+}
 
 export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
   const cls = (f: ThemeFilter) => (data.filter === f ? "current" : "");
@@ -99,7 +133,12 @@ export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
           <tr>
             <th>Name</th>
             <th>Cat</th>
-            <th class="num">Stories</th>
+            <th class="num" title="All stories currently attached, not only published">
+              Members
+            </th>
+            <th class="num" title="Avg cosine of member embeddings to centroid; lower = sloppier">
+              Cohesion
+            </th>
             <th class="num">Avg</th>
             <th class="num">30d</th>
             <th>Trajectory</th>
@@ -110,9 +149,14 @@ export const AdminThemes: FC<{ data: ThemesData }> = ({ data }) => {
         <tbody>
           {data.rows.map((t) => (
             <tr>
-              <td>{t.name}</td>
+              <td>
+                <a href={`/admin/themes/${t.id}`}>{t.name || `theme #${t.id}`}</a>
+              </td>
               <td>{t.category ?? "—"}</td>
-              <td class="num">{t.nStoriesPublished}</td>
+              <td class="num">{t.nStories}</td>
+              <td class={`num cohesion${cohesionClass(t.cohesion)}`}>
+                {formatCohesion(t.cohesion)}
+              </td>
               <td class="num">
                 {t.rollingAvg !== null ? t.rollingAvg.toFixed(1) : "—"}
               </td>

@@ -14,6 +14,7 @@ const SUBCOMMANDS = [
   "urgent",
   "reembed",
   "retag",
+  "reattach",
   "fixture-capture",
   "fixture-replay",
   "composer-replay",
@@ -50,6 +51,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       return;
     case "retag":
       await (await import("./pipeline/retag.ts")).retag();
+      return;
+    case "reattach":
+      await (await import("./pipeline/reattach.ts")).reattach();
       return;
     case "fixture-capture": {
       const limit = args[0] !== undefined ? Number(args[0]) : 50;

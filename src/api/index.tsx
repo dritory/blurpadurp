@@ -59,7 +59,18 @@ import {
   type StoryFilter,
   type GateFilter,
   type SortKey,
+  type SortDir,
 } from "../views/admin-explore-stories.tsx";
+import {
+  AdminExploreDropped,
+  type DroppedData,
+  type DroppedFilter,
+} from "../views/admin-explore-dropped.tsx";
+import {
+  AdminExploreBalance,
+  type BalanceData,
+  type BalanceFilter,
+} from "../views/admin-explore-balance.tsx";
 import {
   AdminExploreStory,
   type StoryDrilldown,
@@ -83,6 +94,9 @@ import {
 } from "../views/admin-prompts.tsx";
 import {
   AdminReview,
+  AnnotationsList,
+  decorateBriefHtml,
+  type Annotation,
   type EditorReviewData,
 } from "../views/admin-review.tsx";
 import {
@@ -91,6 +105,23 @@ import {
   type ThemesData,
   type ThemeFilter,
 } from "../views/admin-themes.tsx";
+import {
+  AdminThemeDetail,
+  type ThemeDetailData,
+  type ThemeMember,
+} from "../views/admin-theme-detail.tsx";
+import {
+  AdminThemeGraph,
+  type GraphEdge,
+  type GraphNode,
+  type ThemeGraphData,
+} from "../views/admin-theme-graph.tsx";
+import {
+  AdminEditorSandbox,
+  type EditorSandboxData,
+  type SandboxBucket,
+} from "../views/admin-editor-sandbox.tsx";
+import { selectEditorPool } from "../shared/editor-pool.ts";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
 import {
@@ -272,15 +303,30 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const body = await c.req.parseBody();
-    const slot = normalizeSlot(String(body.slot ?? "summary"));
+    // Slot is legacy — the anchor (or its absence) is now the only
+    // targeting signal. Hardcode a neutral value so the NOT NULL
+    // schema constraint stays satisfied without misleading metadata.
+    const slot = "general";
     const text = String(body.body ?? "").trim();
+    const rawAnchor = String(body.anchor_key ?? "").trim();
+    const anchorKey = rawAnchor.length > 0 ? rawAnchor : null;
+    const isHtmx = c.req.header("HX-Request") === "true";
+    const renderList = async () => {
+      const list = await loadAnnotations(id);
+      const snippets = await loadIssueSnippets(id);
+      return c.html(
+        <AnnotationsList issueId={id} annotations={list} snippets={snippets} />,
+      );
+    };
     if (text.length === 0) {
+      if (isHtmx) return renderList();
       return c.redirect(`/admin/review/${id}?error=empty_note`, 303);
     }
     await db
       .insertInto("issue_annotation")
-      .values({ issue_id: id, slot, body: text })
+      .values({ issue_id: id, slot, body: text, anchor_key: anchorKey })
       .execute();
+    if (isHtmx) return renderList();
     return c.redirect(`/admin/review/${id}?noted=1#notes`, 303);
   });
 
@@ -293,6 +339,13 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .where("id", "=", aid)
       .where("issue_id", "=", id)
       .execute();
+    if (c.req.header("HX-Request") === "true") {
+      const list = await loadAnnotations(id);
+      const snippets = await loadIssueSnippets(id);
+      return c.html(
+        <AnnotationsList issueId={id} annotations={list} snippets={snippets} />,
+      );
+    }
     return c.redirect(`/admin/review/${id}?deleted_note=1#notes`, 303);
   });
 
@@ -385,6 +438,16 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     return c.html(<AdminExploreStory d={d} />);
   });
 
+  app.get("/admin/explore/dropped", async (c) => {
+    const data = await loadDroppedData(parseDroppedFilter(c.req.query()));
+    return c.html(<AdminExploreDropped data={data} />);
+  });
+
+  app.get("/admin/explore/balance", async (c) => {
+    const data = await loadBalanceData(parseBalanceFilter(c.req.query()));
+    return c.html(<AdminExploreBalance data={data} />);
+  });
+
   app.get("/admin/explore/gate", async (c) => {
     const q = c.req.query();
     const lookback = clampInt(q.days, 7, 365, 30);
@@ -400,6 +463,39 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     return c.html(<AdminExploreGate d={data} />);
   });
 
+  app.get("/admin/explore/editor", async (c) => {
+    const data = await loadEditorSandboxData();
+    return c.html(<AdminEditorSandbox data={data} />);
+  });
+
+  app.get("/admin/explore/graph", async (c) => {
+    const q = c.req.query();
+    // Defaults tuned post-embedding-upgrade. With better cohesion the
+    // signal moved up — at the old 0.65 every theme had 10+ neighbors,
+    // graph became unreadable. 0.80 keeps only meaningfully-similar
+    // pairs. Singletons hidden by default since 735/873 are singletons
+    // and they swamp the multi-story themes visually; toggle them on
+    // to investigate "did this story attach to anything?" cases.
+    const minCosineRaw = Number(q.min_cosine ?? "0.80");
+    const minCosine = Number.isFinite(minCosineRaw)
+      ? Math.max(0.5, Math.min(0.99, minCosineRaw))
+      : 0.80;
+    const category = typeof q.category === "string" && q.category !== ""
+      ? q.category
+      : null;
+    // Hide singletons by default. The form uses an inverted checkbox
+    // (`show_singletons`) since unchecked HTML checkboxes are omitted
+    // from the form payload — there's no clean way to default a
+    // `hide_singletons` checkbox to true without a hidden-field hack.
+    const hideSingletons = q.show_singletons !== "1";
+    const data = await loadThemeGraphData({
+      minCosine,
+      category,
+      hideSingletons,
+    });
+    return c.html(<AdminThemeGraph data={data} />);
+  });
+
   app.get("/admin/themes", async (c) => {
     const filter = parseThemeFilter(c.req.query("filter"));
     const data = await loadThemesData(
@@ -407,6 +503,14 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       parseFlashGeneric(c.req.query("saved"), c.req.query("error")),
     );
     return c.html(<AdminThemes data={data} />);
+  });
+
+  app.get("/admin/themes/:id", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const data = await loadThemeDetail(id);
+    if (data === null) return c.notFound();
+    return c.html(<AdminThemeDetail data={data} />);
   });
 
   app.post("/admin/themes/toggle", async (c) => {
@@ -1394,11 +1498,23 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
   )
     ? (q.gate as GateFilter)
     : undefined;
-  const sort = (["composite", "published", "scored", "ingested"] as const).includes(
-    q.sort as SortKey,
-  )
+  const sort = (
+    [
+      "composite",
+      "zeitgeist",
+      "half_life",
+      "structural",
+      "non_obviousness",
+      "reach",
+      "published",
+      "scored",
+      "ingested",
+    ] as const
+  ).includes(q.sort as SortKey)
     ? (q.sort as SortKey)
     : undefined;
+  const dir: SortDir | undefined =
+    q.dir === "asc" || q.dir === "desc" ? (q.dir as SortDir) : undefined;
   const page = Math.max(1, Number(q.page) || 1);
   const minComposite = q.min !== undefined && q.min !== "" ? Number(q.min) : undefined;
   const maxComposite = q.max !== undefined && q.max !== "" ? Number(q.max) : undefined;
@@ -1410,6 +1526,7 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
     factor: q.factor || undefined,
     gate,
     sort,
+    dir,
     page,
     minComposite:
       minComposite !== undefined && Number.isFinite(minComposite)
@@ -1477,14 +1594,22 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
   const total = Number(countRow.n);
 
   const sort: SortKey = filter.sort ?? "composite";
-  const sortCol =
-    sort === "composite"
-      ? ("story.composite" as const)
-      : sort === "published"
-        ? ("story.published_at" as const)
-        : sort === "scored"
-          ? ("story.scored_at" as const)
-          : ("story.ingested_at" as const);
+  const dir: SortDir = filter.dir ?? "desc";
+  const sortColMap: Record<SortKey, string> = {
+    composite: "story.composite",
+    zeitgeist: "story.zeitgeist_score",
+    half_life: "story.half_life",
+    structural: "story.structural_importance",
+    non_obviousness: "story.non_obviousness",
+    reach: "story.reach",
+    published: "story.published_at",
+    scored: "story.scored_at",
+    ingested: "story.ingested_at",
+  };
+  const sortCol = sortColMap[sort];
+  // NULLS LAST so unscored stories don't dominate the default DESC view
+  // — they go to the bottom regardless of direction.
+  const orderExpr = sql`${sql.raw(sortCol)} ${sql.raw(dir.toUpperCase())} NULLS LAST, story.id DESC`;
 
   const rawRows = await q
     .select([
@@ -1495,13 +1620,18 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       "theme.id as theme_id",
       "theme.name as theme_name",
       "story.composite",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.structural_importance",
+      "story.non_obviousness",
+      "story.reach",
       "story.point_in_time_confidence",
       "story.passed_gate",
       "story.early_reject",
       "story.published_at",
       "story.scored_at",
     ])
-    .orderBy(sortCol, "desc")
+    .orderBy(orderExpr)
     .limit(pageSize)
     .offset((page - 1) * pageSize)
     .execute();
@@ -1554,6 +1684,11 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       themeId: r.theme_id !== null ? Number(r.theme_id) : null,
       themeName: r.theme_name,
       composite: r.composite !== null ? Number(r.composite) : null,
+      zeitgeist: r.zeitgeist_score,
+      halfLife: r.half_life,
+      structural: r.structural_importance,
+      nonObviousness: r.non_obviousness,
+      reach: r.reach,
       confidence: r.point_in_time_confidence,
       passedGate: r.passed_gate,
       earlyReject: r.early_reject,
@@ -1622,6 +1757,275 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     factors,
     rawInput: row.raw_input,
     rawOutput: row.raw_output,
+  };
+}
+
+function parseDroppedFilter(q: Record<string, string>): DroppedFilter {
+  const win = Number(q.window);
+  const windowDays = [7, 14, 30, 60, 90].includes(win) ? win : 30;
+  return { windowDays, category: q.category || undefined };
+}
+
+async function loadDroppedData(filter: DroppedFilter): Promise<DroppedData> {
+  const since = new Date(Date.now() - filter.windowDays * 24 * 3600_000);
+
+  let base = db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since);
+  if (filter.category) {
+    base = base.where("category.slug", "=", filter.category);
+  }
+
+  // Aggregate counts in one pass.
+  const totalsRows = await base
+    .select([
+      sql<string>`count(*)`.as("scored"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = true)`.as("passed"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = false AND story.early_reject = false)`.as("dropped"),
+      sql<string>`count(*) FILTER (WHERE story.early_reject = true)`.as("rejected"),
+    ])
+    .executeTakeFirstOrThrow();
+
+  // Composite arrays + component means split by gate outcome.
+  const droppedScores = await base
+    .select([
+      "story.composite",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.reach",
+      "story.non_obviousness",
+      "story.structural_importance",
+    ])
+    .where("story.passed_gate", "=", false)
+    .where("story.early_reject", "=", false)
+    .execute();
+  const passedScores = await base
+    .select([
+      "story.composite",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.reach",
+      "story.non_obviousness",
+      "story.structural_importance",
+    ])
+    .where("story.passed_gate", "=", true)
+    .execute();
+
+  const compMean = (rows: typeof droppedScores) => ({
+    zeitgeist: avg(rows.map((r) => r.zeitgeist_score ?? 0)),
+    halfLife: avg(rows.map((r) => r.half_life ?? 0)),
+    reach: avg(rows.map((r) => r.reach ?? 0)),
+    nonObviousness: avg(rows.map((r) => r.non_obviousness ?? 0)),
+    structural: avg(rows.map((r) => r.structural_importance ?? 0)),
+  });
+
+  // Penalty factor frequency on dropped stories.
+  let penaltyQ = db
+    .selectFrom("story_factor as sf")
+    .innerJoin("story as s", "s.id", "sf.story_id")
+    .leftJoin("category as c", "c.id", "s.category_id")
+    .where("sf.kind", "=", "penalty")
+    .where("s.scored_at", ">=", since)
+    .where("s.passed_gate", "=", false)
+    .where("s.early_reject", "=", false);
+  if (filter.category) {
+    penaltyQ = penaltyQ.where("c.slug", "=", filter.category);
+  }
+  const penaltyRows = await penaltyQ
+    .select([
+      "sf.factor as factor",
+      sql<string>`count(*)`.as("n"),
+    ])
+    .groupBy("sf.factor")
+    .orderBy(sql`count(*)`, "desc")
+    .limit(20)
+    .execute();
+
+  // Per-category drop rate (only categories with >=5 scored in window).
+  const byCatRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since)
+    .select([
+      sql<string>`coalesce(category.slug, 'unknown')`.as("category"),
+      sql<string>`count(*)`.as("scored"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = true)`.as("passed"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = false AND story.early_reject = false)`.as("dropped"),
+    ])
+    .groupBy(sql`coalesce(category.slug, 'unknown')`)
+    .having(sql<string>`count(*)`, ">=", "5")
+    .orderBy(sql`count(*) FILTER (WHERE story.passed_gate = false AND story.early_reject = false)::float / NULLIF(count(*),0)`, "desc")
+    .execute();
+
+  // Top drops: highest-composite stories that didn't pass.
+  let topQ = db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since)
+    .where("story.passed_gate", "=", false)
+    .where("story.early_reject", "=", false);
+  if (filter.category) {
+    topQ = topQ.where("category.slug", "=", filter.category);
+  }
+  const topRows = await topQ
+    .select([
+      "story.id",
+      "story.title",
+      "category.slug as category_slug",
+      "story.composite",
+      "story.point_in_time_confidence",
+    ])
+    .orderBy(sql`story.composite DESC NULLS LAST`)
+    .limit(40)
+    .execute();
+  const topIds = topRows.map((r) => Number(r.id));
+  const topFactors = topIds.length
+    ? await db
+        .selectFrom("story_factor")
+        .select(["story_id", "factor"])
+        .where("story_id", "in", topIds)
+        .where("kind", "=", "penalty")
+        .execute()
+    : [];
+  const factorByStory = new Map<number, string[]>();
+  for (const f of topFactors) {
+    const k = Number(f.story_id);
+    factorByStory.set(k, [...(factorByStory.get(k) ?? []), f.factor]);
+  }
+
+  const cats = await db
+    .selectFrom("category")
+    .select("slug")
+    .orderBy("slug")
+    .execute();
+
+  return {
+    filter,
+    categories: cats.map((c) => c.slug),
+    totals: {
+      scored: Number(totalsRows.scored),
+      passed: Number(totalsRows.passed),
+      dropped: Number(totalsRows.dropped),
+      early_rejected: Number(totalsRows.rejected),
+    },
+    composites: {
+      dropped: droppedScores.map((r) => Number(r.composite ?? 0)),
+      passed: passedScores.map((r) => Number(r.composite ?? 0)),
+    },
+    components: {
+      dropped: compMean(droppedScores),
+      passed: compMean(passedScores),
+    },
+    penaltiesOnDropped: penaltyRows.map((r) => ({
+      label: r.factor,
+      value: Number(r.n),
+    })),
+    byCategory: byCatRows.map((r) => ({
+      category: String(r.category),
+      scored: Number(r.scored),
+      passed: Number(r.passed),
+      dropped: Number(r.dropped),
+      dropRate: Number(r.scored) > 0 ? Number(r.dropped) / Number(r.scored) : 0,
+    })),
+    topDrops: topRows.map((r) => ({
+      id: Number(r.id),
+      title: r.title,
+      category: r.category_slug,
+      composite: r.composite !== null ? Number(r.composite) : 0,
+      confidence: r.point_in_time_confidence,
+      factors: factorByStory.get(Number(r.id)) ?? [],
+    })),
+  };
+}
+
+function avg(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function parseBalanceFilter(q: Record<string, string>): BalanceFilter {
+  const win = Number(q.window);
+  const windowWeeks = [4, 8, 12, 26, 52].includes(win) ? win : 12;
+  return { windowWeeks };
+}
+
+async function loadBalanceData(filter: BalanceFilter): Promise<BalanceData> {
+  const since = new Date(Date.now() - filter.windowWeeks * 7 * 24 * 3600_000);
+
+  // Per-category totals across the window.
+  const byCatRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.ingested_at", ">=", since)
+    .select([
+      sql<string>`coalesce(category.slug, 'unknown')`.as("category"),
+      sql<string>`count(*)`.as("ingested"),
+      sql<string>`count(*) FILTER (WHERE story.scored_at IS NOT NULL)`.as("scored"),
+      sql<string>`count(*) FILTER (WHERE story.passed_gate = true)`.as("passed"),
+      sql<string>`count(*) FILTER (WHERE story.published_to_reader = true)`.as("published"),
+    ])
+    .groupBy(sql`coalesce(category.slug, 'unknown')`)
+    .orderBy(sql`count(*) FILTER (WHERE story.passed_gate = true)`, "desc")
+    .execute();
+
+  const byCategory = byCatRows.map((r) => ({
+    category: String(r.category),
+    ingested: Number(r.ingested),
+    scored: Number(r.scored),
+    passed: Number(r.passed),
+    published: Number(r.published),
+  }));
+
+  // Concentration index (Herfindahl). Computed on passers.
+  const totalPassed = byCategory.reduce((a, c) => a + c.passed, 0);
+  const hhi =
+    totalPassed > 0
+      ? byCategory.reduce((a, c) => {
+          const share = c.passed / totalPassed;
+          return a + share * share;
+        }, 0)
+      : 0;
+
+  // Per-week × category passers, for stacked timeline.
+  const weeklyRows = await db
+    .selectFrom("story")
+    .leftJoin("category", "category.id", "story.category_id")
+    .where("story.scored_at", ">=", since)
+    .where("story.passed_gate", "=", true)
+    .select([
+      sql<string>`to_char(date_trunc('week', story.scored_at), 'YYYY-MM-DD')`.as("week"),
+      sql<string>`coalesce(category.slug, 'unknown')`.as("category"),
+      sql<string>`count(*)`.as("n"),
+    ])
+    .groupBy(["week", "category"])
+    .orderBy("week", "asc")
+    .execute();
+
+  const weekSet = new Set<string>();
+  const catSet = new Set<string>();
+  const cellMap = new Map<string, number>();
+  for (const r of weeklyRows) {
+    weekSet.add(String(r.week));
+    catSet.add(String(r.category));
+    cellMap.set(`${r.week}|${r.category}`, Number(r.n));
+  }
+  const weeks = [...weekSet].sort();
+  const cats = [...catSet].sort();
+  const weekly = weeks.map((week) => ({
+    week,
+    counts: Object.fromEntries(
+      cats.map((cat) => [cat, cellMap.get(`${week}|${cat}`) ?? 0]),
+    ),
+  }));
+
+  return {
+    filter,
+    byCategory,
+    weekly,
+    categories: cats,
+    hhi,
+    totalPassed,
   };
 }
 
@@ -1859,6 +2263,11 @@ async function loadThemesData(
     .select(sql<string>`count(*)`.as("n"))
     .executeTakeFirstOrThrow();
 
+  // n_stories = current member count (live, not the denormalized
+  // n_stories_published counter). cohesion = avg cosine of member
+  // embeddings to centroid, NULL when fewer than 2 embedded members.
+  // Both subqueries are correlated and reasonably cheap (story.theme_id
+  // is indexed; pgvector cosine is constant-time per row).
   let q = db
     .selectFrom("theme")
     .leftJoin("category", "category.id", "theme.category_id")
@@ -1872,6 +2281,20 @@ async function loadThemesData(
       "theme.rolling_composite_avg",
       "theme.rolling_composite_30d",
       "theme.is_long_running",
+      sql<string>`(SELECT count(*)::text FROM story s WHERE s.theme_id = theme.id)`.as(
+        "n_stories",
+      ),
+      sql<string | null>`(
+        SELECT
+          CASE WHEN count(*) >= 2
+            THEN AVG(1 - (s.embedding <=> theme.centroid_embedding))::text
+            ELSE NULL
+          END
+        FROM story s
+        WHERE s.theme_id = theme.id
+          AND s.embedding IS NOT NULL
+          AND theme.centroid_embedding IS NOT NULL
+      )`.as("cohesion"),
     ]);
 
   if (filter === "long_running") {
@@ -1909,6 +2332,8 @@ async function loadThemesData(
       firstSeenAt: r.first_seen_at,
       lastPublishedAt: r.last_published_at,
       nStoriesPublished: r.n_stories_published,
+      nStories: Number(r.n_stories),
+      cohesion: r.cohesion !== null ? Number(r.cohesion) : null,
       rollingAvg: avg,
       rolling30d: d30,
       trajectory,
@@ -1926,6 +2351,326 @@ async function loadThemesData(
     total: Number(totalRow.n),
     flash,
   };
+}
+
+async function loadThemeDetail(id: number): Promise<ThemeDetailData | null> {
+  const themeRow = await db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "category.slug as category_slug",
+      "theme.first_seen_at",
+      "theme.last_published_at",
+      "theme.n_stories_published",
+      "theme.rolling_composite_avg",
+      "theme.rolling_composite_30d",
+      "theme.is_long_running",
+      sql<boolean>`(theme.centroid_embedding IS NOT NULL)`.as("has_centroid"),
+      sql<string>`(SELECT count(*)::text FROM story s WHERE s.theme_id = theme.id)`.as(
+        "n_stories",
+      ),
+      sql<string | null>`(
+        SELECT
+          CASE WHEN count(*) >= 2
+            THEN AVG(1 - (s.embedding <=> theme.centroid_embedding))::text
+            ELSE NULL
+          END
+        FROM story s
+        WHERE s.theme_id = theme.id
+          AND s.embedding IS NOT NULL
+          AND theme.centroid_embedding IS NOT NULL
+      )`.as("cohesion"),
+    ])
+    .where("theme.id", "=", id)
+    .executeTakeFirst();
+  if (!themeRow) return null;
+
+  // Pull every member story with its cosine to the centroid. Order by
+  // cosine ascending so outliers (potential mis-attaches) bubble up.
+  // Stories without an embedding are kept (cosine = NULL) so the table
+  // is complete; they sort to the end.
+  const memberRows = await db
+    .selectFrom("story")
+    .select([
+      "story.id",
+      "story.title",
+      "story.composite",
+      "story.passed_gate",
+      "story.published_to_reader",
+      "story.published_at",
+      "story.ingested_at",
+      "story.source_url",
+      sql<string | null>`
+        CASE
+          WHEN story.embedding IS NOT NULL
+            AND (SELECT centroid_embedding FROM theme WHERE id = ${id}) IS NOT NULL
+          THEN (1 - (story.embedding <=> (SELECT centroid_embedding FROM theme WHERE id = ${id})))::text
+          ELSE NULL
+        END
+      `.as("cosine"),
+    ])
+    .where("story.theme_id", "=", id)
+    .orderBy(sql`cosine ASC NULLS LAST`)
+    .limit(500)
+    .execute();
+
+  const members: ThemeMember[] = memberRows.map((r) => ({
+    id: Number(r.id),
+    title: r.title,
+    cosine: r.cosine !== null ? Number(r.cosine) : null,
+    composite: r.composite !== null ? Number(r.composite) : null,
+    passedGate: r.passed_gate,
+    publishedToReader: r.published_to_reader,
+    publishedAt: r.published_at,
+    ingestedAt: r.ingested_at,
+    sourceDomain: domainOfUrl(r.source_url),
+  }));
+
+  return {
+    theme: {
+      id: Number(themeRow.id),
+      name: themeRow.name,
+      category: themeRow.category_slug,
+      firstSeenAt: themeRow.first_seen_at,
+      lastPublishedAt: themeRow.last_published_at,
+      nStories: Number(themeRow.n_stories),
+      nStoriesPublished: themeRow.n_stories_published,
+      cohesion:
+        themeRow.cohesion !== null ? Number(themeRow.cohesion) : null,
+      rollingAvg:
+        themeRow.rolling_composite_avg !== null
+          ? Number(themeRow.rolling_composite_avg)
+          : null,
+      rolling30d:
+        themeRow.rolling_composite_30d !== null
+          ? Number(themeRow.rolling_composite_30d)
+          : null,
+      isLongRunning: themeRow.is_long_running,
+      hasCentroid: themeRow.has_centroid,
+    },
+    members,
+  };
+}
+
+async function loadEditorSandboxData(): Promise<EditorSandboxData> {
+  // Same window as compose.ts (14 days). If this drifts, both should
+  // move together — keep in sync if you ever extract.
+  const cutoffMs = Date.now() - 14 * 24 * 3600_000;
+  const cutoff = new Date(cutoffMs);
+
+  const cfgRows = await db
+    .selectFrom("config")
+    .select(["key", "value"])
+    .where("key", "in", [
+      "editor.pool_max_themes",
+      "editor.pool_max_category_fraction",
+    ])
+    .execute();
+  const cfgMap = new Map(cfgRows.map((r) => [r.key, r.value]));
+  const maxThemes =
+    typeof cfgMap.get("editor.pool_max_themes") === "number"
+      ? (cfgMap.get("editor.pool_max_themes") as number)
+      : 20;
+  const maxCategoryFraction =
+    typeof cfgMap.get("editor.pool_max_category_fraction") === "number"
+      ? (cfgMap.get("editor.pool_max_category_fraction") as number)
+      : 1.0;
+
+  const rows = await db
+    .selectFrom("story")
+    .leftJoin("theme", "theme.id", "story.theme_id")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      "story.id as story_id",
+      "story.title",
+      "story.composite",
+      "story.point_in_time_confidence",
+      "story.theme_id",
+      "story.source_url",
+      "story.additional_source_urls",
+      "theme.name as theme_name",
+      "category.slug as category_slug",
+    ])
+    .where("story.passed_gate", "=", true)
+    .where("story.published_to_reader", "=", false)
+    .where("story.ingested_at", ">=", cutoff)
+    .orderBy("story.composite", "desc")
+    .execute();
+
+  const result = selectEditorPool(rows, maxThemes, { maxCategoryFraction });
+
+  // Per-category passer + in-pool counts. The "in pool" count comes
+  // from the selected buckets; "passers" from the full row set. Lets
+  // the operator see at a glance which categories are over/under-
+  // represented in the pool relative to their gate-pass volume.
+  const inPoolRowIds = new Set<number>();
+  for (const b of result.included) {
+    for (const e of b.rows) inPoolRowIds.add(Number(e.row.story_id));
+  }
+  const catCounts = new Map<string, { passers: number; inPool: number }>();
+  for (const r of rows) {
+    const key = r.category_slug ?? "—";
+    const e = catCounts.get(key) ?? { passers: 0, inPool: 0 };
+    e.passers++;
+    if (inPoolRowIds.has(Number(r.story_id))) e.inPool++;
+    catCounts.set(key, e);
+  }
+  const byCategory = [...catCounts.entries()]
+    .map(([category, v]) => ({ category, ...v }))
+    .sort((a, b) => b.passers - a.passers);
+
+  const toBucket = (
+    b: (typeof result.included)[number],
+  ): SandboxBucket => {
+    const first = b.rows[0]?.row;
+    const themeName =
+      b.themeId !== null
+        ? (first?.theme_name ?? `theme #${b.themeId}`)
+        : null;
+    return {
+      themeId: b.themeId,
+      themeName,
+      category: first?.category_slug ?? null,
+      storyCount: b.rows.length,
+      maxComposite: b.maxComposite,
+      tier1Total: b.tier1Total,
+      stories: b.rows.map((e) => ({
+        id: Number(e.row.story_id),
+        title: e.row.title,
+        composite:
+          e.row.composite !== null ? Number(e.row.composite) : null,
+        confidence: e.row.point_in_time_confidence,
+        sourceUrl: e.row.source_url,
+        tier1Sources: e.tier1,
+        totalSources: e.total,
+      })),
+    };
+  };
+
+  return {
+    maxThemes,
+    ingestWindowDays: 14,
+    totalPassers: result.totalPassers,
+    totalThemes: result.totalThemes,
+    poolStories: result.pool.length,
+    included: result.included.map(toBucket),
+    excluded: result.excluded.map(toBucket),
+    byCategory,
+  };
+}
+
+async function loadThemeGraphData(filters: {
+  minCosine: number;
+  category: string | null;
+  hideSingletons: boolean;
+}): Promise<ThemeGraphData> {
+  // Fetch every theme (member count + cohesion). Filter by category
+  // and singletons in JS so the dataset is consistent across the
+  // edge query (which doesn't know about either filter).
+  const themesQ = await db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "category.slug as category_slug",
+      sql<string>`(SELECT count(*)::text FROM story s WHERE s.theme_id = theme.id)`.as(
+        "n_stories",
+      ),
+      sql<string | null>`(
+        SELECT
+          CASE WHEN count(*) >= 2
+            THEN AVG(1 - (s.embedding <=> theme.centroid_embedding))::text
+            ELSE NULL
+          END
+        FROM story s
+        WHERE s.theme_id = theme.id
+          AND s.embedding IS NOT NULL
+          AND theme.centroid_embedding IS NOT NULL
+      )`.as("cohesion"),
+    ])
+    .where("theme.centroid_embedding", "is not", null)
+    .execute();
+
+  let nodes: GraphNode[] = themesQ.map((r) => ({
+    id: Number(r.id),
+    name: r.name,
+    category: r.category_slug,
+    n_stories: Number(r.n_stories),
+    cohesion: r.cohesion !== null ? Number(r.cohesion) : null,
+  }));
+  if (filters.category !== null) {
+    nodes = nodes.filter((n) => n.category === filters.category);
+  }
+  if (filters.hideSingletons) {
+    nodes = nodes.filter((n) => n.n_stories >= 2);
+  }
+  const visibleIds = new Set(nodes.map((n) => n.id));
+
+  // For each visible theme, find top-K nearest other themes via
+  // lateral join. K=5 keeps the visible graph manageable; the cosine
+  // threshold further trims. After the embedding upgrade every theme
+  // has many close neighbors, so K can be small without losing
+  // signal — the strongest connections survive.
+  const minCos = filters.minCosine;
+  const edgeRows = await db.executeQuery(
+    sql<{ a_id: number; b_id: number; cosine: string }>`
+      SELECT a.id::int AS a_id, nbr.id::int AS b_id, nbr.cos::text AS cosine
+      FROM theme a
+      CROSS JOIN LATERAL (
+        SELECT b.id, 1 - (a.centroid_embedding <=> b.centroid_embedding) AS cos
+        FROM theme b
+        WHERE b.id <> a.id
+          AND b.centroid_embedding IS NOT NULL
+        ORDER BY a.centroid_embedding <=> b.centroid_embedding
+        LIMIT 5
+      ) nbr
+      WHERE a.centroid_embedding IS NOT NULL
+        AND nbr.cos >= ${minCos}
+    `.compile(db),
+  );
+
+  // Dedupe undirected edges (a→b and b→a are the same connection).
+  const seen = new Set<string>();
+  const edges: GraphEdge[] = [];
+  for (const r of edgeRows.rows) {
+    const a = Math.min(r.a_id, r.b_id);
+    const b = Math.max(r.a_id, r.b_id);
+    if (!visibleIds.has(a) || !visibleIds.has(b)) continue;
+    const key = `${a}-${b}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push({ a, b, cosine: Number(r.cosine) });
+  }
+
+  // Categories present in the data — drives the category filter
+  // dropdown. Keep alphabetical for predictable order.
+  const categories = Array.from(
+    new Set(
+      themesQ
+        .map((r) => r.category_slug)
+        .filter((c): c is string => c !== null),
+    ),
+  ).sort();
+
+  return {
+    nodes,
+    edges,
+    filters,
+    totals: { themes: nodes.length, edges: edges.length },
+    categories,
+  };
+}
+
+function domainOfUrl(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
 }
 
 async function loadConfigRows(): Promise<ConfigRow[]> {
@@ -2040,6 +2785,39 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
   };
 }
 
+// Used both by the full review-page loader (loadReview) and by the
+// HTMX annotate/delete handlers that re-render just the list fragment.
+async function loadAnnotations(issueId: number): Promise<Annotation[]> {
+  const rows = await db
+    .selectFrom("issue_annotation")
+    .select(["id", "slot", "body", "anchor_key", "created_at"])
+    .where("issue_id", "=", issueId)
+    .orderBy("created_at", "desc")
+    .execute();
+  return rows.map((r) => ({
+    id: Number(r.id),
+    slot: r.slot,
+    body: r.body,
+    anchorKey: r.anchor_key,
+    createdAt: r.created_at,
+  }));
+}
+
+// Look up the issue's composedHtml just to extract anchor snippets.
+// HTMX annotate/delete responses re-render the sidebar fragment, which
+// needs the snippet labels to keep group headings in sync.
+async function loadIssueSnippets(
+  issueId: number,
+): Promise<Array<{ key: string; text: string }>> {
+  const row = await db
+    .selectFrom("issue")
+    .select("composed_html")
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (!row) return [];
+  return decorateBriefHtml(row.composed_html).snippets;
+}
+
 async function loadReview(id: number): Promise<EditorReviewData | null> {
   const iss = await db
     .selectFrom("issue")
@@ -2091,7 +2869,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
 
   const annotations = await db
     .selectFrom("issue_annotation")
-    .select(["id", "slot", "body", "created_at"])
+    .select(["id", "slot", "body", "anchor_key", "created_at"])
     .where("issue_id", "=", id)
     .orderBy("created_at", "desc")
     .execute();
@@ -2110,6 +2888,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       id: Number(a.id),
       slot: a.slot,
       body: a.body,
+      anchorKey: a.anchor_key,
       createdAt: a.created_at,
     })),
     editor: iss.editor_output_jsonb as EditorReviewData["editor"],
@@ -2336,19 +3115,6 @@ async function loadPromptEditor(
     liveVersion,
     flash,
   };
-}
-
-const VALID_SLOTS = new Set([
-  "opener",
-  "conversation",
-  "worth_knowing",
-  "worth_watching",
-  "shrug",
-  "summary",
-]);
-
-function normalizeSlot(raw: string): string {
-  return VALID_SLOTS.has(raw) ? raw : "summary";
 }
 
 function parsePromptFlash(

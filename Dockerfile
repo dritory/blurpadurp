@@ -15,6 +15,14 @@ RUN bun install --frozen-lockfile
 # App source.
 COPY . .
 
+# Build the admin client islands (HTMX-compatible vanilla JS bundles)
+# into public/build/. The page templates reference these via
+# /assets/build/<bundle>.js, served from public/. public/build is
+# gitignored, so the bundle MUST be produced at image-build time —
+# without this step, admin pages 404 the script tags and click-to-
+# comment / prompt-editor stop working.
+RUN bun run build:admin
+
 # Entrypoint materialises GCP_SA_KEY (if present) into a file where
 # the BigQuery SDK expects to find it.
 COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh

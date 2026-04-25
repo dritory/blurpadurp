@@ -14,6 +14,10 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+# admin client islands, bundled from src/admin-client/*.ts by
+# `bun run build:admin`. Source of truth is the .ts; rebuild on
+# deploy.
+public/build/
 
 # local env
 .env

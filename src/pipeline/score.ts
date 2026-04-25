@@ -11,6 +11,7 @@
 import { sql, type Selectable } from "kysely";
 
 import { embed, embedBatch, toPgVector } from "../ai/embed.ts";
+import { recomputeThemeCentroid } from "../shared/embedding-utils.ts";
 import { makeScorer } from "../ai/scorer.ts";
 import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { db } from "../db/index.ts";
@@ -21,12 +22,9 @@ import type {
   ScorerOutput,
 } from "../shared/scoring-schema.ts";
 
-const ATTACH_SIMILARITY_THRESHOLD = 0.8;
-// Re-check threshold inside the theme-create mutex. Higher than the
-// regular attach threshold — we already decided (via LLM confirm) that
-// nothing matched at 0.80; this is a last-moment check to catch neighbors
-// that appeared while we were scoring.
-const CREATE_RACE_RECHECK_THRESHOLD = 0.88;
+// Theme-attach thresholds live in the config table now (see
+// migrations/030_theme_attach_config.sql). Tunable on /admin/config
+// without a redeploy or a re-score.
 const SCORING_CONCURRENCY = 4;
 
 type ConfigMap = {
@@ -45,6 +43,8 @@ type ConfigMap = {
   "gate.x_threshold": number;
   "gate.delta": number;
   "gate.confidence_floor": "low" | "medium" | "high";
+  "theme.attach_threshold": number;
+  "theme.create_recheck_threshold": number;
 };
 
 export async function score(): Promise<void> {
@@ -273,7 +273,11 @@ async function processStory(
 
   let themeId = story.theme_id;
   if (themeId === null) {
-    themeId = await tryAttachToExistingTheme(story, embeddingVec);
+    themeId = await tryAttachToExistingTheme(
+      story,
+      embeddingVec,
+      cfg["theme.attach_threshold"],
+    );
   }
 
   const themeContext = themeId !== null ? await loadThemeContext(themeId) : null;
@@ -297,7 +301,7 @@ async function processStory(
       // nothing matched at attach time.
       const neighbor = await findMatchingThemeCheap(
         embeddingVec,
-        CREATE_RACE_RECHECK_THRESHOLD,
+        cfg["theme.create_recheck_threshold"],
       );
       if (neighbor !== null) {
         await db
@@ -307,8 +311,33 @@ async function processStory(
           .execute();
         return neighbor.id;
       }
-      return await createThemeFromStory(story.id, embeddingVec, output);
+      return await createThemeFromStory(
+        story.id,
+        story.title,
+        embeddingVec,
+        output,
+      );
     });
+  }
+  // Post-score embedding refinement. The original embedding was
+  // computed from `title + raw_summary` (often title alone for GDELT
+  // stories with null summary) — too thin a signal to cluster
+  // same-event stories across outlets. The scorer's `summary` is much
+  // richer: language-normalized, event-focused, consistent style. We
+  // re-embed using `title + scorer_summary` and then recompute the
+  // theme's centroid so subsequent attaches in this run see the
+  // improved centroid. Skip on early-reject (summary may be sparse)
+  // and on empty summary (defensive).
+  if (
+    !output.classification.early_reject &&
+    output.summary.trim().length > 0
+  ) {
+    await refineEmbeddingPostScore(
+      story.id,
+      story.title,
+      output.summary,
+      finalThemeId,
+    );
   }
   if (finalThemeId !== null) {
     await recomputeThemeRollingAvg(finalThemeId);
@@ -470,9 +499,41 @@ async function ensureEmbedding(story: StoryRow): Promise<string> {
   return pg;
 }
 
+// Re-embed a scored story using `title + scorer_summary` and update
+// its theme centroid. Called after persistScorerResult — the scorer
+// summary is the highest-signal text we have for clustering. Failures
+// are non-fatal (we don't want one Voyage hiccup to break the whole
+// scoring run); the original embedding stays in place if this fails.
+async function refineEmbeddingPostScore(
+  storyId: number,
+  title: string,
+  scorerSummary: string,
+  themeId: number | null,
+): Promise<void> {
+  try {
+    const text = `${title}\n\n${scorerSummary}`.trim();
+    const vecs = await embed([text]);
+    const vec = vecs[0];
+    if (!vec) return;
+    await db
+      .updateTable("story")
+      .set({ embedding: toPgVector(vec) })
+      .where("id", "=", storyId)
+      .execute();
+    if (themeId !== null) {
+      await recomputeThemeCentroid(themeId);
+    }
+  } catch (err) {
+    console.warn(
+      `[score] post-score reembed failed for story ${storyId}: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
+
 async function tryAttachToExistingTheme(
   story: StoryRow,
   embeddingVec: string,
+  threshold: number,
 ): Promise<number | null> {
   const row = await db
     .selectFrom("theme")
@@ -490,7 +551,7 @@ async function tryAttachToExistingTheme(
     .limit(1)
     .executeTakeFirst();
 
-  if (!row || row.sim < ATTACH_SIMILARITY_THRESHOLD) return null;
+  if (!row || row.sim < threshold) return null;
 
   const recent = await db
     .selectFrom("story")
@@ -635,6 +696,7 @@ async function persistScorerResult(
 
 async function createThemeFromStory(
   storyId: number,
+  storyTitle: string,
   embeddingVec: string,
   output: ScorerOutput,
 ): Promise<number | null> {
@@ -643,11 +705,20 @@ async function createThemeFromStory(
   // no valid category. Story stays theme-less; it's still scored.
   if (categoryId === null) return null;
 
+  // Theme name = scorer summary if non-empty, else fall back to the
+  // story's own title. Haiku sometimes returns an empty summary even
+  // for non-early-rejected stories (the schema permits null/empty),
+  // and "" makes the theme indistinguishable in the admin themes view.
+  // The title is always non-empty so this guarantees a usable label.
+  const nameFromSummary = output.summary.trim();
+  const themeName = (nameFromSummary !== "" ? nameFromSummary : storyTitle)
+    .slice(0, 200);
+
   const row = await db
     .insertInto("theme")
     .values({
       category_id: categoryId,
-      name: output.summary.slice(0, 200),
+      name: themeName,
       description: null,
       centroid_embedding: embeddingVec,
     })
@@ -846,5 +917,9 @@ async function loadConfig(): Promise<ConfigMap> {
   map["scorer.dedup_enabled"] ??= true;
   map["scorer.dedup_similarity_threshold"] ??= 0.95;
   map["scorer.dedup_lookback_days"] ??= 3;
+  // Theme-attach thresholds (migration 030). Defaults match the
+  // constants that lived in code at that migration's time.
+  map["theme.attach_threshold"] ??= 0.7;
+  map["theme.create_recheck_threshold"] ??= 0.88;
   return map as ConfigMap;
 }

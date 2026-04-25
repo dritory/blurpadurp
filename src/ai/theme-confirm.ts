@@ -28,11 +28,29 @@ export interface ThemeConfirmInput {
   cosine_similarity: number;
 }
 
-const SYSTEM = `You decide whether a new news story continues an existing theme.
-A theme is a narrow story-arc (a specific ongoing situation, conflict, policy
-debate, or scientific development) — NOT a broad topic. "Russia-Ukraine war"
-is a theme. "Geopolitics" is not. Output JSON only: { "is_continuation":
-boolean, "reasoning": "<one sentence>" }.`;
+const SYSTEM = `You decide whether a new news story belongs to an existing story arc (a "theme").
+
+A theme is a STORY ARC — a larger narrative spanning multiple events over weeks or months. Be generous in accepting continuations: if the new story would naturally be discussed alongside the prior stories — even when it's a different specific event — it belongs to the same theme.
+
+Examples of single themes (each spans many events):
+- "US-Iran conflict" — troop deployments, Hormuz blockade, missile strikes, ceasefire talks, sanctions, market reactions, congressional debate, civilian casualties.
+- "Apple CEO succession" — leadership announcements, candidate profiles, Cook stepping down, Ternus taking over, AI strategy questions, board statements.
+- "Trump tariff regime" — tariff announcements, country retaliations, supply-chain disruptions, market reactions, court challenges, exemption negotiations.
+- "AI regulation" — proposed bills, executive orders, court cases, agency actions, industry pushback, model registries.
+- "Hungary 2026 election + Orbán fall" — campaign developments, polling, vote results, Magyar's coalition, EU funds release, judicial rollback.
+
+A theme is NOT:
+- A broad topic ("technology", "politics", "economy") — too wide.
+- A single moment ("Iran-US ceasefire of June 12") — too narrow; that's an event within an arc.
+- An entity ("Apple", "Iran", "Putin") alone — a recurring entity is necessary but not sufficient. The stories must share a narrative thread.
+
+Reject only when the new story is genuinely about a different arc that just shares a surface entity. Examples to reject:
+- "Apple announces new iPhone" appended to "Apple CEO succession" — different arc (product launch vs leadership change).
+- "Iran national football team wins" appended to "US-Iran conflict" — same country, unrelated arc.
+
+cosine_similarity hint: ≥0.90 is almost certainly the same arc. 0.70–0.85 deserves benefit of the doubt. Below 0.65 is suspicious. Use this as a prior, not a determinant.
+
+Output JSON only: { "is_continuation": boolean, "reasoning": "<one short sentence>" }.`;
 
 export async function confirmThemeContinuation(
   input: ThemeConfirmInput,
@@ -52,7 +70,7 @@ export async function confirmThemeContinuation(
   if (cached !== null) {
     await logAICall({
       stage_name: "theme-confirm",
-      stage_version: "v0.1",
+      stage_version: "v0.2",
       model_id: modelId,
       input_hash,
       input_jsonb: input,
@@ -100,7 +118,7 @@ export async function confirmThemeContinuation(
   } finally {
     await logAICall({
       stage_name: "theme-confirm",
-      stage_version: "v0.1",
+      stage_version: "v0.2",
       model_id: modelId,
       input_hash,
       input_jsonb: input,

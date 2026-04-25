@@ -48,7 +48,10 @@ const STYLES = `
 export const AdminPrompts: FC<{ data: PromptEditorData }> = ({ data }) => (
   <Layout title={`Prompts — Blurpadurp admin`}>
     <style dangerouslySetInnerHTML={{ __html: STYLES }} />
-    <AdminNav current="prompts" />
+    <AdminNav
+      current="prompts"
+      clientBundles={["/assets/build/prompt-editor.js"]}
+    />
     <AdminCrumbs
       trail={[
         { label: "Prompts", href: "/admin/prompts" },

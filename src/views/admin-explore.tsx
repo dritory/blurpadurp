@@ -60,9 +60,9 @@ const STYLES = `
   }
 `;
 
-export const ExplorerNav: FC<{ current: "home" | "stories" | "gate" }> = ({
-  current,
-}) => (
+export const ExplorerNav: FC<{
+  current: "home" | "stories" | "dropped" | "balance" | "gate" | "graph" | "editor";
+}> = ({ current }) => (
   <nav class="x-sub-nav" aria-label="Explorer">
     <a href="/admin/explore" class={current === "home" ? "current" : ""}>
       Overview
@@ -74,10 +74,34 @@ export const ExplorerNav: FC<{ current: "home" | "stories" | "gate" }> = ({
       Stories
     </a>
     <a
+      href="/admin/explore/dropped"
+      class={current === "dropped" ? "current" : ""}
+    >
+      Drop reasons
+    </a>
+    <a
+      href="/admin/explore/balance"
+      class={current === "balance" ? "current" : ""}
+    >
+      Balance
+    </a>
+    <a
       href="/admin/explore/gate"
       class={current === "gate" ? "current" : ""}
     >
       Gate sandbox
+    </a>
+    <a
+      href="/admin/explore/graph"
+      class={current === "graph" ? "current" : ""}
+    >
+      Theme graph
+    </a>
+    <a
+      href="/admin/explore/editor"
+      class={current === "editor" ? "current" : ""}
+    >
+      Editor sandbox
     </a>
   </nav>
 );

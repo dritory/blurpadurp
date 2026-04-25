@@ -11,27 +11,177 @@ export interface Annotation {
   id: number;
   slot: string;
   body: string;
+  anchorKey: string | null;
   createdAt: Date;
 }
 
-function slotLabel(slot: string): string {
-  switch (slot) {
-    case "summary":
-      return "Overall";
-    case "opener":
-      return "Opener";
-    case "conversation":
-      return "Conversation";
-    case "worth_knowing":
-      return "Worth knowing";
-    case "worth_watching":
-      return "Worth watching";
-    case "shrug":
-      return "Shrug";
-    default:
-      return slot;
-  }
+// Walks the composed brief HTML and adds `data-anchor-id` attributes
+// to every <h2> and <p> in document order. Composer output uses <p>
+// (with a leading <strong>) for each item, not <li>, so paragraphs
+// are the bullet-equivalent. Anchor IDs are stable for a given
+// composedHtml (h2:0, h2:1, p:0, p:1, ...). Used by:
+//  - the brief preview, so the click-to-comment island can detect
+//    which element the cursor is on
+//  - the sidebar, so notes can highlight + scroll-to their anchor
+//
+// We build a parallel list of "snippets" — short text previews of each
+// anchor — so the sidebar can show "commenting on: Iran ceasefire is
+// wobbling…" rather than the opaque key.
+export interface AnchorSnippet {
+  key: string;
+  text: string; // ≤80 chars, plain text
 }
+
+export function decorateBriefHtml(html: string): {
+  html: string;
+  snippets: AnchorSnippet[];
+} {
+  const snippets: AnchorSnippet[] = [];
+  const counters: Record<string, number> = { h2: 0, p: 0 };
+  // Match opening <h2 ...> or <p ...> followed by their inner content.
+  // Sonnet's tool-use HTML output is consistent enough that a regex
+  // pass is reliable; full HTML parsing is overkill for this controlled
+  // surface. If the regex misses a tag, we just don't anchor it.
+  const out = html.replace(
+    /<(h2|p)([^>]*)>([\s\S]*?)<\/\1>/g,
+    (_match, tag: string, attrs: string, inner: string) => {
+      const idx = counters[tag]!++;
+      const key = `${tag}:${idx}`;
+      const text = stripTags(inner).replace(/\s+/g, " ").trim();
+      snippets.push({ key, text: text.slice(0, 80) });
+      return `<${tag}${attrs} data-anchor-id="${key}">${inner}</${tag}>`;
+    },
+  );
+  return { html: out, snippets };
+}
+
+function stripTags(s: string): string {
+  return s.replace(/<[^>]+>/g, "");
+}
+
+// Renderable wrapper for the annotations list. Rendered both inline by
+// AdminReview (full page) and as the HTMX response fragment by the
+// /admin/review/:id/annotate and /annotations/:aid/delete handlers —
+// hence the standalone export. Wrapper div carries the id HTMX swaps;
+// inner content groups notes by anchor and falls back to "general"
+// for unanchored notes.
+export const AnnotationsList: FC<{
+  issueId: number;
+  annotations: Annotation[];
+  /** Snippets from the rendered brief, used to label anchored groups
+   * with the text they're attached to. Empty when called from a
+   * context that doesn't have the brief (HTMX delete fragment). */
+  snippets: AnchorSnippet[];
+}> = ({ issueId, annotations, snippets }) => {
+  const snippetByKey = new Map(snippets.map((s) => [s.key, s.text]));
+  // Group: anchored (each anchor key gets its own bucket, in snippet
+  // order so the sidebar reads top-to-bottom alongside the brief),
+  // general (no anchor), unresolved (anchor doesn't match any current
+  // snippet — happens after re-compose).
+  const byAnchor = new Map<string, Annotation[]>();
+  const general: Annotation[] = [];
+  const unresolved: Annotation[] = [];
+  for (const a of annotations) {
+    if (a.anchorKey === null) {
+      general.push(a);
+    } else if (snippetByKey.has(a.anchorKey)) {
+      const bucket = byAnchor.get(a.anchorKey) ?? [];
+      bucket.push(a);
+      byAnchor.set(a.anchorKey, bucket);
+    } else {
+      unresolved.push(a);
+    }
+  }
+  // Iterate snippets to preserve document order for anchored groups.
+  const anchoredOrdered = snippets
+    .filter((s) => byAnchor.has(s.key))
+    .map((s) => ({ snippet: s, notes: byAnchor.get(s.key)! }));
+
+  const total = annotations.length;
+  return (
+    <div id="annot-list-wrap">
+      {total === 0 ? (
+        <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px;">
+          No notes yet. Click any heading or bullet in the brief to attach
+          a comment.
+        </p>
+      ) : (
+        <>
+          {anchoredOrdered.map((g) => (
+            <NoteGroup
+              issueId={issueId}
+              heading={g.snippet.text || g.snippet.key}
+              anchorKey={g.snippet.key}
+              notes={g.notes}
+            />
+          ))}
+          {general.length > 0 ? (
+            <NoteGroup
+              issueId={issueId}
+              heading="General"
+              anchorKey={null}
+              notes={general}
+            />
+          ) : null}
+          {unresolved.length > 0 ? (
+            <NoteGroup
+              issueId={issueId}
+              heading="Unresolved (anchor no longer matches)"
+              anchorKey={null}
+              notes={unresolved}
+              orphaned
+            />
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+};
+
+const NoteGroup: FC<{
+  issueId: number;
+  heading: string;
+  anchorKey: string | null;
+  notes: Annotation[];
+  orphaned?: boolean;
+}> = ({ issueId, heading, anchorKey, notes, orphaned = false }) => (
+  <div class={`note-group${orphaned ? " orphaned" : ""}`}>
+    {anchorKey !== null ? (
+      <a
+        class="note-group-head note-group-head-anchored"
+        href={`#anchor-${anchorKey}`}
+        data-jump-anchor={anchorKey}
+      >
+        {heading}
+      </a>
+    ) : (
+      <div class="note-group-head">{heading}</div>
+    )}
+    <ul class="annot-list">
+      {notes.map((a) => (
+        <li>
+          <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
+            {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}Z
+          </span>
+          <p class="annot-body">{a.body}</p>
+          <div class="annot-meta">
+            <form
+              method="post"
+              action={`/admin/review/${issueId}/annotations/${a.id}/delete`}
+              hx-post={`/admin/review/${issueId}/annotations/${a.id}/delete`}
+              hx-target="#annot-list-wrap"
+              hx-swap="outerHTML"
+              hx-confirm="Delete this note?"
+              data-confirm="Delete this note?"
+            >
+              <button type="submit">delete</button>
+            </form>
+          </div>
+        </li>
+      ))}
+    </ul>
+  </div>
+);
 
 export interface EditorReviewData {
   issue: {
@@ -96,18 +246,99 @@ export const AdminReview: FC<{
           .flash { padding: 10px 14px; margin: 0 0 16px; font-family: var(--sans); font-size: 14px; border: 1px solid var(--rule); }
           .flash.ok { background: #e6f3e6; border-color: #9bc79b; color: #2b4f2b; }
           .flash.err { background: #fbeeee; border-color: #d4a4a4; color: #8a2a2a; }
-          .annot-panel { background: #fff; border: 1px solid var(--rule); padding: 18px 20px; margin: 24px 0 0; }
-          .annot-panel h3 { margin: 0 0 12px; font-size: 16px; }
-          .annot-form { display: flex; flex-direction: column; gap: 8px; margin: 0 0 18px; }
-          .annot-form select, .annot-form textarea { font: inherit; font-family: var(--sans); font-size: 14px; padding: 8px 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); box-sizing: border-box; width: 100%; }
-          .annot-form textarea { min-height: 80px; resize: vertical; }
-          .annot-form button { align-self: flex-start; padding: 7px 14px; background: #2b4f2b; color: #fff; border: 1px solid #2b4f2b; font: inherit; font-family: var(--sans); font-size: 13px; font-weight: 600; cursor: pointer; }
+          /* Two-column review: brief left, notes sidebar right.
+             Below 1100px the sidebar drops under the brief. */
+          .review-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 360px;
+            gap: 24px;
+            align-items: start;
+            margin: 0 0 24px;
+          }
+          .review-grid > .draft-preview { margin: 0; }
+          .review-grid > .annot-panel {
+            margin: 0;
+            position: sticky;
+            top: 60px;
+            max-height: calc(100vh - 80px);
+            overflow-y: auto;
+          }
+          @media (max-width: 1100px) {
+            .review-grid { grid-template-columns: minmax(0, 1fr); }
+            .review-grid > .annot-panel {
+              position: static; max-height: none;
+            }
+          }
+          .annot-panel { background: #fff; border: 1px solid var(--rule); padding: 16px 18px; }
+          .annot-panel h3 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+          .annot-form { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; padding-bottom: 14px; border-bottom: 1px solid var(--rule); }
+          .annot-form select, .annot-form textarea { font: inherit; font-family: var(--sans); font-size: 13px; padding: 6px 8px; border: 1px solid var(--rule); background: #fff; color: var(--ink); box-sizing: border-box; width: 100%; }
+          .annot-form textarea { min-height: 64px; resize: vertical; }
+          .annot-form button { align-self: flex-start; padding: 6px 12px; background: #2b4f2b; color: #fff; border: 1px solid #2b4f2b; font: inherit; font-family: var(--sans); font-size: 13px; font-weight: 600; cursor: pointer; }
           .annot-form button:hover { background: #1e3b1e; }
+          .annot-target {
+            font-family: var(--sans); font-size: 12px; color: var(--ink-soft);
+            background: var(--paper); border: 1px solid var(--rule);
+            padding: 4px 8px; display: flex; align-items: center; gap: 6px;
+          }
+          .annot-target.has-anchor { color: var(--ink); background: #f6f4ee; }
+          .annot-target .target-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .annot-target button {
+            background: transparent; border: none; padding: 0; cursor: pointer;
+            color: var(--ink-soft); font: inherit; text-decoration: underline;
+          }
+          .annot-target button:hover { color: var(--ink); }
+          .note-group { margin-top: 14px; }
+          .note-group:first-child { margin-top: 0; }
+          .note-group.orphaned { opacity: 0.65; }
+          .note-group-head {
+            font-family: var(--sans); font-size: 12px; font-weight: 600;
+            color: var(--ink); margin: 0 0 6px; padding: 4px 8px;
+            background: #f6f4ee; border-left: 2px solid #2b4f2b;
+            display: block; text-decoration: none;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+          }
+          .note-group-head-anchored { cursor: pointer; }
+          .note-group-head-anchored:hover { background: #ecead7; }
+          /* Hover affordance on anchored elements. The cursor +
+             outline communicate "click me to comment". The :hover
+             pseudo handles non-JS browsers; .anchor-hover (set by
+             review-notes.ts) handles browsers where event delegation
+             from a child link wins over CSS :hover on the parent. */
+          .draft-preview [data-anchor-id] {
+            cursor: pointer;
+            transition: background 0.15s ease-out;
+            border-radius: 2px;
+          }
+          .draft-preview [data-anchor-id]:hover,
+          .draft-preview [data-anchor-id].anchor-hover {
+            background: #fafaf3;
+            outline: 1px solid #e5e2d4;
+            outline-offset: 2px;
+          }
+          /* Sticky highlight on the currently-selected anchor — confirms
+             which element the next note will attach to. Persists until
+             the operator clicks another anchor, hits "clear", or the
+             form submits successfully. */
+          .draft-preview [data-anchor-id].anchor-selected {
+            background: #ecf3e6;
+            outline: 1px solid #9bc79b;
+            outline-offset: 2px;
+          }
+          .draft-preview [data-anchor-id].anchor-selected:hover,
+          .draft-preview [data-anchor-id].anchor-selected.anchor-hover {
+            background: #dfeed4;
+          }
+          /* Anchor highlight when scrolled into view from the sidebar. */
+          .draft-preview [data-anchor-id].anchor-flash {
+            background: #fff5d1 !important;
+            transition: background 0.6s ease-out;
+          }
           .annot-list { list-style: none; margin: 0; padding: 0; }
-          .annot-list li { border-top: 1px solid var(--rule); padding: 10px 0; }
+          .annot-list li { border-top: 1px solid var(--rule); padding: 8px 0; }
           .annot-list li:first-child { border-top: 0; padding-top: 0; }
           .annot-slot { display: inline-block; font-family: var(--sans); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; background: var(--paper); border: 1px solid var(--rule); padding: 1px 6px; margin-right: 6px; color: var(--ink-soft); }
-          .annot-body { margin: 4px 0 0; white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+          .annot-body { margin: 4px 0 0; white-space: pre-wrap; font-size: 13px; line-height: 1.45; }
           .annot-meta { font-family: var(--sans); font-size: 12px; color: var(--ink-soft); margin: 4px 0 0; }
           .annot-meta form { display: inline; }
           .annot-meta button { background: transparent; border: none; color: #8a2a2a; cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
@@ -121,7 +352,10 @@ export const AdminReview: FC<{
         `,
       }}
     />
-    <AdminNav current="issues" />
+    <AdminNav
+      current="issues"
+      clientBundles={["/assets/build/review-notes.js"]}
+    />
     <AdminCrumbs
       trail={[
         { label: "Issues", href: "/admin/issues" },
@@ -193,9 +427,51 @@ export const AdminReview: FC<{
         <span class="cli">bun run cli composer-replay {data.issue.id}</span>
       )}
     </nav>
-    <section class="draft-preview" aria-label="Rendered brief">
-      <div dangerouslySetInnerHTML={{ __html: data.issue.composedHtml }} />
-    </section>
+    {(() => {
+      const decorated = decorateBriefHtml(data.issue.composedHtml);
+      return (
+        <div class="review-grid">
+          <section class="draft-preview" aria-label="Rendered brief">
+            <div dangerouslySetInnerHTML={{ __html: decorated.html }} />
+          </section>
+          <aside class="annot-panel" aria-label="Review notes" id="notes">
+            <h3>Review notes</h3>
+            <form
+              method="post"
+              action={`/admin/review/${data.issue.id}/annotate`}
+              hx-post={`/admin/review/${data.issue.id}/annotate`}
+              hx-target="#annot-list-wrap"
+              hx-swap="outerHTML"
+              hx-on--after-request="if (event.detail.successful) { this.reset(); var t=this.querySelector('input[name=anchor_key]'); if(t) t.value=''; var ind=this.querySelector('.annot-target'); if(ind){ind.classList.remove('has-anchor');var span=ind.querySelector('.target-text'); if(span) span.textContent='General comment'; } this.querySelector('textarea').focus(); }"
+              class="annot-form"
+            >
+              <div class="annot-target" data-target-indicator>
+                <span class="target-text">General comment</span>
+                <button
+                  type="button"
+                  data-clear-anchor
+                  title="Switch back to a general comment"
+                >
+                  clear
+                </button>
+              </div>
+              <input type="hidden" name="anchor_key" value="" />
+              <textarea
+                name="body"
+                placeholder="What's working, what's not, what to try next time…"
+                required
+              />
+              <button type="submit">Add note</button>
+            </form>
+            <AnnotationsList
+              issueId={data.issue.id}
+              annotations={data.annotations}
+              snippets={decorated.snippets}
+            />
+          </aside>
+        </div>
+      );
+    })()}
     <script src="/assets/admin-review.js" defer />
 
 
@@ -285,56 +561,6 @@ export const AdminReview: FC<{
         <p>{data.editor.cuts_summary || <em>— no cuts summary —</em>}</p>
       </>
     )}
-
-    <section class="annot-panel" aria-label="Review notes" id="notes">
-      <h3>Review notes</h3>
-      <form
-        method="post"
-        action={`/admin/review/${data.issue.id}/annotate`}
-        class="annot-form"
-      >
-        <select name="slot">
-          <option value="summary">Overall</option>
-          <option value="opener">Opener</option>
-          <option value="conversation">Conversation</option>
-          <option value="worth_knowing">Worth knowing</option>
-          <option value="worth_watching">Worth watching</option>
-          <option value="shrug">Shrug</option>
-        </select>
-        <textarea
-          name="body"
-          placeholder="What's working, what's not, what to try next time…"
-          required
-        />
-        <button type="submit">Add note</button>
-      </form>
-      {data.annotations.length === 0 ? (
-        <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px;">
-          No notes yet.
-        </p>
-      ) : (
-        <ul class="annot-list">
-          {data.annotations.map((a) => (
-            <li>
-              <span class="annot-slot">{slotLabel(a.slot)}</span>
-              <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
-                {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}Z
-              </span>
-              <p class="annot-body">{a.body}</p>
-              <div class="annot-meta">
-                <form
-                  method="post"
-                  action={`/admin/review/${data.issue.id}/annotations/${a.id}/delete`}
-                  data-confirm="Delete this note?"
-                >
-                  <button type="submit">delete</button>
-                </form>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
 
     <h2>Shrug pool</h2>
     {data.shrug.length === 0 ? (
