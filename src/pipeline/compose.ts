@@ -228,32 +228,75 @@ export async function produceDraft(
     return null;
   }
 
-  // Editor picks the shortlist from the top-N passers. Pool is ranked by
-  // tier-1 coverage then composite — gives the editor the highest-quality
-  // slice to curate rather than raw NumMentions leaders.
-  const ranked = rows
-    .map((r) => {
-      const allUrls = [
-        ...(r.source_url ? [r.source_url] : []),
-        ...(r.additional_source_urls ?? []),
-      ];
-      return {
-        row: r,
-        tier1: countTier1(allUrls),
-        total: allUrls.length,
-      };
-    })
-    .sort((a, b) => {
-      if (b.tier1 !== a.tier1) return b.tier1 - a.tier1;
-      const ca = a.row.composite !== null ? Number(a.row.composite) : 0;
-      const cb = b.row.composite !== null ? Number(b.row.composite) : 0;
-      return cb - ca;
-    });
+  // Theme-first pool selection. Old approach (top-N stories by
+  // tier1+composite) often left arcs invisible: the editor saw 1 strong
+  // story per theme and never realized the other 4 stories of the same
+  // theme also passed the gate. New approach groups gate-passers by
+  // theme, ranks themes, and pulls in every gate-passing member of the
+  // top themes until we hit the pool cap. Editor reasons about arcs as
+  // first-class objects.
+  const annotated = rows.map((r) => {
+    const allUrls = [
+      ...(r.source_url ? [r.source_url] : []),
+      ...(r.additional_source_urls ?? []),
+    ];
+    return {
+      row: r,
+      tier1: countTier1(allUrls),
+      total: allUrls.length,
+    };
+  });
 
-  const poolSize = Math.min(cfg["editor.pool_size"], ranked.length);
-  const pool = ranked.slice(0, poolSize);
+  // Group by theme. Stories with theme_id=NULL get a synthetic per-row
+  // bucket so they still compete for pool slots (as singletons).
+  type Bucket = {
+    themeId: number | null;
+    rows: typeof annotated;
+    maxComposite: number;
+    tier1Total: number;
+  };
+  const themeBuckets = new Map<string, Bucket>();
+  for (const a of annotated) {
+    const key =
+      a.row.theme_id !== null ? `t${a.row.theme_id}` : `s${a.row.story_id}`;
+    const existing = themeBuckets.get(key);
+    const composite = a.row.composite !== null ? Number(a.row.composite) : 0;
+    if (existing === undefined) {
+      themeBuckets.set(key, {
+        themeId: a.row.theme_id !== null ? Number(a.row.theme_id) : null,
+        rows: [a],
+        maxComposite: composite,
+        tier1Total: a.tier1,
+      });
+    } else {
+      existing.rows.push(a);
+      existing.maxComposite = Math.max(existing.maxComposite, composite);
+      existing.tier1Total += a.tier1;
+    }
+  }
+  // Rank themes by max-composite (best-story signal) then tier1 total
+  // (cumulative source quality). Larger themes naturally rise because
+  // they have more chances at high-composite members AND more tier-1
+  // coverage; the multi-story arcs the editor wants are top-ranked.
+  const rankedThemes = [...themeBuckets.values()].sort((a, b) => {
+    if (b.maxComposite !== a.maxComposite) return b.maxComposite - a.maxComposite;
+    return b.tier1Total - a.tier1Total;
+  });
+
+  // Fill the pool by themes, in rank order, until poolSize stories.
+  // Including ALL gate-passing members of a selected theme so the editor
+  // sees full arcs. May overshoot poolSize slightly when a single theme
+  // is large; that's preferable to truncating an arc.
+  const targetPoolSize = cfg["editor.pool_size"];
+  const pool: typeof annotated = [];
+  const themesIncluded: number[] = [];
+  for (const bucket of rankedThemes) {
+    if (pool.length >= targetPoolSize) break;
+    pool.push(...bucket.rows);
+    if (bucket.themeId !== null) themesIncluded.push(bucket.themeId);
+  }
   console.log(
-    `[compose] ${rows.length} passers → editor pool of ${poolSize}`,
+    `[compose] ${rows.length} passers across ${themeBuckets.size} themes → editor pool of ${pool.length} stories from ${themesIncluded.length} themes (+ ${pool.length - themesIncluded.length} singletons)`,
   );
 
   // Preload per-theme metadata for every theme in the pool — used both
