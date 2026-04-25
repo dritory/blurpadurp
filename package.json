@@ -7,11 +7,14 @@
     "cli": "bun run src/cli.ts",
     "dev:api": "bun run --watch src/api/index.tsx",
     "migrate": "bun run src/cli.ts migrate",
-    "test": "bun test"
+    "test": "bun test",
+    "build:admin": "bun build src/admin-client/*.ts --outdir=public/build --target=browser --minify"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
+    "@codemirror/lang-markdown": "^6.5.0",
     "@google-cloud/bigquery": "^8.1.1",
+    "codemirror": "^6.0.2",
     "hono": "latest",
     "kysely": "latest",
     "pg": "latest",
