@@ -11,6 +11,7 @@
 import { sql, type Selectable } from "kysely";
 
 import { embed, embedBatch, toPgVector } from "../ai/embed.ts";
+import { recomputeThemeCentroid } from "../shared/embedding-utils.ts";
 import { makeScorer } from "../ai/scorer.ts";
 import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { db } from "../db/index.ts";
@@ -315,6 +316,26 @@ async function processStory(
       );
     });
   }
+  // Post-score embedding refinement. The original embedding was
+  // computed from `title + raw_summary` (often title alone for GDELT
+  // stories with null summary) — too thin a signal to cluster
+  // same-event stories across outlets. The scorer's `summary` is much
+  // richer: language-normalized, event-focused, consistent style. We
+  // re-embed using `title + scorer_summary` and then recompute the
+  // theme's centroid so subsequent attaches in this run see the
+  // improved centroid. Skip on early-reject (summary may be sparse)
+  // and on empty summary (defensive).
+  if (
+    !output.classification.early_reject &&
+    output.summary.trim().length > 0
+  ) {
+    await refineEmbeddingPostScore(
+      story.id,
+      story.title,
+      output.summary,
+      finalThemeId,
+    );
+  }
   if (finalThemeId !== null) {
     await recomputeThemeRollingAvg(finalThemeId);
   }
@@ -473,6 +494,37 @@ async function ensureEmbedding(story: StoryRow): Promise<string> {
     .where("id", "=", story.id)
     .execute();
   return pg;
+}
+
+// Re-embed a scored story using `title + scorer_summary` and update
+// its theme centroid. Called after persistScorerResult — the scorer
+// summary is the highest-signal text we have for clustering. Failures
+// are non-fatal (we don't want one Voyage hiccup to break the whole
+// scoring run); the original embedding stays in place if this fails.
+async function refineEmbeddingPostScore(
+  storyId: number,
+  title: string,
+  scorerSummary: string,
+  themeId: number | null,
+): Promise<void> {
+  try {
+    const text = `${title}\n\n${scorerSummary}`.trim();
+    const vecs = await embed([text]);
+    const vec = vecs[0];
+    if (!vec) return;
+    await db
+      .updateTable("story")
+      .set({ embedding: toPgVector(vec) })
+      .where("id", "=", storyId)
+      .execute();
+    if (themeId !== null) {
+      await recomputeThemeCentroid(themeId);
+    }
+  } catch (err) {
+    console.warn(
+      `[score] post-score reembed failed for story ${storyId}: ${err instanceof Error ? err.message : err}`,
+    );
+  }
 }
 
 async function tryAttachToExistingTheme(
