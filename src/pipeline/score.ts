@@ -22,11 +22,24 @@ import type {
   ScorerOutput,
 } from "../shared/scoring-schema.ts";
 
-const ATTACH_SIMILARITY_THRESHOLD = 0.8;
-// Re-check threshold inside the theme-create mutex. Higher than the
-// regular attach threshold — we already decided (via LLM confirm) that
-// nothing matched at 0.80; this is a last-moment check to catch neighbors
-// that appeared while we were scoring.
+// Cosine threshold for triggering a theme-attach LLM confirm.
+//
+// Originally set to 0.80 when both incoming embeddings and theme
+// centroids were title-only — a deliberately conservative bar because
+// the embedding signal was thin. Post-embedding-upgrade, theme
+// centroids are now built from scorer-summary embeddings (cohesion
+// ~0.95 within a real theme), but incoming stories still embed
+// title-only at attach time (we haven't scored them yet), so cross-
+// quality cosine for true matches sits roughly 0.70–0.85.
+//
+// 0.70 here is aggressive: most pairs at this similarity get sent to
+// the Haiku confirm step, which is the actual safety net against
+// false-positive merges. If this drives confirm cost up too much,
+// raise it. If singletons keep accumulating, lower it further.
+const ATTACH_SIMILARITY_THRESHOLD = 0.7;
+// Re-check threshold inside the theme-create mutex. Stays high because
+// it's a no-LLM short-circuit for the race window only — a story
+// arriving after another worker created a near-perfect-match theme.
 const CREATE_RACE_RECHECK_THRESHOLD = 0.88;
 const SCORING_CONCURRENCY = 4;
 
