@@ -49,16 +49,28 @@ export interface PoolResult<R extends PoolRowShape> {
 }
 
 export interface PoolOptions {
-  /** Cap any single category's pool stories to this fraction of
-   *  poolSize. 0.5 = max 50% from any one category. Set to 1.0 (or
-   *  greater) to disable capping. Stories without a category slug
-   *  share a virtual "—" bucket. */
+  /** Cap any single category's themes to this fraction of
+   *  maxThemes. 0.5 = max 50% themes from any one category. Set to
+   *  1.0 (or greater) to disable capping. Stories without a category
+   *  slug share a virtual "—" bucket. */
   maxCategoryFraction?: number;
+  /** Story-count safety cap. Stops including more themes once the
+   *  cumulative story count would exceed this — protects against a
+   *  single runaway theme (50+ members) blowing up the editor input
+   *  token budget. Optional; defaults to 200. */
+  maxStorySafetyCap?: number;
 }
 
+/**
+ * Pool selection. `maxThemes` is the primary cap — the editor reasons
+ * about themes/arcs, so a theme count gives a more meaningful budget
+ * than a story count. The story safety cap (`opts.maxStorySafetyCap`)
+ * exists only to protect the LLM context window from one outlier
+ * theme with hundreds of members.
+ */
 export function selectEditorPool<R extends PoolRowShape>(
   rows: R[],
-  poolSize: number,
+  maxThemes: number,
   opts: PoolOptions = {},
 ): PoolResult<R> {
   const annotated: PoolEntry<R>[] = rows.map((r) => {
@@ -101,20 +113,22 @@ export function selectEditorPool<R extends PoolRowShape>(
   const included: PoolBucket<R>[] = [];
   const excluded: PoolBucket<R>[] = [];
 
-  // Soft per-category cap. Walks themes in rank order; skips a theme
-  // whose category is already at its share. Capped themes go to
-  // excluded, not into pool — caller can still see them in the
-  // sandbox. The cap NEVER promotes weak themes; it only blocks
-  // over-represented strong ones.
   const fraction =
-    opts.maxCategoryFraction !== undefined
-      ? opts.maxCategoryFraction
-      : 1.0;
-  const perCategoryCap = Math.ceil(poolSize * fraction);
+    opts.maxCategoryFraction !== undefined ? opts.maxCategoryFraction : 1.0;
+  // Per-category cap measured in THEMES — same unit as maxThemes —
+  // since selection is theme-first. Soft cap: the over-represented
+  // category's surplus themes go to excluded, freeing slots for the
+  // next-best theme of any other category.
+  const perCategoryCap = Math.ceil(maxThemes * fraction);
   const perCategoryCount = new Map<string, number>();
+  const storySafetyCap = opts.maxStorySafetyCap ?? 200;
 
   for (const bucket of ranked) {
-    if (pool.length >= poolSize) {
+    if (included.length >= maxThemes) {
+      excluded.push(bucket);
+      continue;
+    }
+    if (pool.length >= storySafetyCap) {
       excluded.push(bucket);
       continue;
     }
@@ -126,7 +140,7 @@ export function selectEditorPool<R extends PoolRowShape>(
     }
     pool.push(...bucket.rows);
     included.push(bucket);
-    perCategoryCount.set(cat, used + bucket.rows.length);
+    perCategoryCount.set(cat, used + 1);
   }
 
   return {

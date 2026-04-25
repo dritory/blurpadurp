@@ -31,7 +31,7 @@ export interface SandboxBucket {
 }
 
 export interface EditorSandboxData {
-  poolSize: number;
+  maxThemes: number;
   ingestWindowDays: number;
   totalPassers: number;
   totalThemes: number;
@@ -116,18 +116,18 @@ export const AdminEditorSandbox: FC<{ data: EditorSandboxData }> = ({ data }) =>
     <h2>Editor sandbox</h2>
     <p style="color: var(--ink-soft); font-size: 14px; font-family: var(--sans);">
       Read-only view of the pool the editor would see right now —
-      same theme-first selection compose() runs. No LLM call. Pool
-      cap is <code>editor.pool_size</code> ({data.poolSize});
+      same theme-first selection compose() runs. No LLM call. Theme
+      cap is <code>editor.pool_max_themes</code> ({data.maxThemes});
       ingest window is the last {data.ingestWindowDays} days.
     </p>
 
     <div class="sb-summary">
       <Cell label="Passers" value={data.totalPassers} sub="gate-pass, unpublished, in-window" />
       <Cell label="Distinct themes" value={data.totalThemes} sub="incl. singleton-loose" />
-      <Cell label="Themes in pool" value={data.included.filter((b) => b.themeId !== null).length} sub="all members included" />
+      <Cell label="Themes in pool" value={data.included.length} sub={`cap ${data.maxThemes}`} />
       <Cell label="Stories in pool" value={data.poolStories} sub={`out of ${data.totalPassers}`} />
-      <Cell label="Pool fill" value={`${Math.round((data.poolStories / Math.max(1, data.poolSize)) * 100)}%`} sub={`target ${data.poolSize}`} />
-      <Cell label="Below the line" value={data.excluded.length} sub="themes cut by pool cap" />
+      <Cell label="Pool fill" value={`${Math.round((data.included.length / Math.max(1, data.maxThemes)) * 100)}%`} sub="of theme cap" />
+      <Cell label="Below the line" value={data.excluded.length} sub="themes cut by cap" />
     </div>
 
     <div class="sb-section">

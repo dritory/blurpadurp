@@ -50,6 +50,9 @@ const STYLES = `
   .b-table th { font-family: var(--sans); font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
   .b-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .b-bar { display: inline-block; height: 9px; background: #4a6b4a; vertical-align: middle; margin-left: 6px; opacity: 0.85; min-width: 1px; }
+  .b-table .rate-high { color: #2b4f2b; }
+  .b-table .rate-mid  { color: var(--ink); }
+  .b-table .rate-low  { color: #8a5e2a; }
   .b-stacked-wrap { background: #fff; border: 1px solid var(--rule); padding: 14px 16px; margin: 0 0 24px; overflow-x: auto; }
   .b-stacked { display: flex; align-items: flex-end; gap: 4px; min-height: 200px; padding: 8px 0 0; }
   .b-week { display: flex; flex-direction: column-reverse; flex: 1 1 30px; min-width: 24px; gap: 1px; }
@@ -78,6 +81,14 @@ const colorFor = (cat: string, all: string[]): string => {
   const idx = all.indexOf(cat);
   return PALETTE[((idx >= 0 ? idx : 0) % PALETTE.length)] ?? "#888";
 };
+
+// Visual cue for pass-rate / publish-rate columns. High rates in
+// green, low in muted red — fast skim of "where stories evaporate."
+function rateClass(pct: number): string {
+  if (pct >= 30) return "rate-high";
+  if (pct >= 10) return "rate-mid";
+  return "rate-low";
+}
 
 export const AdminExploreBalance: FC<{ data: BalanceData }> = ({ data }) => {
   const total = data.byCategory.reduce(
@@ -154,10 +165,17 @@ export const AdminExploreBalance: FC<{ data: BalanceData }> = ({ data }) => {
           <thead>
             <tr>
               <th>Category</th>
-              <th class="num">Ingested</th>
               <th class="num">Scored</th>
+              <th class="num" title="passed / scored — gate pass rate within category">
+                Pass %
+              </th>
               <th class="num">Passed</th>
-              <th class="num">% of passers</th>
+              <th class="num" title="this category's share of the total passer pool">
+                Pool share
+              </th>
+              <th class="num" title="published / passed — how often a passer reaches a brief">
+                Publish %
+              </th>
               <th class="num">Published</th>
               <th>Share</th>
             </tr>
@@ -167,6 +185,8 @@ export const AdminExploreBalance: FC<{ data: BalanceData }> = ({ data }) => {
               const pct = data.totalPassed > 0
                 ? (c.passed / data.totalPassed) * 100
                 : 0;
+              const passRate = c.scored > 0 ? (c.passed / c.scored) * 100 : 0;
+              const publishRate = c.passed > 0 ? (c.published / c.passed) * 100 : 0;
               const barWidth = Math.min(220, pct * 4);
               return (
                 <tr>
@@ -176,10 +196,11 @@ export const AdminExploreBalance: FC<{ data: BalanceData }> = ({ data }) => {
                     />
                     {c.category}
                   </td>
-                  <td class="num">{c.ingested}</td>
                   <td class="num">{c.scored}</td>
+                  <td class={`num ${rateClass(passRate)}`}>{passRate.toFixed(1)}%</td>
                   <td class="num">{c.passed}</td>
                   <td class="num">{pct.toFixed(1)}%</td>
+                  <td class={`num ${rateClass(publishRate)}`}>{publishRate.toFixed(1)}%</td>
                   <td class="num">{c.published}</td>
                   <td>
                     <span
@@ -192,10 +213,19 @@ export const AdminExploreBalance: FC<{ data: BalanceData }> = ({ data }) => {
             })}
             <tr style="border-top: 2px solid var(--rule); font-weight: 600;">
               <td>Total</td>
-              <td class="num">{total.ingested}</td>
               <td class="num">{total.scored}</td>
+              <td class="num">
+                {total.scored > 0
+                  ? ((total.passed / total.scored) * 100).toFixed(1)
+                  : "0.0"}%
+              </td>
               <td class="num">{total.passed}</td>
               <td class="num">100%</td>
+              <td class="num">
+                {total.passed > 0
+                  ? ((total.published / total.passed) * 100).toFixed(1)
+                  : "0.0"}%
+              </td>
               <td class="num">{total.published}</td>
               <td />
             </tr>

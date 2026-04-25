@@ -236,6 +236,7 @@ INSERT INTO config (key, value) VALUES
   ('editor.prompt_version',        '"editor-v0.1"'::jsonb),
   ('editor.max_tokens',            '2000'::jsonb),
   ('editor.pool_size',             '60'::jsonb),
+  ('editor.pool_max_themes',       '20'::jsonb),
   ('editor.pool_max_category_fraction', '0.5'::jsonb),
   ('gate.x_threshold',             '5'::jsonb),
   ('gate.delta',                   '1'::jsonb),

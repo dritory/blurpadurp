@@ -2464,15 +2464,15 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .selectFrom("config")
     .select(["key", "value"])
     .where("key", "in", [
-      "editor.pool_size",
+      "editor.pool_max_themes",
       "editor.pool_max_category_fraction",
     ])
     .execute();
   const cfgMap = new Map(cfgRows.map((r) => [r.key, r.value]));
-  const poolSize =
-    typeof cfgMap.get("editor.pool_size") === "number"
-      ? (cfgMap.get("editor.pool_size") as number)
-      : 60;
+  const maxThemes =
+    typeof cfgMap.get("editor.pool_max_themes") === "number"
+      ? (cfgMap.get("editor.pool_max_themes") as number)
+      : 20;
   const maxCategoryFraction =
     typeof cfgMap.get("editor.pool_max_category_fraction") === "number"
       ? (cfgMap.get("editor.pool_max_category_fraction") as number)
@@ -2499,7 +2499,7 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .orderBy("story.composite", "desc")
     .execute();
 
-  const result = selectEditorPool(rows, poolSize, { maxCategoryFraction });
+  const result = selectEditorPool(rows, maxThemes, { maxCategoryFraction });
 
   // Per-category passer + in-pool counts. The "in pool" count comes
   // from the selected buckets; "passers" from the full row set. Lets
@@ -2550,7 +2550,7 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
   };
 
   return {
-    poolSize,
+    maxThemes,
     ingestWindowDays: 14,
     totalPassers: result.totalPassers,
     totalThemes: result.totalThemes,
