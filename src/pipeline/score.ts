@@ -22,25 +22,9 @@ import type {
   ScorerOutput,
 } from "../shared/scoring-schema.ts";
 
-// Cosine threshold for triggering a theme-attach LLM confirm.
-//
-// Originally set to 0.80 when both incoming embeddings and theme
-// centroids were title-only — a deliberately conservative bar because
-// the embedding signal was thin. Post-embedding-upgrade, theme
-// centroids are now built from scorer-summary embeddings (cohesion
-// ~0.95 within a real theme), but incoming stories still embed
-// title-only at attach time (we haven't scored them yet), so cross-
-// quality cosine for true matches sits roughly 0.70–0.85.
-//
-// 0.70 here is aggressive: most pairs at this similarity get sent to
-// the Haiku confirm step, which is the actual safety net against
-// false-positive merges. If this drives confirm cost up too much,
-// raise it. If singletons keep accumulating, lower it further.
-const ATTACH_SIMILARITY_THRESHOLD = 0.7;
-// Re-check threshold inside the theme-create mutex. Stays high because
-// it's a no-LLM short-circuit for the race window only — a story
-// arriving after another worker created a near-perfect-match theme.
-const CREATE_RACE_RECHECK_THRESHOLD = 0.88;
+// Theme-attach thresholds live in the config table now (see
+// migrations/030_theme_attach_config.sql). Tunable on /admin/config
+// without a redeploy or a re-score.
 const SCORING_CONCURRENCY = 4;
 
 type ConfigMap = {
@@ -59,6 +43,8 @@ type ConfigMap = {
   "gate.x_threshold": number;
   "gate.delta": number;
   "gate.confidence_floor": "low" | "medium" | "high";
+  "theme.attach_threshold": number;
+  "theme.create_recheck_threshold": number;
 };
 
 export async function score(): Promise<void> {
@@ -287,7 +273,11 @@ async function processStory(
 
   let themeId = story.theme_id;
   if (themeId === null) {
-    themeId = await tryAttachToExistingTheme(story, embeddingVec);
+    themeId = await tryAttachToExistingTheme(
+      story,
+      embeddingVec,
+      cfg["theme.attach_threshold"],
+    );
   }
 
   const themeContext = themeId !== null ? await loadThemeContext(themeId) : null;
@@ -311,7 +301,7 @@ async function processStory(
       // nothing matched at attach time.
       const neighbor = await findMatchingThemeCheap(
         embeddingVec,
-        CREATE_RACE_RECHECK_THRESHOLD,
+        cfg["theme.create_recheck_threshold"],
       );
       if (neighbor !== null) {
         await db
@@ -543,6 +533,7 @@ async function refineEmbeddingPostScore(
 async function tryAttachToExistingTheme(
   story: StoryRow,
   embeddingVec: string,
+  threshold: number,
 ): Promise<number | null> {
   const row = await db
     .selectFrom("theme")
@@ -560,7 +551,7 @@ async function tryAttachToExistingTheme(
     .limit(1)
     .executeTakeFirst();
 
-  if (!row || row.sim < ATTACH_SIMILARITY_THRESHOLD) return null;
+  if (!row || row.sim < threshold) return null;
 
   const recent = await db
     .selectFrom("story")
@@ -926,5 +917,9 @@ async function loadConfig(): Promise<ConfigMap> {
   map["scorer.dedup_enabled"] ??= true;
   map["scorer.dedup_similarity_threshold"] ??= 0.95;
   map["scorer.dedup_lookback_days"] ??= 3;
+  // Theme-attach thresholds (migration 030). Defaults match the
+  // constants that lived in code at that migration's time.
+  map["theme.attach_threshold"] ??= 0.7;
+  map["theme.create_recheck_threshold"] ??= 0.88;
   return map as ConfigMap;
 }
