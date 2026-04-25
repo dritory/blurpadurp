@@ -105,6 +105,11 @@ import {
   type ThemesData,
   type ThemeFilter,
 } from "../views/admin-themes.tsx";
+import {
+  AdminThemeDetail,
+  type ThemeDetailData,
+  type ThemeMember,
+} from "../views/admin-theme-detail.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
 import {
@@ -286,7 +291,10 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const body = await c.req.parseBody();
-    const slot = normalizeSlot(String(body.slot ?? "summary"));
+    // Slot is legacy — the anchor (or its absence) is now the only
+    // targeting signal. Hardcode a neutral value so the NOT NULL
+    // schema constraint stays satisfied without misleading metadata.
+    const slot = "general";
     const text = String(body.body ?? "").trim();
     const rawAnchor = String(body.anchor_key ?? "").trim();
     const anchorKey = rawAnchor.length > 0 ? rawAnchor : null;
@@ -450,6 +458,14 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       parseFlashGeneric(c.req.query("saved"), c.req.query("error")),
     );
     return c.html(<AdminThemes data={data} />);
+  });
+
+  app.get("/admin/themes/:id", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const data = await loadThemeDetail(id);
+    if (data === null) return c.notFound();
+    return c.html(<AdminThemeDetail data={data} />);
   });
 
   app.post("/admin/themes/toggle", async (c) => {
@@ -2202,6 +2218,11 @@ async function loadThemesData(
     .select(sql<string>`count(*)`.as("n"))
     .executeTakeFirstOrThrow();
 
+  // n_stories = current member count (live, not the denormalized
+  // n_stories_published counter). cohesion = avg cosine of member
+  // embeddings to centroid, NULL when fewer than 2 embedded members.
+  // Both subqueries are correlated and reasonably cheap (story.theme_id
+  // is indexed; pgvector cosine is constant-time per row).
   let q = db
     .selectFrom("theme")
     .leftJoin("category", "category.id", "theme.category_id")
@@ -2215,6 +2236,20 @@ async function loadThemesData(
       "theme.rolling_composite_avg",
       "theme.rolling_composite_30d",
       "theme.is_long_running",
+      sql<string>`(SELECT count(*)::text FROM story s WHERE s.theme_id = theme.id)`.as(
+        "n_stories",
+      ),
+      sql<string | null>`(
+        SELECT
+          CASE WHEN count(*) >= 2
+            THEN AVG(1 - (s.embedding <=> theme.centroid_embedding))::text
+            ELSE NULL
+          END
+        FROM story s
+        WHERE s.theme_id = theme.id
+          AND s.embedding IS NOT NULL
+          AND theme.centroid_embedding IS NOT NULL
+      )`.as("cohesion"),
     ]);
 
   if (filter === "long_running") {
@@ -2252,6 +2287,8 @@ async function loadThemesData(
       firstSeenAt: r.first_seen_at,
       lastPublishedAt: r.last_published_at,
       nStoriesPublished: r.n_stories_published,
+      nStories: Number(r.n_stories),
+      cohesion: r.cohesion !== null ? Number(r.cohesion) : null,
       rollingAvg: avg,
       rolling30d: d30,
       trajectory,
@@ -2269,6 +2306,116 @@ async function loadThemesData(
     total: Number(totalRow.n),
     flash,
   };
+}
+
+async function loadThemeDetail(id: number): Promise<ThemeDetailData | null> {
+  const themeRow = await db
+    .selectFrom("theme")
+    .leftJoin("category", "category.id", "theme.category_id")
+    .select([
+      "theme.id",
+      "theme.name",
+      "category.slug as category_slug",
+      "theme.first_seen_at",
+      "theme.last_published_at",
+      "theme.n_stories_published",
+      "theme.rolling_composite_avg",
+      "theme.rolling_composite_30d",
+      "theme.is_long_running",
+      sql<boolean>`(theme.centroid_embedding IS NOT NULL)`.as("has_centroid"),
+      sql<string>`(SELECT count(*)::text FROM story s WHERE s.theme_id = theme.id)`.as(
+        "n_stories",
+      ),
+      sql<string | null>`(
+        SELECT
+          CASE WHEN count(*) >= 2
+            THEN AVG(1 - (s.embedding <=> theme.centroid_embedding))::text
+            ELSE NULL
+          END
+        FROM story s
+        WHERE s.theme_id = theme.id
+          AND s.embedding IS NOT NULL
+          AND theme.centroid_embedding IS NOT NULL
+      )`.as("cohesion"),
+    ])
+    .where("theme.id", "=", id)
+    .executeTakeFirst();
+  if (!themeRow) return null;
+
+  // Pull every member story with its cosine to the centroid. Order by
+  // cosine ascending so outliers (potential mis-attaches) bubble up.
+  // Stories without an embedding are kept (cosine = NULL) so the table
+  // is complete; they sort to the end.
+  const memberRows = await db
+    .selectFrom("story")
+    .select([
+      "story.id",
+      "story.title",
+      "story.composite",
+      "story.passed_gate",
+      "story.published_to_reader",
+      "story.published_at",
+      "story.ingested_at",
+      "story.source_url",
+      sql<string | null>`
+        CASE
+          WHEN story.embedding IS NOT NULL
+            AND (SELECT centroid_embedding FROM theme WHERE id = ${id}) IS NOT NULL
+          THEN (1 - (story.embedding <=> (SELECT centroid_embedding FROM theme WHERE id = ${id})))::text
+          ELSE NULL
+        END
+      `.as("cosine"),
+    ])
+    .where("story.theme_id", "=", id)
+    .orderBy(sql`cosine ASC NULLS LAST`)
+    .limit(500)
+    .execute();
+
+  const members: ThemeMember[] = memberRows.map((r) => ({
+    id: Number(r.id),
+    title: r.title,
+    cosine: r.cosine !== null ? Number(r.cosine) : null,
+    composite: r.composite !== null ? Number(r.composite) : null,
+    passedGate: r.passed_gate,
+    publishedToReader: r.published_to_reader,
+    publishedAt: r.published_at,
+    ingestedAt: r.ingested_at,
+    sourceDomain: domainOfUrl(r.source_url),
+  }));
+
+  return {
+    theme: {
+      id: Number(themeRow.id),
+      name: themeRow.name,
+      category: themeRow.category_slug,
+      firstSeenAt: themeRow.first_seen_at,
+      lastPublishedAt: themeRow.last_published_at,
+      nStories: Number(themeRow.n_stories),
+      nStoriesPublished: themeRow.n_stories_published,
+      cohesion:
+        themeRow.cohesion !== null ? Number(themeRow.cohesion) : null,
+      rollingAvg:
+        themeRow.rolling_composite_avg !== null
+          ? Number(themeRow.rolling_composite_avg)
+          : null,
+      rolling30d:
+        themeRow.rolling_composite_30d !== null
+          ? Number(themeRow.rolling_composite_30d)
+          : null,
+      isLongRunning: themeRow.is_long_running,
+      hasCentroid: themeRow.has_centroid,
+    },
+    members,
+  };
+}
+
+function domainOfUrl(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
 }
 
 async function loadConfigRows(): Promise<ConfigRow[]> {
@@ -2713,19 +2860,6 @@ async function loadPromptEditor(
     liveVersion,
     flash,
   };
-}
-
-const VALID_SLOTS = new Set([
-  "opener",
-  "conversation",
-  "worth_knowing",
-  "worth_watching",
-  "shrug",
-  "summary",
-]);
-
-function normalizeSlot(raw: string): string {
-  return VALID_SLOTS.has(raw) ? raw : "summary";
 }
 
 function parsePromptFlash(
