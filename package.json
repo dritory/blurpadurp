@@ -8,7 +8,8 @@
     "dev:api": "bun run --watch src/api/index.tsx",
     "migrate": "bun run src/cli.ts migrate",
     "test": "bun test",
-    "build:admin": "bun build src/admin-client/*.ts --outdir=public/build --target=browser --minify"
+    "build:admin": "bun build src/admin-client/*.ts --outdir=public/build --target=browser --minify",
+    "dev:admin": "bun build src/admin-client/*.ts --outdir=public/build --target=browser --watch"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",

@@ -14,6 +14,49 @@ export interface Annotation {
   createdAt: Date;
 }
 
+// Renderable wrapper for the annotations list. Rendered both inline by
+// AdminReview (full page) and as the HTMX response fragment by the
+// /admin/review/:id/annotate and /annotations/:aid/delete handlers —
+// hence the standalone export. Wrapper div carries the id HTMX swaps;
+// inner content is either the empty-state paragraph or the list.
+export const AnnotationsList: FC<{
+  issueId: number;
+  annotations: Annotation[];
+}> = ({ issueId, annotations }) => (
+  <div id="annot-list-wrap">
+    {annotations.length === 0 ? (
+      <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px;">
+        No notes yet.
+      </p>
+    ) : (
+      <ul class="annot-list">
+        {annotations.map((a) => (
+          <li>
+            <span class="annot-slot">{slotLabel(a.slot)}</span>
+            <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
+              {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}Z
+            </span>
+            <p class="annot-body">{a.body}</p>
+            <div class="annot-meta">
+              <form
+                method="post"
+                action={`/admin/review/${issueId}/annotations/${a.id}/delete`}
+                hx-post={`/admin/review/${issueId}/annotations/${a.id}/delete`}
+                hx-target="#annot-list-wrap"
+                hx-swap="outerHTML"
+                hx-confirm="Delete this note?"
+                data-confirm="Delete this note?"
+              >
+                <button type="submit">delete</button>
+              </form>
+            </div>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+);
+
 function slotLabel(slot: string): string {
   switch (slot) {
     case "summary":
@@ -291,6 +334,10 @@ export const AdminReview: FC<{
       <form
         method="post"
         action={`/admin/review/${data.issue.id}/annotate`}
+        hx-post={`/admin/review/${data.issue.id}/annotate`}
+        hx-target="#annot-list-wrap"
+        hx-swap="outerHTML"
+        hx-on--after-request="if (event.detail.successful) { this.reset(); this.querySelector('textarea').focus(); }"
         class="annot-form"
       >
         <select name="slot">
@@ -308,32 +355,10 @@ export const AdminReview: FC<{
         />
         <button type="submit">Add note</button>
       </form>
-      {data.annotations.length === 0 ? (
-        <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px;">
-          No notes yet.
-        </p>
-      ) : (
-        <ul class="annot-list">
-          {data.annotations.map((a) => (
-            <li>
-              <span class="annot-slot">{slotLabel(a.slot)}</span>
-              <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
-                {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}Z
-              </span>
-              <p class="annot-body">{a.body}</p>
-              <div class="annot-meta">
-                <form
-                  method="post"
-                  action={`/admin/review/${data.issue.id}/annotations/${a.id}/delete`}
-                  data-confirm="Delete this note?"
-                >
-                  <button type="submit">delete</button>
-                </form>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <AnnotationsList
+        issueId={data.issue.id}
+        annotations={data.annotations}
+      />
     </section>
 
     <h2>Shrug pool</h2>

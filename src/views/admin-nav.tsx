@@ -10,11 +10,11 @@
 
 import type { FC } from "hono/jsx";
 
-// Pin the HTMX version. Bumping is a deliberate decision — read the
-// release notes; HTMX patches occasionally change selector semantics.
-const HTMX_SRC = "https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js";
-const HTMX_SRI =
-  "sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+";
+// HTMX is self-hosted under public/vendor/ so it satisfies the strict
+// `script-src 'self'` CSP — no third-party origin allowlist required.
+// Filename includes the version so a bump is a deliberate two-step
+// (drop new file, change this constant); old version stays cacheable.
+const HTMX_SRC = "/assets/vendor/htmx-2.0.4.min.js";
 
 export type AdminNavKey =
   | "issues"
@@ -144,7 +144,7 @@ export const AdminNav: FC<{
 }> = ({ current, clientBundles = [] }) => (
   <>
     <style dangerouslySetInnerHTML={{ __html: STYLES }} />
-    <script src={HTMX_SRC} integrity={HTMX_SRI} crossorigin="anonymous" defer />
+    <script src={HTMX_SRC} defer />
     {clientBundles.map((src) => (
       <script src={src} defer />
     ))}

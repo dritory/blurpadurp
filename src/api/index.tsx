@@ -94,6 +94,8 @@ import {
 } from "../views/admin-prompts.tsx";
 import {
   AdminReview,
+  AnnotationsList,
+  type Annotation,
   type EditorReviewData,
 } from "../views/admin-review.tsx";
 import {
@@ -285,13 +287,24 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const body = await c.req.parseBody();
     const slot = normalizeSlot(String(body.slot ?? "summary"));
     const text = String(body.body ?? "").trim();
+    const isHtmx = c.req.header("HX-Request") === "true";
     if (text.length === 0) {
+      // Empty note: HTMX gets a no-op (200 with current list); a plain
+      // browser POST gets redirected back with an error flash.
+      if (isHtmx) {
+        const list = await loadAnnotations(id);
+        return c.html(<AnnotationsList issueId={id} annotations={list} />);
+      }
       return c.redirect(`/admin/review/${id}?error=empty_note`, 303);
     }
     await db
       .insertInto("issue_annotation")
       .values({ issue_id: id, slot, body: text })
       .execute();
+    if (isHtmx) {
+      const list = await loadAnnotations(id);
+      return c.html(<AnnotationsList issueId={id} annotations={list} />);
+    }
     return c.redirect(`/admin/review/${id}?noted=1#notes`, 303);
   });
 
@@ -304,6 +317,10 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .where("id", "=", aid)
       .where("issue_id", "=", id)
       .execute();
+    if (c.req.header("HX-Request") === "true") {
+      const list = await loadAnnotations(id);
+      return c.html(<AnnotationsList issueId={id} annotations={list} />);
+    }
     return c.redirect(`/admin/review/${id}?deleted_note=1#notes`, 303);
   });
 
@@ -2359,6 +2376,23 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
       };
     }),
   };
+}
+
+// Used both by the full review-page loader (loadReview) and by the
+// HTMX annotate/delete handlers that re-render just the list fragment.
+async function loadAnnotations(issueId: number): Promise<Annotation[]> {
+  const rows = await db
+    .selectFrom("issue_annotation")
+    .select(["id", "slot", "body", "created_at"])
+    .where("issue_id", "=", issueId)
+    .orderBy("created_at", "desc")
+    .execute();
+  return rows.map((r) => ({
+    id: Number(r.id),
+    slot: r.slot,
+    body: r.body,
+    createdAt: r.created_at,
+  }));
 }
 
 async function loadReview(id: number): Promise<EditorReviewData | null> {
