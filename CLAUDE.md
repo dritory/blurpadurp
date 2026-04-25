@@ -27,8 +27,11 @@ unless a feature genuinely needs it). Architecture in
 ingest → score → editor → compose → (dispatch)
 ```
 
-- **ingest** pulls from connectors (`src/connectors/*.ts`). GDELT and
-  RSS are live, Reddit r/OutOfTheLoop is registered.
+- **ingest** pulls from connectors (`src/connectors/*.ts`). RSS (16
+  newsroom feeds) and Reddit r/OutOfTheLoop are live. GDELT was
+  deregistered — too much tabloid/foreign-language noise to be worth
+  the filtering cost. Connector file is preserved if you want to
+  revisit.
 - **score** runs Haiku on each unscored story via a rubric prompt
   (`docs/scoring-prompt.md`). Gate is mechanical, not AI.
   Progressive scoring (cheap prefilter → expensive final) is
