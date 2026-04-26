@@ -31,8 +31,17 @@ export interface SourcesData {
   }>;
   /** Ingested counts per connector source_name in the window. Direct
    * answer to "is GDELT actually running?" — a 0 here is unambiguous,
-   * unlike the host table which mixes connectors. */
-  byConnector: Array<{ source: string; ingested: number }>;
+   * unlike the host table which mixes connectors. lastError comes
+   * from source_cursor — most recent failure across all scopes for
+   * the connector. lastRunAt is the most recent attempt regardless of
+   * outcome, so a stale connector (no run in days) is also visible. */
+  byConnector: Array<{
+    source: string;
+    ingested: number;
+    lastError: string | null;
+    lastErrorAt: Date | null;
+    lastRunAt: Date | null;
+  }>;
   hosts: Array<{
     host: string;
     ingested: number;
@@ -160,31 +169,68 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
     </p>
 
     <div
-      style="display:flex; flex-wrap:wrap; gap:8px; margin: 0 0 14px; font-family: var(--sans); font-size: 13px;"
+      style="font-family: var(--sans); font-size: 13px; margin: 0 0 6px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px;"
     >
-      <span style="color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; align-self: center;">
-        Ingested by connector ({data.windowDays}d):
-      </span>
+      Ingested by connector ({data.windowDays}d):
+    </div>
+    <div
+      style="display:flex; flex-direction:column; gap:6px; margin: 0 0 14px; font-family: var(--sans); font-size: 13px;"
+    >
       {data.byConnector.length === 0 ? (
         <span style="color: var(--ink-soft); font-style: italic;">
           no stories ingested in window
         </span>
       ) : (
-        data.byConnector.map((c) => (
-          <span
-            style={`display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border:1px solid var(--rule); background: ${c.ingested === 0 ? "#fbeeee" : "#fff"}; color: ${c.ingested === 0 ? "#8a2a2a" : "var(--ink)"};`}
-            title={
-              c.ingested === 0
-                ? `${c.source} is registered but ingested 0 stories in this window`
-                : ""
-            }
-          >
-            <strong>{c.source}</strong>
-            <span style="font-variant-numeric: tabular-nums;">
-              {c.ingested.toLocaleString()}
-            </span>
-          </span>
-        ))
+        data.byConnector.map((c) => {
+          const hasError = c.lastError !== null;
+          const failingSilently = c.ingested === 0 && hasError;
+          const zeroNoError = c.ingested === 0 && !hasError;
+          const bg = failingSilently
+            ? "#fbeeee"
+            : zeroNoError
+              ? "#fff5d1"
+              : "#fff";
+          const fg = failingSilently
+            ? "#8a2a2a"
+            : zeroNoError
+              ? "#6a5200"
+              : "var(--ink)";
+          return (
+            <div
+              style={`border:1px solid var(--rule); background:${bg}; color:${fg}; padding:6px 10px;`}
+            >
+              <div style="display:flex; gap:10px; align-items:baseline;">
+                <strong style="min-width:110px;">{c.source}</strong>
+                <span style="font-variant-numeric: tabular-nums;">
+                  {c.ingested.toLocaleString()} stories
+                </span>
+                {c.lastRunAt !== null ? (
+                  <span style="color: var(--ink-soft); font-size: 11px;">
+                    last run{" "}
+                    {c.lastRunAt.toISOString().replace("T", " ").slice(0, 16)}Z
+                  </span>
+                ) : (
+                  <span style="color: var(--ink-soft); font-size: 11px; font-style: italic;">
+                    never run since deploy
+                  </span>
+                )}
+              </div>
+              {hasError ? (
+                <div
+                  style="margin-top:4px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"
+                >
+                  <span style="color: #8a2a2a; font-weight: 600;">last error:</span>{" "}
+                  {c.lastError}
+                  {c.lastErrorAt !== null ? (
+                    <span style="color: var(--ink-soft); font-family: var(--sans); font-size: 11px; margin-left: 8px;">
+                      ({c.lastErrorAt.toISOString().replace("T", " ").slice(0, 16)}Z)
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          );
+        })
       )}
     </div>
 

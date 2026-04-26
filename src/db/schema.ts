@@ -191,6 +191,9 @@ export interface Database {
     last_seen_at: Date | null;
     last_seen_id: string | null;
     updated_at: Created;
+    last_error: string | null;
+    last_error_at: Date | null;
+    last_run_at: Date | null;
   };
 
   backtest_run: {
