@@ -12,8 +12,18 @@ import type { FC } from "hono/jsx";
 import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { Layout } from "./layout.tsx";
 
+export type HostSortKey =
+  | "host"
+  | "ingested"
+  | "passed"
+  | "passRate"
+  | "published";
+export type HostSortDir = "asc" | "desc";
+
 export interface SourcesData {
   windowDays: number;
+  sort: HostSortKey;
+  dir: HostSortDir;
   blocklist: Array<{
     host: string;
     reason: string | null;
@@ -63,11 +73,55 @@ const STYLES = `
   table.src-table .pill { display: inline-block; font-family: var(--sans); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 2px; }
   table.src-table .pill.blocked { background: #fbe8e8; color: #8a2a2a; }
   table.src-table .pill.parent { background: #fff5d1; color: #6a5200; }
+  table.src-table th a { color: inherit; text-decoration: none; cursor: pointer; }
+  table.src-table th a:hover { color: var(--ink); }
+  table.src-table th a.sorted { color: var(--ink); }
 
   .flash { padding: 10px 14px; margin: 0 0 16px; font-family: var(--sans); font-size: 14px; border: 1px solid var(--rule); }
   .flash.ok { background: #e6f3e6; border-color: #9bc79b; color: #2b4f2b; }
   .flash.err { background: #fbeeee; border-color: #d4a4a4; color: #8a2a2a; }
 `;
+
+// Generate the link for clicking a column header. Click an unsorted
+// column → sort it desc (numeric default) or asc (host alpha). Click
+// the already-sorted column → flip direction.
+function hostSortHref(
+  data: SourcesData,
+  col: HostSortKey,
+): { href: string; sorted: boolean; arrow: string } {
+  const sorted = data.sort === col;
+  const defaultDir: HostSortDir = col === "host" ? "asc" : "desc";
+  const nextDir: HostSortDir = sorted
+    ? data.dir === "asc"
+      ? "desc"
+      : "asc"
+    : defaultDir;
+  const params = new URLSearchParams({
+    window: String(data.windowDays),
+    sort: col,
+    dir: nextDir,
+  });
+  const arrow = !sorted ? "" : data.dir === "asc" ? " ↑" : " ↓";
+  return {
+    href: `/admin/sources?${params.toString()}#hosts-seen`,
+    sorted,
+    arrow,
+  };
+}
+
+const HostHeaderLink: FC<{
+  data: SourcesData;
+  col: HostSortKey;
+  label: string;
+}> = ({ data, col, label }) => {
+  const { href, sorted, arrow } = hostSortHref(data, col);
+  return (
+    <a href={href} class={sorted ? "sorted" : ""}>
+      {label}
+      {arrow}
+    </a>
+  );
+};
 
 export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
   <Layout title="Sources — Blurpadurp admin">
@@ -155,7 +209,10 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
       </div>
     )}
 
-    <h3 style="font-family: var(--sans); font-size: 14px; margin: 32px 0 6px;">
+    <h3
+      id="hosts-seen"
+      style="font-family: var(--sans); font-size: 14px; margin: 32px 0 6px;"
+    >
       Hosts seen — last {data.windowDays} days
     </h3>
     <form method="get" action="/admin/sources" class="src-filter">
@@ -169,6 +226,8 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
           ))}
         </select>
       </div>
+      <input type="hidden" name="sort" value={data.sort} />
+      <input type="hidden" name="dir" value={data.dir} />
       <button type="submit">Apply</button>
     </form>
 
@@ -181,11 +240,25 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
         <table class="src-table">
           <thead>
             <tr>
-              <th>Host</th>
-              <th class="num">Ingested</th>
-              <th class="num">Passed</th>
-              <th class="num">Pass rate</th>
-              <th class="num">Published</th>
+              <th>
+                <HostHeaderLink data={data} col="host" label="Host" />
+              </th>
+              <th class="num">
+                <HostHeaderLink data={data} col="ingested" label="Ingested" />
+              </th>
+              <th class="num">
+                <HostHeaderLink data={data} col="passed" label="Passed" />
+              </th>
+              <th class="num">
+                <HostHeaderLink data={data} col="passRate" label="Pass rate" />
+              </th>
+              <th class="num">
+                <HostHeaderLink
+                  data={data}
+                  col="published"
+                  label="Published"
+                />
+              </th>
               <th />
             </tr>
           </thead>

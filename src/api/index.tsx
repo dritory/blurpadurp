@@ -117,7 +117,12 @@ import {
   type GraphNode,
   type ThemeGraphData,
 } from "../views/admin-theme-graph.tsx";
-import { AdminSources, type SourcesData } from "../views/admin-sources.tsx";
+import {
+  AdminSources,
+  type HostSortDir,
+  type HostSortKey,
+  type SourcesData,
+} from "../views/admin-sources.tsx";
 import {
   AdminEditorSandbox,
   type EditorSandboxData,
@@ -536,7 +541,15 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   app.get("/admin/sources", async (c) => {
     const win = Number(c.req.query("window"));
     const windowDays = [7, 14, 30, 60, 90].includes(win) ? win : 30;
-    const data = await loadSourcesData(windowDays, c.req.query());
+    const rawSort = c.req.query("sort");
+    const sort: HostSortKey = (
+      ["host", "ingested", "passed", "passRate", "published"] as const
+    ).includes(rawSort as HostSortKey)
+      ? (rawSort as HostSortKey)
+      : "ingested";
+    const dir: HostSortDir =
+      c.req.query("dir") === "asc" ? "asc" : "desc";
+    const data = await loadSourcesData(windowDays, sort, dir, c.req.query());
     return c.html(<AdminSources data={data} />);
   });
 
@@ -2310,6 +2323,8 @@ function parseFlashGeneric(
 
 async function loadSourcesData(
   windowDays: number,
+  sort: HostSortKey,
+  dir: HostSortDir,
   q: Record<string, string>,
 ): Promise<SourcesData> {
   const since = new Date(Date.now() - windowDays * 24 * 3600_000);
@@ -2363,20 +2378,46 @@ async function loadSourcesData(
     return null;
   };
 
-  const hosts = [...stats.entries()]
-    .map(([host, s]) => {
-      const isBlocked = blockedSet.has(host);
-      const blockedByParent = isBlocked ? null : findParentBlock(host);
-      return {
-        host,
-        ingested: s.ingested,
-        passed: s.passed,
-        published: s.published,
-        isBlocked,
-        blockedByParent,
-      };
-    })
-    .sort((a, b) => b.ingested - a.ingested);
+  const hosts = [...stats.entries()].map(([host, s]) => {
+    const isBlocked = blockedSet.has(host);
+    const blockedByParent = isBlocked ? null : findParentBlock(host);
+    return {
+      host,
+      ingested: s.ingested,
+      passed: s.passed,
+      published: s.published,
+      passRate: s.ingested > 0 ? s.passed / s.ingested : 0,
+      isBlocked,
+      blockedByParent,
+    };
+  });
+
+  const sortFn = (
+    a: (typeof hosts)[number],
+    b: (typeof hosts)[number],
+  ): number => {
+    let cmp: number;
+    switch (sort) {
+      case "host":
+        cmp = a.host.localeCompare(b.host);
+        break;
+      case "ingested":
+        cmp = a.ingested - b.ingested;
+        break;
+      case "passed":
+        cmp = a.passed - b.passed;
+        break;
+      case "passRate":
+        cmp = a.passRate - b.passRate;
+        break;
+      case "published":
+        cmp = a.published - b.published;
+        break;
+    }
+    if (cmp === 0) cmp = b.ingested - a.ingested; // tiebreak by volume
+    return dir === "asc" ? cmp : -cmp;
+  };
+  hosts.sort(sortFn);
 
   const flash =
     q.blocked !== undefined
@@ -2391,12 +2432,14 @@ async function loadSourcesData(
 
   return {
     windowDays,
+    sort,
+    dir,
     blocklist: blocklistRows.map((r) => ({
       host: r.host,
       reason: r.reason,
       blockedAt: r.blocked_at,
     })),
-    hosts,
+    hosts: hosts.map(({ passRate: _passRate, ...h }) => h),
     flash,
   };
 }
