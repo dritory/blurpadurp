@@ -131,7 +131,9 @@ async function runSingletonPhase(cfg: AttachConfig): Promise<void> {
 //     on the first pass at all, but might once C is absorbed into one
 //     of them.
 async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
-  console.log(`[reattach] phase 2: merging near-duplicate themes`);
+  console.log(
+    `[reattach] phase 2: merging near-duplicate themes (LLM gate ${cfg.mergeThreshold}–${cfg.mergeAutoThreshold}; auto-merge ≥${cfg.mergeAutoThreshold})`,
+  );
 
   const MAX_PASSES = 5;
   let totalMerged = 0;
@@ -146,7 +148,8 @@ async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
       `[reattach] phase 2 pass ${pass}: scanning ${ids.length} themes`,
     );
 
-    let merged = 0;
+    let mergedAuto = 0;
+    let mergedLlm = 0;
     let rejectedByLlm = 0;
     let belowThreshold = 0;
     let noNeighbor = 0;
@@ -156,7 +159,7 @@ async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
       processed++;
       if (processed % 25 === 0) {
         console.log(
-          `[reattach] phase 2 pass ${pass}: ${processed}/${ids.length} processed; merged=${merged}`,
+          `[reattach] phase 2 pass ${pass}: ${processed}/${ids.length} processed; merged=${mergedAuto + mergedLlm} (auto=${mergedAuto} llm=${mergedLlm})`,
         );
       }
       const t = await db
@@ -188,12 +191,23 @@ async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
       const absorberId = Math.min(Number(t.id), neighbor.id);
       const absorbedId = Math.max(Number(t.id), neighbor.id);
 
-      // Haiku-confirm using a representative story from the absorbed
-      // theme as the "incoming" and the absorber theme as the candidate.
-      // Reuses confirmThemeContinuation; not a perfect semantic match
-      // (the prompt is story→theme, not theme↔theme) but close enough
-      // since the representative story IS the strongest signal of the
-      // absorbed theme's content.
+      // Auto-merge above the high-confidence threshold without LLM
+      // gate. The Haiku theme-confirm prompt is calibrated for
+      // story→theme; reusing it for theme→theme produced false
+      // negatives at 0.95+ cosine where the pairs were obvious
+      // duplicates by inspection.
+      if (neighbor.cosine >= cfg.mergeAutoThreshold) {
+        await mergeThemeInto(absorbedId, absorberId);
+        await recomputeThemeCentroid(absorberId);
+        mergedAuto++;
+        continue;
+      }
+
+      // Below auto-merge but above merge_threshold: LLM-gate the
+      // borderline cases. Haiku-confirm using a representative story
+      // from the absorbed theme as the "incoming" and the absorber
+      // theme as the candidate — close enough since the rep story
+      // is the strongest signal of the absorbed theme's content.
       const repr = await loadRepresentativeStory(absorbedId);
       if (repr === null) continue;
       const recentSummaries = await loadRecentSummaries(absorberId);
@@ -228,11 +242,12 @@ async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
 
       await mergeThemeInto(absorbedId, absorberId);
       await recomputeThemeCentroid(absorberId);
-      merged++;
+      mergedLlm++;
     }
 
+    const merged = mergedAuto + mergedLlm;
     console.log(
-      `[reattach] phase 2 pass ${pass} done — merged=${merged} rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
+      `[reattach] phase 2 pass ${pass} done — merged=${merged} (auto=${mergedAuto} llm=${mergedLlm}) rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
     );
     totalMerged += merged;
     if (merged === 0) {
@@ -251,13 +266,24 @@ async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
 interface AttachConfig {
   attachThreshold: number;
   mergeThreshold: number;
+  // At or above this cosine, phase 2 merges without invoking the
+  // theme-confirm LLM. Reason: the LLM prompt is calibrated for
+  // story→theme ("is this new story a continuation?") and is
+  // conservative at theme→theme — it kept rejecting obvious
+  // duplicates at 0.95+ cosine. Voyage embeddings at ≥0.95 are
+  // empirically almost always the same content. Tunable via config.
+  mergeAutoThreshold: number;
 }
 
 async function loadAttachConfig(): Promise<AttachConfig> {
   const rows = await db
     .selectFrom("config")
     .select(["key", "value"])
-    .where("key", "in", ["theme.attach_threshold", "theme.merge_threshold"])
+    .where("key", "in", [
+      "theme.attach_threshold",
+      "theme.merge_threshold",
+      "theme.merge_auto_threshold",
+    ])
     .execute();
   const parse = (v: unknown, fallback: number): number => {
     const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
@@ -267,6 +293,7 @@ async function loadAttachConfig(): Promise<AttachConfig> {
   return {
     attachThreshold: parse(map.get("theme.attach_threshold"), 0.7),
     mergeThreshold: parse(map.get("theme.merge_threshold"), 0.85),
+    mergeAutoThreshold: parse(map.get("theme.merge_auto_threshold"), 0.95),
   };
 }
 
