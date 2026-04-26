@@ -76,6 +76,21 @@ const STYLES = `
   table.src-table th a { color: inherit; text-decoration: none; cursor: pointer; }
   table.src-table th a:hover { color: var(--ink); }
   table.src-table th a.sorted { color: var(--ink); }
+  table.src-table input[type="checkbox"] { width: 16px; height: 16px; vertical-align: middle; cursor: pointer; }
+  .bulk-bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    background: #fff; border: 1px solid var(--rule); padding: 10px 14px;
+    margin: 0 0 0; border-bottom: 0; font-family: var(--sans); font-size: 13px;
+  }
+  .bulk-bar .count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .bulk-bar input.reason { padding: 5px 8px; border: 1px solid var(--rule); font: inherit; font-size: 13px; background: var(--paper); flex: 1 1 220px; min-width: 180px; max-width: 320px; }
+  .bulk-bar button {
+    padding: 5px 12px; font: inherit; font-family: var(--sans); font-size: 13px;
+    background: #8a2a2a; color: #fff; border: 1px solid #8a2a2a; cursor: pointer;
+  }
+  .bulk-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .bulk-bar button:not(:disabled):hover { background: #6a1a1a; }
+  .bulk-bar .spacer { flex: 1; }
 
   .flash { padding: 10px 14px; margin: 0 0 16px; font-family: var(--sans); font-size: 14px; border: 1px solid var(--rule); }
   .flash.ok { background: #e6f3e6; border-color: #9bc79b; color: #2b4f2b; }
@@ -236,33 +251,67 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
         No hosts ingested in this window.
       </p>
     ) : (
-      <div class="adm-scroll">
-        <table class="src-table">
-          <thead>
-            <tr>
-              <th>
-                <HostHeaderLink data={data} col="host" label="Host" />
-              </th>
-              <th class="num">
-                <HostHeaderLink data={data} col="ingested" label="Ingested" />
-              </th>
-              <th class="num">
-                <HostHeaderLink data={data} col="passed" label="Passed" />
-              </th>
-              <th class="num">
-                <HostHeaderLink data={data} col="passRate" label="Pass rate" />
-              </th>
-              <th class="num">
-                <HostHeaderLink
-                  data={data}
-                  col="published"
-                  label="Published"
-                />
-              </th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
+      <>
+        {/* Bulk-block form lives standalone; checkboxes inside the
+            table tie back via form="bulk-block-form". HTML5 lets the
+            inputs be physically nested in the per-row block/unblock
+            forms while still belonging to this one for submission. */}
+        <form
+          method="post"
+          action="/admin/sources/block"
+          id="bulk-block-form"
+          data-confirm="Block selected hosts? Future ingest skips them (and all subdomains)."
+        >
+          <div class="bulk-bar">
+            <input
+              type="checkbox"
+              id="bulk-toggle"
+              data-bulk-toggle
+              aria-label="Select all on page"
+            />
+            <label for="bulk-toggle" style="font-size: 13px; color: var(--ink-soft);">
+              select all
+            </label>
+            <span class="count" data-bulk-count>0 selected</span>
+            <input
+              type="text"
+              class="reason"
+              name="reason"
+              placeholder="reason (optional, applies to all)"
+            />
+            <button type="submit" data-bulk-submit disabled>
+              Block selected
+            </button>
+          </div>
+        </form>
+        <div class="adm-scroll" style="margin-top: 0;">
+          <table class="src-table">
+            <thead>
+              <tr>
+                <th style="width: 28px;" />
+                <th>
+                  <HostHeaderLink data={data} col="host" label="Host" />
+                </th>
+                <th class="num">
+                  <HostHeaderLink data={data} col="ingested" label="Ingested" />
+                </th>
+                <th class="num">
+                  <HostHeaderLink data={data} col="passed" label="Passed" />
+                </th>
+                <th class="num">
+                  <HostHeaderLink data={data} col="passRate" label="Pass rate" />
+                </th>
+                <th class="num">
+                  <HostHeaderLink
+                    data={data}
+                    col="published"
+                    label="Published"
+                  />
+                </th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
             {data.hosts.map((h) => {
               const passRate =
                 h.ingested > 0 ? (h.passed / h.ingested) * 100 : 0;
@@ -271,8 +320,22 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
                 : h.blockedByParent !== null
                   ? "blocked-by-parent"
                   : "";
+              const selectable =
+                !h.isBlocked && h.blockedByParent === null;
               return (
                 <tr class={rowClass}>
+                  <td>
+                    {selectable ? (
+                      <input
+                        type="checkbox"
+                        name="host"
+                        value={h.host}
+                        form="bulk-block-form"
+                        data-bulk-row
+                        aria-label={`select ${h.host}`}
+                      />
+                    ) : null}
+                  </td>
                   <td class="host">
                     {h.host}
                     {h.isBlocked ? (
@@ -328,7 +391,9 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
           </tbody>
         </table>
       </div>
+      </>
     )}
     <script src="/assets/admin-review.js" defer />
+    <script src="/assets/admin-sources.js" defer />
   </Layout>
 );

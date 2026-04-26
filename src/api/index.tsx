@@ -554,35 +554,57 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   });
 
   app.post("/admin/sources/block", async (c) => {
-    const body = await c.req.parseBody();
-    const raw = String(body.host ?? "").trim();
+    const body = await c.req.parseBody({ all: true });
     const reasonRaw = String(body.reason ?? "").trim();
-    const back = c.req.header("HX-Current-URL") ?? "/admin/sources";
-    const fallback = back.includes("/admin/sources")
-      ? "/admin/sources"
-      : back;
-    if (raw.length === 0) {
-      return c.redirect(`${fallback}?error=empty_host`, 303);
+    // Accept body.host as either a single string (typed-in form, "block
+    // this source" button) or an array (bulk-block checkboxes from the
+    // hosts-seen table). parseBody({all:true}) gives arrays for repeated
+    // names; collapse both shapes into a flat list.
+    const rawList = Array.isArray(body.host)
+      ? body.host.map(String)
+      : body.host !== undefined
+        ? [String(body.host)]
+        : [];
+    const trimmed = rawList.map((s) => s.trim()).filter((s) => s.length > 0);
+    if (trimmed.length === 0) {
+      return c.redirect("/admin/sources?error=empty_host", 303);
     }
-    // Accept either a bare host or a full URL — try URL first.
-    let host: string | null = null;
-    try {
-      const u = new URL(raw);
-      host = normalizeHost(u.hostname);
-    } catch {
-      // Not a URL — treat as a host string. Still strip any leading
-      // protocol-ish noise the user may have typed.
-      host = normalizeHost(raw.replace(/^https?:\/\//, "").split("/")[0]!);
+    const hosts: string[] = [];
+    for (const raw of trimmed) {
+      let host: string | null = null;
+      try {
+        const u = new URL(raw);
+        host = normalizeHost(u.hostname);
+      } catch {
+        host = normalizeHost(raw.replace(/^https?:\/\//, "").split("/")[0]!);
+      }
+      if (host !== null && host.length > 0 && host.includes(".")) {
+        hosts.push(host);
+      }
     }
-    if (host === null || host.length === 0 || !host.includes(".")) {
-      return c.redirect(`${fallback}?error=bad_host`, 303);
+    if (hosts.length === 0) {
+      return c.redirect("/admin/sources?error=bad_host", 303);
     }
+    const dedup = [...new Set(hosts)];
     await db
       .insertInto("source_blocklist")
-      .values({ host, reason: reasonRaw.length > 0 ? reasonRaw : null })
+      .values(
+        dedup.map((host) => ({
+          host,
+          reason: reasonRaw.length > 0 ? reasonRaw : null,
+        })),
+      )
       .onConflict((oc) => oc.column("host").doNothing())
       .execute();
-    return c.redirect(`${fallback}?blocked=${encodeURIComponent(host)}`, 303);
+    const flashKey = dedup.length === 1 ? "blocked" : "blocked_n";
+    const flashVal =
+      dedup.length === 1
+        ? encodeURIComponent(dedup[0]!)
+        : String(dedup.length);
+    return c.redirect(
+      `/admin/sources?${flashKey}=${flashVal}#hosts-seen`,
+      303,
+    );
   });
 
   app.post("/admin/sources/unblock", async (c) => {
@@ -2422,13 +2444,15 @@ async function loadSourcesData(
   const flash =
     q.blocked !== undefined
       ? ({ kind: "ok", msg: `Blocked ${q.blocked}.` } as const)
-      : q.unblocked !== undefined
-        ? ({ kind: "ok", msg: `Unblocked ${q.unblocked}.` } as const)
-        : q.error === "empty_host"
-          ? ({ kind: "err", msg: "Host can't be empty." } as const)
-          : q.error === "bad_host"
-            ? ({ kind: "err", msg: "That doesn't look like a host." } as const)
-            : null;
+      : q.blocked_n !== undefined
+        ? ({ kind: "ok", msg: `Blocked ${q.blocked_n} hosts.` } as const)
+        : q.unblocked !== undefined
+          ? ({ kind: "ok", msg: `Unblocked ${q.unblocked}.` } as const)
+          : q.error === "empty_host"
+            ? ({ kind: "err", msg: "Host can't be empty." } as const)
+            : q.error === "bad_host"
+              ? ({ kind: "err", msg: "That doesn't look like a host." } as const)
+              : null;
 
   return {
     windowDays,
