@@ -19,6 +19,10 @@ export interface SandboxBucket {
   storyCount: number;
   maxComposite: number;
   tier1Total: number;
+  // Wikipedia (ITN or Current Events) flagged a story on this theme.
+  // Wikipedia entries are not in the pool itself — they ride the
+  // theme system as a curation signal only.
+  wikipediaCorroborated: boolean;
   stories: Array<{
     id: number;
     title: string;
@@ -211,6 +215,15 @@ const BucketCard: FC<{ b: SandboxBucket; below: boolean }> = ({ b, below }) => (
         )}
       </span>
       {b.category !== null ? <span class="cat">{b.category}</span> : null}
+      {b.wikipediaCorroborated ? (
+        <span
+          class="cat"
+          title="Wikipedia ITN or Current Events portal includes this theme"
+          style="background:#eef2fa;border-color:#b8c8e2;color:#324d80;"
+        >
+          ⊕ wikipedia
+        </span>
+      ) : null}
       <span class="meta">
         {b.storyCount} {b.storyCount === 1 ? "story" : "stories"} ·{" "}
         max comp {b.maxComposite} · tier1 {b.tier1Total}

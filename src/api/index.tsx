@@ -2710,10 +2710,35 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
     .where("story.ingested_at", ">=", cutoff)
+    // Mirror compose.ts: Wikipedia is signal, not a pickable story.
+    .where("story.source_name", "!=", "wikipedia")
     .orderBy("story.composite", "desc")
     .execute();
 
   const result = selectEditorPool(rows, maxThemes, { maxCategoryFraction });
+
+  // Wikipedia corroboration set: themes that have a Wikipedia member
+  // anywhere in the database (Wikipedia stories were filtered out of
+  // `rows` above; this query reaches past the pool to find them).
+  const allBucketThemeIds = [
+    ...result.included,
+    ...result.excluded,
+  ]
+    .map((b) => b.themeId)
+    .filter((id): id is number => id !== null);
+  const wikipediaCorroborated = new Set<number>();
+  if (allBucketThemeIds.length > 0) {
+    const wikiRows = await db
+      .selectFrom("story")
+      .select("theme_id")
+      .distinct()
+      .where("theme_id", "in", allBucketThemeIds)
+      .where("source_name", "=", "wikipedia")
+      .execute();
+    for (const r of wikiRows) {
+      if (r.theme_id !== null) wikipediaCorroborated.add(Number(r.theme_id));
+    }
+  }
 
   // Per-category passer + in-pool counts. The "in pool" count comes
   // from the selected buckets; "passers" from the full row set. Lets
@@ -2750,6 +2775,8 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
       storyCount: b.rows.length,
       maxComposite: b.maxComposite,
       tier1Total: b.tier1Total,
+      wikipediaCorroborated:
+        b.themeId !== null && wikipediaCorroborated.has(b.themeId),
       stories: b.rows.map((e) => ({
         id: Number(e.row.story_id),
         title: e.row.title,

@@ -223,6 +223,11 @@ export async function produceDraft(
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
     .where("story.ingested_at", ">=", cutoff)
+    // Wikipedia entries are editorial-curation signal, not journalism
+    // we'd write about. They still ride the ingest/score/theme path so
+    // their theme attachment lights up wikipedia_corroborated below;
+    // they just don't compete as picks in the editor pool.
+    .where("story.source_name", "!=", "wikipedia")
     .orderBy("story.composite", "desc")
     .execute();
 
@@ -714,6 +719,7 @@ function buildThemesDigest(
       n_prior_publications: meta?.n_prior_publications ?? 0,
       trajectory: meta?.trajectory ?? "new",
       is_long_running: meta?.is_long_running ?? false,
+      wikipedia_corroborated: meta?.wikipedia_corroborated ?? false,
     });
   }
 
@@ -960,6 +966,10 @@ export interface ThemeMeta {
   n_prior_publications: number;
   trajectory: "new" | "rising" | "stable" | "falling";
   is_long_running: boolean;
+  // True when the theme has at least one Wikipedia member (ITN or
+  // Current Events). Wikipedia stories never reach the editor pool;
+  // this flag is the only path by which their signal informs picks.
+  wikipedia_corroborated: boolean;
 }
 
 // Load per-theme metadata used by both editor (digest) and composer
@@ -1006,6 +1016,22 @@ async function loadThemeMeta(themeIds: number[]): Promise<Map<number, ThemeMeta>
     priorCountMap.set(Number(r.theme_id), Number(r.n));
   }
 
+  // Wikipedia membership: which of these themes have at least one story
+  // ingested via the wikipedia connector? Distinct theme_id pass — flag
+  // is boolean, no need to count. Reads any-age members so a long-
+  // running theme stays "corroborated" once it ever was.
+  const wikipediaCorroborated = new Set<number>();
+  const wikiRows = await db
+    .selectFrom("story")
+    .select("theme_id")
+    .distinct()
+    .where("theme_id", "in", themeIds)
+    .where("source_name", "=", "wikipedia")
+    .execute();
+  for (const r of wikiRows) {
+    if (r.theme_id !== null) wikipediaCorroborated.add(Number(r.theme_id));
+  }
+
   const now = Date.now();
   for (const r of rows) {
     const tid = Number(r.id);
@@ -1036,6 +1062,7 @@ async function loadThemeMeta(themeIds: number[]): Promise<Map<number, ThemeMeta>
       n_prior_publications: priorCountMap.get(tid) ?? 0,
       trajectory,
       is_long_running: r.is_long_running,
+      wikipedia_corroborated: wikipediaCorroborated.has(tid),
     });
   }
   return out;

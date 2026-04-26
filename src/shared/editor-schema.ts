@@ -82,6 +82,15 @@ export const EditorInputSchema = z.object({
       n_prior_publications: z.number(), // issues that have included this theme before
       trajectory: z.enum(["new", "rising", "stable", "falling"]),
       is_long_running: z.boolean(),
+      // True if any story attached to this theme came from the Wikipedia
+      // connector (ITN box or Current Events portal). Wikipedia entries
+      // never enter the editor pool themselves — they're a curation
+      // signal: editors at en.wikipedia.org thought the underlying event
+      // was significant enough to surface. Treat as a meaningful "this
+      // matters" prior, especially for quiet-but-significant picks.
+      // Default false so editor_input_jsonb persisted before v0.4
+      // (without the field) still re-parses for replay.
+      wikipedia_corroborated: z.boolean().default(false),
     }),
   ),
 });
