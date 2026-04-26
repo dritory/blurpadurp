@@ -29,6 +29,10 @@ export interface SourcesData {
     reason: string | null;
     blockedAt: Date;
   }>;
+  /** Ingested counts per connector source_name in the window. Direct
+   * answer to "is GDELT actually running?" — a 0 here is unambiguous,
+   * unlike the host table which mixes connectors. */
+  byConnector: Array<{ source: string; ingested: number }>;
   hosts: Array<{
     host: string;
     ingested: number;
@@ -154,6 +158,35 @@ export const AdminSources: FC<{ data: SourcesData }> = ({ data }) => (
       no scoring spend. Subdomain rollup means blocking{" "}
       <code>foo.com</code> also blocks <code>blog.foo.com</code>.
     </p>
+
+    <div
+      style="display:flex; flex-wrap:wrap; gap:8px; margin: 0 0 14px; font-family: var(--sans); font-size: 13px;"
+    >
+      <span style="color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; align-self: center;">
+        Ingested by connector ({data.windowDays}d):
+      </span>
+      {data.byConnector.length === 0 ? (
+        <span style="color: var(--ink-soft); font-style: italic;">
+          no stories ingested in window
+        </span>
+      ) : (
+        data.byConnector.map((c) => (
+          <span
+            style={`display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border:1px solid var(--rule); background: ${c.ingested === 0 ? "#fbeeee" : "#fff"}; color: ${c.ingested === 0 ? "#8a2a2a" : "var(--ink)"};`}
+            title={
+              c.ingested === 0
+                ? `${c.source} is registered but ingested 0 stories in this window`
+                : ""
+            }
+          >
+            <strong>{c.source}</strong>
+            <span style="font-variant-numeric: tabular-nums;">
+              {c.ingested.toLocaleString()}
+            </span>
+          </span>
+        ))
+      )}
+    </div>
 
     <h3 style="font-family: var(--sans); font-size: 14px; margin: 24px 0 6px;">
       Blocklist ({data.blocklist.length})

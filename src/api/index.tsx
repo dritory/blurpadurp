@@ -2358,6 +2358,39 @@ async function loadSourcesData(
     .execute();
   const blockedSet = new Set(blocklistRows.map((r) => normalizeHost(r.host)));
 
+  // Per-connector ingestion totals. Surfaces "is GDELT actually
+  // running?" directly — if a registered connector shows 0 in the
+  // window, something is silently failing. Registered names come from
+  // connectors/registry so a 0-row connector still appears (vs only
+  // querying story.source_name, which would hide it).
+  const { connectors: registered } = await import(
+    "../connectors/registry.ts"
+  );
+  const ingestRows = await db
+    .selectFrom("story")
+    .select([
+      "source_name",
+      sql<string>`count(*)`.as("n"),
+    ])
+    .where("ingested_at", ">=", since)
+    .groupBy("source_name")
+    .execute();
+  const ingestMap = new Map(
+    ingestRows.map((r) => [r.source_name, Number(r.n)]),
+  );
+  const byConnector = registered.map((c) => ({
+    source: c.name,
+    ingested: ingestMap.get(c.name) ?? 0,
+  }));
+  // Tail any source_name in the data that isn't in the registry (old
+  // connectors that have been removed) so the diagnostic doesn't lie.
+  const knownNames = new Set(byConnector.map((b) => b.source));
+  for (const r of ingestRows) {
+    if (!knownNames.has(r.source_name)) {
+      byConnector.push({ source: r.source_name, ingested: Number(r.n) });
+    }
+  }
+
   // Per-host stats over the window. Pull source_url + flags, group in
   // memory by extracted host (regexp-based grouping in Postgres is
   // fragile compared to the JS URL parser the rest of the pipeline
@@ -2463,6 +2496,7 @@ async function loadSourcesData(
       reason: r.reason,
       blockedAt: r.blocked_at,
     })),
+    byConnector,
     hosts: hosts.map(({ passRate: _passRate, ...h }) => h),
     flash,
   };
