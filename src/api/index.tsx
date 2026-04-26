@@ -28,6 +28,7 @@ import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { loadRawPrompt } from "../shared/prompts.ts";
+import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
 import { securityHeaders } from "../shared/security-headers.ts";
 import { verifySvixSignature } from "../shared/svix.ts";
 import { signToken, verifyToken } from "../shared/tokens.ts";
@@ -116,6 +117,12 @@ import {
   type GraphNode,
   type ThemeGraphData,
 } from "../views/admin-theme-graph.tsx";
+import {
+  AdminSources,
+  type HostSortDir,
+  type HostSortKey,
+  type SourcesData,
+} from "../views/admin-sources.tsx";
 import {
   AdminEditorSandbox,
   type EditorSandboxData,
@@ -529,6 +536,87 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .where("id", "=", themeId)
       .execute();
     return c.redirect(`/admin/themes?filter=${filter}&saved=1`, 303);
+  });
+
+  app.get("/admin/sources", async (c) => {
+    const win = Number(c.req.query("window"));
+    const windowDays = [7, 14, 30, 60, 90].includes(win) ? win : 30;
+    const rawSort = c.req.query("sort");
+    const sort: HostSortKey = (
+      ["host", "ingested", "passed", "passRate", "published"] as const
+    ).includes(rawSort as HostSortKey)
+      ? (rawSort as HostSortKey)
+      : "ingested";
+    const dir: HostSortDir =
+      c.req.query("dir") === "asc" ? "asc" : "desc";
+    const data = await loadSourcesData(windowDays, sort, dir, c.req.query());
+    return c.html(<AdminSources data={data} />);
+  });
+
+  app.post("/admin/sources/block", async (c) => {
+    const body = await c.req.parseBody({ all: true });
+    const reasonRaw = String(body.reason ?? "").trim();
+    // Accept body.host as either a single string (typed-in form, "block
+    // this source" button) or an array (bulk-block checkboxes from the
+    // hosts-seen table). parseBody({all:true}) gives arrays for repeated
+    // names; collapse both shapes into a flat list.
+    const rawList = Array.isArray(body.host)
+      ? body.host.map(String)
+      : body.host !== undefined
+        ? [String(body.host)]
+        : [];
+    const trimmed = rawList.map((s) => s.trim()).filter((s) => s.length > 0);
+    if (trimmed.length === 0) {
+      return c.redirect("/admin/sources?error=empty_host", 303);
+    }
+    const hosts: string[] = [];
+    for (const raw of trimmed) {
+      let host: string | null = null;
+      try {
+        const u = new URL(raw);
+        host = normalizeHost(u.hostname);
+      } catch {
+        host = normalizeHost(raw.replace(/^https?:\/\//, "").split("/")[0]!);
+      }
+      if (host !== null && host.length > 0 && host.includes(".")) {
+        hosts.push(host);
+      }
+    }
+    if (hosts.length === 0) {
+      return c.redirect("/admin/sources?error=bad_host", 303);
+    }
+    const dedup = [...new Set(hosts)];
+    await db
+      .insertInto("source_blocklist")
+      .values(
+        dedup.map((host) => ({
+          host,
+          reason: reasonRaw.length > 0 ? reasonRaw : null,
+        })),
+      )
+      .onConflict((oc) => oc.column("host").doNothing())
+      .execute();
+    const flashKey = dedup.length === 1 ? "blocked" : "blocked_n";
+    const flashVal =
+      dedup.length === 1
+        ? encodeURIComponent(dedup[0]!)
+        : String(dedup.length);
+    return c.redirect(
+      `/admin/sources?${flashKey}=${flashVal}#hosts-seen`,
+      303,
+    );
+  });
+
+  app.post("/admin/sources/unblock", async (c) => {
+    const body = await c.req.parseBody();
+    const host = normalizeHost(String(body.host ?? "").trim());
+    if (host.length === 0)
+      return c.redirect("/admin/sources?error=empty_host", 303);
+    await db
+      .deleteFrom("source_blocklist")
+      .where("host", "=", host)
+      .execute();
+    return c.redirect(`/admin/sources?unblocked=${encodeURIComponent(host)}`, 303);
   });
 
   app.get("/admin/eval", async (c) => {
@@ -1726,6 +1814,7 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     summary: row.summary,
     sourceName: row.source_name,
     sourceUrl: row.source_url,
+    sourceHost: extractHost(row.source_url),
     additionalSourceUrls: row.additional_source_urls ?? [],
     publishedAt: row.published_at,
     ingestedAt: row.ingested_at,
@@ -2254,6 +2343,165 @@ function parseFlashGeneric(
   return null;
 }
 
+async function loadSourcesData(
+  windowDays: number,
+  sort: HostSortKey,
+  dir: HostSortDir,
+  q: Record<string, string>,
+): Promise<SourcesData> {
+  const since = new Date(Date.now() - windowDays * 24 * 3600_000);
+
+  const blocklistRows = await db
+    .selectFrom("source_blocklist")
+    .select(["host", "reason", "blocked_at"])
+    .orderBy("blocked_at", "desc")
+    .execute();
+  const blockedSet = new Set(blocklistRows.map((r) => normalizeHost(r.host)));
+
+  // Per-connector ingestion totals. Surfaces "is GDELT actually
+  // running?" directly — if a registered connector shows 0 in the
+  // window, something is silently failing. Registered names come from
+  // connectors/registry so a 0-row connector still appears (vs only
+  // querying story.source_name, which would hide it).
+  const { connectors: registered } = await import(
+    "../connectors/registry.ts"
+  );
+  const ingestRows = await db
+    .selectFrom("story")
+    .select([
+      "source_name",
+      sql<string>`count(*)`.as("n"),
+    ])
+    .where("ingested_at", ">=", since)
+    .groupBy("source_name")
+    .execute();
+  const ingestMap = new Map(
+    ingestRows.map((r) => [r.source_name, Number(r.n)]),
+  );
+  const byConnector = registered.map((c) => ({
+    source: c.name,
+    ingested: ingestMap.get(c.name) ?? 0,
+  }));
+  // Tail any source_name in the data that isn't in the registry (old
+  // connectors that have been removed) so the diagnostic doesn't lie.
+  const knownNames = new Set(byConnector.map((b) => b.source));
+  for (const r of ingestRows) {
+    if (!knownNames.has(r.source_name)) {
+      byConnector.push({ source: r.source_name, ingested: Number(r.n) });
+    }
+  }
+
+  // Per-host stats over the window. Pull source_url + flags, group in
+  // memory by extracted host (regexp-based grouping in Postgres is
+  // fragile compared to the JS URL parser the rest of the pipeline
+  // uses).
+  const rows = await db
+    .selectFrom("story")
+    .select([
+      "source_url",
+      "passed_gate",
+      "published_to_reader",
+    ])
+    .where("ingested_at", ">=", since)
+    .where("source_url", "is not", null)
+    .execute();
+
+  const stats = new Map<
+    string,
+    { ingested: number; passed: number; published: number }
+  >();
+  for (const r of rows) {
+    const host = extractHost(r.source_url);
+    if (host === null) continue;
+    const e =
+      stats.get(host) ?? { ingested: 0, passed: 0, published: 0 };
+    e.ingested++;
+    if (r.passed_gate) e.passed++;
+    if (r.published_to_reader) e.published++;
+    stats.set(host, e);
+  }
+
+  // For each host, decide whether it's directly blocked, blocked by a
+  // parent (subdomain rollup), or clean. Mirrors the runtime check in
+  // src/shared/source-blocklist.ts.
+  const findParentBlock = (host: string): string | null => {
+    const labels = host.split(".");
+    for (let i = 1; i < labels.length - 1; i++) {
+      const parent = labels.slice(i).join(".");
+      if (blockedSet.has(parent)) return parent;
+    }
+    return null;
+  };
+
+  const hosts = [...stats.entries()].map(([host, s]) => {
+    const isBlocked = blockedSet.has(host);
+    const blockedByParent = isBlocked ? null : findParentBlock(host);
+    return {
+      host,
+      ingested: s.ingested,
+      passed: s.passed,
+      published: s.published,
+      passRate: s.ingested > 0 ? s.passed / s.ingested : 0,
+      isBlocked,
+      blockedByParent,
+    };
+  });
+
+  const sortFn = (
+    a: (typeof hosts)[number],
+    b: (typeof hosts)[number],
+  ): number => {
+    let cmp: number;
+    switch (sort) {
+      case "host":
+        cmp = a.host.localeCompare(b.host);
+        break;
+      case "ingested":
+        cmp = a.ingested - b.ingested;
+        break;
+      case "passed":
+        cmp = a.passed - b.passed;
+        break;
+      case "passRate":
+        cmp = a.passRate - b.passRate;
+        break;
+      case "published":
+        cmp = a.published - b.published;
+        break;
+    }
+    if (cmp === 0) cmp = b.ingested - a.ingested; // tiebreak by volume
+    return dir === "asc" ? cmp : -cmp;
+  };
+  hosts.sort(sortFn);
+
+  const flash =
+    q.blocked !== undefined
+      ? ({ kind: "ok", msg: `Blocked ${q.blocked}.` } as const)
+      : q.blocked_n !== undefined
+        ? ({ kind: "ok", msg: `Blocked ${q.blocked_n} hosts.` } as const)
+        : q.unblocked !== undefined
+          ? ({ kind: "ok", msg: `Unblocked ${q.unblocked}.` } as const)
+          : q.error === "empty_host"
+            ? ({ kind: "err", msg: "Host can't be empty." } as const)
+            : q.error === "bad_host"
+              ? ({ kind: "err", msg: "That doesn't look like a host." } as const)
+              : null;
+
+  return {
+    windowDays,
+    sort,
+    dir,
+    blocklist: blocklistRows.map((r) => ({
+      host: r.host,
+      reason: r.reason,
+      blockedAt: r.blocked_at,
+    })),
+    byConnector,
+    hosts: hosts.map(({ passRate: _passRate, ...h }) => h),
+    flash,
+  };
+}
+
 async function loadThemesData(
   filter: ThemeFilter,
   flash: ThemesData["flash"],
@@ -2496,10 +2744,35 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
     .where("story.ingested_at", ">=", cutoff)
+    // Mirror compose.ts: Wikipedia is signal, not a pickable story.
+    .where("story.source_name", "!=", "wikipedia")
     .orderBy("story.composite", "desc")
     .execute();
 
   const result = selectEditorPool(rows, maxThemes, { maxCategoryFraction });
+
+  // Wikipedia corroboration set: themes that have a Wikipedia member
+  // anywhere in the database (Wikipedia stories were filtered out of
+  // `rows` above; this query reaches past the pool to find them).
+  const allBucketThemeIds = [
+    ...result.included,
+    ...result.excluded,
+  ]
+    .map((b) => b.themeId)
+    .filter((id): id is number => id !== null);
+  const wikipediaCorroborated = new Set<number>();
+  if (allBucketThemeIds.length > 0) {
+    const wikiRows = await db
+      .selectFrom("story")
+      .select("theme_id")
+      .distinct()
+      .where("theme_id", "in", allBucketThemeIds)
+      .where("source_name", "=", "wikipedia")
+      .execute();
+    for (const r of wikiRows) {
+      if (r.theme_id !== null) wikipediaCorroborated.add(Number(r.theme_id));
+    }
+  }
 
   // Per-category passer + in-pool counts. The "in pool" count comes
   // from the selected buckets; "passers" from the full row set. Lets
@@ -2536,6 +2809,8 @@ async function loadEditorSandboxData(): Promise<EditorSandboxData> {
       storyCount: b.rows.length,
       maxComposite: b.maxComposite,
       tier1Total: b.tier1Total,
+      wikipediaCorroborated:
+        b.themeId !== null && wikipediaCorroborated.has(b.themeId),
       stories: b.rows.map((e) => ({
         id: Number(e.row.story_id),
         title: e.row.title,

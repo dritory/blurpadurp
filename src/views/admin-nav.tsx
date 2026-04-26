@@ -21,6 +21,7 @@ export type AdminNavKey =
   | "prompts"
   | "explore"
   | "themes"
+  | "sources"
   | "fixtures"
   | "eval"
   | "status"
@@ -34,6 +35,7 @@ const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: strin
   { key: "prompts", href: "/admin/prompts", label: "Prompts" },
   { key: "explore", href: "/admin/explore", label: "Explore" },
   { key: "themes", href: "/admin/themes", label: "Themes" },
+  { key: "sources", href: "/admin/sources", label: "Sources" },
   { key: "fixtures", href: "/admin/fixtures", label: "Fixtures" },
   { key: "eval", href: "/admin/eval", label: "Eval" },
   { key: "status", href: "/admin/status", label: "Status" },

@@ -11,6 +11,7 @@ import type {
 } from "../connectors/types.ts";
 import { db } from "../db/index.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
+import { extractHost, loadBlocklist, type Blocklist } from "../shared/source-blocklist.ts";
 
 const DEFAULT_SCOPE = "global";
 
@@ -22,6 +23,13 @@ async function runIngest(): Promise<void> {
   if (connectors.length === 0) {
     console.log("no connectors registered; nothing to ingest");
     return;
+  }
+
+  // Load the host blocklist once for the whole run — the cost of one
+  // SELECT outweighs threading state through every connector.
+  const blocklist = await loadBlocklist();
+  if (blocklist.size > 0) {
+    console.log(`[ingest] ${blocklist.size} host(s) on blocklist`);
   }
 
   // Pre-compute every (connector, scope) pair so the progress counter is
@@ -47,11 +55,16 @@ async function runIngest(): Promise<void> {
     console.log(`[ingest] ${tag} pulling…`);
     const t0 = Date.now();
     try {
-      const { fetched, inserted } = await runConnector(conn, scope);
+      const { fetched, inserted, blocked } = await runConnector(
+        conn,
+        scope,
+        blocklist,
+      );
       totalFetched += fetched;
       totalInserted += inserted;
+      const blockSuffix = blocked > 0 ? ` blocked=${blocked}` : "";
       console.log(
-        `[ingest] ${tag} fetched=${fetched} inserted=${inserted} (${Date.now() - t0}ms)`,
+        `[ingest] ${tag} fetched=${fetched} inserted=${inserted}${blockSuffix} (${Date.now() - t0}ms)`,
       );
     } catch (err) {
       console.error(
@@ -68,13 +81,26 @@ async function runIngest(): Promise<void> {
 async function runConnector(
   conn: Connector,
   scope: string,
-): Promise<{ fetched: number; inserted: number }> {
+  blocklist: Blocklist,
+): Promise<{ fetched: number; inserted: number; blocked: number }> {
   const cursor = await loadCursor(conn.name, scope);
   const raws = await conn.fetchSince(cursor);
   const normalized = raws.map((r) => conn.normalize(r));
-  const inserted = await upsertStories(normalized);
+  // Drop blocklisted hosts before upsert. Hard filter — no row written,
+  // so no embedding/scoring cost. Items without a parseable host fall
+  // through (extractHost returns null → not blocked).
+  let blocked = 0;
+  const allowed = normalized.filter((n) => {
+    const host = extractHost(n.source_url);
+    if (host !== null && blocklist.has(host)) {
+      blocked++;
+      return false;
+    }
+    return true;
+  });
+  const inserted = await upsertStories(allowed);
   await saveCursor(conn.name, scope, new Date());
-  return { fetched: raws.length, inserted };
+  return { fetched: raws.length, inserted, blocked };
 }
 
 async function loadCursor(

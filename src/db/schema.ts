@@ -233,4 +233,10 @@ export interface Database {
     acquired_at: Created;
     expires_at: Date;
   };
+
+  source_blocklist: {
+    host: string;
+    reason: string | null;
+    blocked_at: Created;
+  };
 }

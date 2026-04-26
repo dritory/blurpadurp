@@ -1,6 +1,6 @@
-# Editor prompt v0.3
+# Editor prompt v0.4
 
-Version tag: `editor-v0.3`. Pre-1.0.
+Version tag: `editor-v0.4`. Pre-1.0.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
@@ -13,7 +13,13 @@ balancing topics, collapsing near-duplicates, preferring under-covered
 over widely-covered, breaking ties on editorial feel rather than by a
 rigid sort key.
 
-v0.3 adds the second scoring axis (`structural_importance`) to the
+v0.4 adds the `wikipedia_corroborated` theme flag. Wikipedia entries
+(ITN box + Current Events portal) are ingested + theme-attached but
+filtered out of the editor pool — they are curation signal, not
+journalism we'd write about. A theme picking up a Wikipedia member is
+external editorial endorsement of significance.
+
+v0.3 added the second scoring axis (`structural_importance`) to the
 editor's inputs, plus a pre-computed pool-composition digest and the
 scorer's per-story steelman. Previous versions effectively saw one
 axis (zeitgeist) and over-picked loud-but-insignificant stenography.
@@ -78,6 +84,10 @@ in favor of inclusion independent of zeitgeist.
     - `n_prior_publications`: how many prior issues featured this theme
     - `long_running`: operator-curated flag for threads that deserve
       weekly treatment regardless of size
+    - `wikipedia_corroborated`: a Wikipedia editor put a story on this
+      theme into "In the news" or the Current Events portal. This is
+      the strongest external significance prior we have — humans paid
+      to apply an encyclopedic significance filter chose to surface it.
   Rules:
     - `long_running=true` themes with at least one new story this
       week MUST be in your shortlist (as a single or an arc).
@@ -86,6 +96,10 @@ in favor of inclusion independent of zeitgeist.
       conversation is densifying.
     - `falling` themes should only get one pick even if the pool
       has many stories under them — the conversation is moving on.
+    - `wikipedia_corroborated=true` is a strong inclusion prior,
+      especially for quiet-but-significant themes — Wikipedia editors
+      caught the significance the wires under-played. If a corroborated
+      theme is on the bubble between cut and pick, lean toward picking.
 
 - **Prefer arcs over snapshots.** The input's `themes` field pre-groups
   every theme with ≥1 story in the pool. Scan it FIRST. A theme with
@@ -185,6 +199,7 @@ AND day_span >= 2):
     window: {{YYYY-MM-DD}} → {{YYYY-MM-DD}}
     trajectory: {{new|rising|stable|falling}}
     n_prior_publications: {{n}}  age_days: {{n}}  long_running: {{bool}}
+    {{flags include "⊕ wikipedia" when wikipedia_corroborated=true}}
 
   - ...
 

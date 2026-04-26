@@ -9,7 +9,7 @@
 
 import { BigQuery } from "@google-cloud/bigquery";
 
-import { getEnv } from "../shared/env.ts";
+import { getEnvOptional } from "../shared/env.ts";
 import { TIER1_DOMAINS, domainOf } from "../shared/source-tiers.ts";
 import type {
   Connector,
@@ -32,7 +32,27 @@ const MAX_URLS_PER_EVENT = 10;
 const SCRAPE_CONCURRENCY = 10;
 const SCRAPE_TIMEOUT_MS = 5_000;
 
-const BQ = new BigQuery({ projectId: getEnv("GOOGLE_CLOUD_PROJECT") });
+// BigQuery client is constructed lazily on first use. Module-top-level
+// construction would throw at import time when GOOGLE_CLOUD_PROJECT or
+// GOOGLE_APPLICATION_CREDENTIALS are missing — and that import sits
+// inside connectors/registry.ts, so a single bad env var in prod
+// would take down every connector, not just GDELT. Lazy init keeps
+// the failure scoped: ingest's per-connector try/catch logs the
+// problem and the other sources keep running.
+let _bq: BigQuery | null = null;
+function getBigQuery(): BigQuery {
+  if (_bq !== null) return _bq;
+  const projectId = getEnvOptional("GOOGLE_CLOUD_PROJECT");
+  if (projectId === undefined || projectId.length === 0) {
+    throw new Error(
+      "gdelt: GOOGLE_CLOUD_PROJECT not set — connector skipped this run. " +
+        "Set the secret in Fly (fly secrets set GOOGLE_CLOUD_PROJECT=<id>) " +
+        "or remove gdelt from connectors/registry.ts to silence.",
+    );
+  }
+  _bq = new BigQuery({ projectId });
+  return _bq;
+}
 
 interface EventRow {
   global_event_id: string;
@@ -174,7 +194,7 @@ async function queryEvents(start: Date, end: Date): Promise<EventRow[]> {
     LIMIT @max_events
   `;
 
-  const [rows] = await BQ.query({
+  const [rows] = await getBigQuery().query({
     query: sql,
     params: {
       min_mentions: MIN_NUM_MENTIONS,

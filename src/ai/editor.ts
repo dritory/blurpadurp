@@ -189,6 +189,7 @@ function renderUserMessage(input: EditorInput): string {
       if (t.is_long_running) flags.push("★ long-running");
       if (t.trajectory === "rising") flags.push("↑ rising");
       if (t.trajectory === "falling") flags.push("↓ falling");
+      if (t.wikipedia_corroborated) flags.push("⊕ wikipedia");
       const tag = flags.length > 0 ? `  ${flags.join(" ")}` : "";
       lines.push(
         `  - theme_id: ${t.theme_id}  "${t.theme_name}"${tag}`,
