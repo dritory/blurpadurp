@@ -67,8 +67,12 @@ async function runIngest(): Promise<void> {
         `[ingest] ${tag} fetched=${fetched} inserted=${inserted}${blockSuffix} (${Date.now() - t0}ms)`,
       );
     } catch (err) {
-      console.error(
-        `[ingest] ${tag} failed: ${err instanceof Error ? err.message : String(err)}`,
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[ingest] ${tag} failed: ${msg}`);
+      // Persist so /admin/sources can show "gdelt last failed: …"
+      // without depending on Fly's log retention.
+      await recordRunError(conn.name, scope, msg).catch((e) =>
+        console.error(`[ingest] ${tag} error capture failed: ${String(e)}`),
       );
     }
   }
@@ -125,6 +129,9 @@ async function saveCursor(
   scope_key: string,
   last_seen_at: Date,
 ): Promise<void> {
+  // Successful run: advance cursor and clear last_error. last_run_at
+  // is bumped on every run (success or failure) so "stale connector"
+  // is also visible.
   await db
     .insertInto("source_cursor")
     .values({
@@ -132,11 +139,47 @@ async function saveCursor(
       scope_key,
       last_seen_at,
       last_seen_id: null,
+      last_error: null,
+      last_error_at: null,
+      last_run_at: new Date(),
     })
     .onConflict((oc) =>
       oc.columns(["connector_name", "scope_key"]).doUpdateSet({
         last_seen_at: (eb) => eb.ref("excluded.last_seen_at"),
         last_seen_id: (eb) => eb.ref("excluded.last_seen_id"),
+        last_error: null,
+        last_error_at: null,
+        last_run_at: sql`now()`,
+        updated_at: sql`now()`,
+      }),
+    )
+    .execute();
+}
+
+async function recordRunError(
+  connector_name: string,
+  scope_key: string,
+  error: string,
+): Promise<void> {
+  // Truncate the error to keep raw_input-style ai_call_log proportions
+  // — we want a quick signal in the admin UI, not a stack trace blob.
+  const truncated = error.length > 500 ? `${error.slice(0, 500)}…` : error;
+  await db
+    .insertInto("source_cursor")
+    .values({
+      connector_name,
+      scope_key,
+      last_seen_at: null,
+      last_seen_id: null,
+      last_error: truncated,
+      last_error_at: new Date(),
+      last_run_at: new Date(),
+    })
+    .onConflict((oc) =>
+      oc.columns(["connector_name", "scope_key"]).doUpdateSet({
+        last_error: truncated,
+        last_error_at: sql`now()`,
+        last_run_at: sql`now()`,
         updated_at: sql`now()`,
       }),
     )

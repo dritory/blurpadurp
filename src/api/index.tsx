@@ -2378,16 +2378,84 @@ async function loadSourcesData(
   const ingestMap = new Map(
     ingestRows.map((r) => [r.source_name, Number(r.n)]),
   );
-  const byConnector = registered.map((c) => ({
-    source: c.name,
-    ingested: ingestMap.get(c.name) ?? 0,
-  }));
+
+  // Pull the freshest error per connector_name from source_cursor.
+  // RSS has many scopes (one per feed); we want the most recent error
+  // across them — prioritize the row with the latest last_error_at
+  // that has a non-null error, falling back to the latest run.
+  const cursorRows = await db
+    .selectFrom("source_cursor")
+    .select([
+      "connector_name",
+      "last_error",
+      "last_error_at",
+      "last_run_at",
+    ])
+    .execute();
+  const cursorByConnector = new Map<
+    string,
+    {
+      lastError: string | null;
+      lastErrorAt: Date | null;
+      lastRunAt: Date | null;
+    }
+  >();
+  for (const r of cursorRows) {
+    const cur = cursorByConnector.get(r.connector_name);
+    const incoming = {
+      lastError: r.last_error,
+      lastErrorAt: r.last_error_at,
+      lastRunAt: r.last_run_at,
+    };
+    if (cur === undefined) {
+      cursorByConnector.set(r.connector_name, incoming);
+      continue;
+    }
+    // Prefer the row with the most recent last_error_at when both
+    // have errors; for the run timestamp we always take the latest.
+    const merged = {
+      lastError:
+        (incoming.lastErrorAt?.getTime() ?? -1) >
+        (cur.lastErrorAt?.getTime() ?? -1)
+          ? incoming.lastError
+          : cur.lastError,
+      lastErrorAt:
+        (incoming.lastErrorAt?.getTime() ?? -1) >
+        (cur.lastErrorAt?.getTime() ?? -1)
+          ? incoming.lastErrorAt
+          : cur.lastErrorAt,
+      lastRunAt:
+        (incoming.lastRunAt?.getTime() ?? -1) >
+        (cur.lastRunAt?.getTime() ?? -1)
+          ? incoming.lastRunAt
+          : cur.lastRunAt,
+    };
+    cursorByConnector.set(r.connector_name, merged);
+  }
+
+  const byConnector = registered.map((c) => {
+    const cursor = cursorByConnector.get(c.name);
+    return {
+      source: c.name,
+      ingested: ingestMap.get(c.name) ?? 0,
+      lastError: cursor?.lastError ?? null,
+      lastErrorAt: cursor?.lastErrorAt ?? null,
+      lastRunAt: cursor?.lastRunAt ?? null,
+    };
+  });
   // Tail any source_name in the data that isn't in the registry (old
   // connectors that have been removed) so the diagnostic doesn't lie.
   const knownNames = new Set(byConnector.map((b) => b.source));
   for (const r of ingestRows) {
     if (!knownNames.has(r.source_name)) {
-      byConnector.push({ source: r.source_name, ingested: Number(r.n) });
+      const cursor = cursorByConnector.get(r.source_name);
+      byConnector.push({
+        source: r.source_name,
+        ingested: Number(r.n),
+        lastError: cursor?.lastError ?? null,
+        lastErrorAt: cursor?.lastErrorAt ?? null,
+        lastRunAt: cursor?.lastRunAt ?? null,
+      });
     }
   }
 

@@ -117,108 +117,134 @@ async function runSingletonPhase(cfg: AttachConfig): Promise<void> {
 // Phase 2: collapse near-duplicate themes themselves. Walks every
 // remaining theme, finds its best non-self centroid neighbor, runs
 // Haiku theme-confirm if cosine clears the merge threshold, and
-// merges (lower id absorbs the higher one) on confirmation. Catches
+// merges (lower id absorbs the higher) on confirmation. Catches
 // cases like "Apple CEO succession" + "Tim Cook stepping down"
 // living separately at 0.95 cosine.
 //
-// Order: themes by id ascending so absorbers are stable. After a
-// merge, subsequent iterations re-fetch (the absorbed theme is
-// gone). The absorber's centroid recomputes after each merge so
-// the next iteration sees the updated state.
+// Loops passes until a pass produces no merges, capped at MAX_PASSES.
+// Multi-pass exists because:
+//   - Each merge shifts the absorber's centroid, which changes other
+//     themes' top-1 best neighbor. Previously-non-mutual edges become
+//     mutual on the next pass.
+//   - findBestThemeNeighbor returns top-1 only; if A's top-1 is C and
+//     B's top-1 is C, the pair (A,B) at 0.95 cosine wouldn't surface
+//     on the first pass at all, but might once C is absorbed into one
+//     of them.
 async function runThemeMergePhase(cfg: AttachConfig): Promise<void> {
   console.log(`[reattach] phase 2: merging near-duplicate themes`);
-  const ids = await db
-    .selectFrom("theme")
-    .select("id")
-    .orderBy("id", "asc")
-    .execute();
-  console.log(`[reattach] scanning ${ids.length} themes`);
 
-  let merged = 0;
-  let rejectedByLlm = 0;
-  let belowThreshold = 0;
-  let noNeighbor = 0;
-  let processed = 0;
+  const MAX_PASSES = 5;
+  let totalMerged = 0;
 
-  for (const { id } of ids) {
-    processed++;
-    if (processed % 25 === 0) {
-      console.log(
-        `[reattach] phase 2: ${processed}/${ids.length} processed; merged=${merged}`,
-      );
-    }
-    const t = await db
+  for (let pass = 1; pass <= MAX_PASSES; pass++) {
+    const ids = await db
       .selectFrom("theme")
-      .select(["id", "name", "centroid_embedding"])
-      .where("id", "=", id)
-      .executeTakeFirst();
-    if (!t || t.centroid_embedding === null) continue;
-
-    const neighbor = await findBestThemeNeighbor(
-      Number(t.id),
-      t.centroid_embedding,
+      .select("id")
+      .orderBy("id", "asc")
+      .execute();
+    console.log(
+      `[reattach] phase 2 pass ${pass}: scanning ${ids.length} themes`,
     );
-    if (neighbor === null) {
-      noNeighbor++;
-      continue;
-    }
-    if (neighbor.cosine < cfg.mergeThreshold) {
-      belowThreshold++;
-      continue;
-    }
 
-    // Convention: lower id absorbs. Skip if this iteration's theme
-    // would be the one absorbed (we'll handle the pair when we reach
-    // the lower-id theme).
-    const absorberId = Math.min(Number(t.id), neighbor.id);
-    const absorbedId = Math.max(Number(t.id), neighbor.id);
-    if (absorberId !== Number(t.id)) continue;
+    let merged = 0;
+    let rejectedByLlm = 0;
+    let belowThreshold = 0;
+    let noNeighbor = 0;
+    let processed = 0;
 
-    // Haiku-confirm using a representative story from the absorbed
-    // theme as the "incoming" and the absorber theme as the candidate.
-    // Reuses the existing confirmThemeContinuation; not a perfect
-    // semantic match (the prompt is story→theme, not theme↔theme) but
-    // close enough since the representative story IS the strongest
-    // signal of the absorbed theme's content.
-    const repr = await loadRepresentativeStory(absorbedId);
-    if (repr === null) continue;
-    const recentSummaries = await loadRecentSummaries(absorberId);
-    const absorberTheme = await db
-      .selectFrom("theme")
-      .select(["name", "description"])
-      .where("id", "=", absorberId)
-      .executeTakeFirst();
-    if (!absorberTheme) continue;
+    for (const { id } of ids) {
+      processed++;
+      if (processed % 25 === 0) {
+        console.log(
+          `[reattach] phase 2 pass ${pass}: ${processed}/${ids.length} processed; merged=${merged}`,
+        );
+      }
+      const t = await db
+        .selectFrom("theme")
+        .select(["id", "name", "centroid_embedding"])
+        .where("id", "=", id)
+        .executeTakeFirst();
+      // Skipped if absorbed earlier in this pass (row gone) or if the
+      // theme has no centroid yet.
+      if (!t || t.centroid_embedding === null) continue;
 
-    let isContinuation: boolean;
-    try {
-      const result = await confirmThemeContinuation({
-        story_title: repr.title,
-        story_summary: repr.summary,
-        theme_name: absorberTheme.name,
-        theme_description: absorberTheme.description,
-        recent_summaries: recentSummaries,
-        cosine_similarity: neighbor.cosine,
-      });
-      isContinuation = result.is_continuation;
-    } catch (err) {
-      console.warn(
-        `[reattach] theme-merge confirm failed for ${absorberId}↔${absorbedId}: ${err instanceof Error ? err.message : err}`,
+      const neighbor = await findBestThemeNeighbor(
+        Number(t.id),
+        t.centroid_embedding,
       );
-      continue;
-    }
-    if (!isContinuation) {
-      rejectedByLlm++;
-      continue;
+      if (neighbor === null) {
+        noNeighbor++;
+        continue;
+      }
+      if (neighbor.cosine < cfg.mergeThreshold) {
+        belowThreshold++;
+        continue;
+      }
+
+      // Convention: lower id absorbs. Merge regardless of which side
+      // of the pair we're iterating — the prior "skip unless we are
+      // the absorber" guard missed pairs whose top-1 mutual edge
+      // wasn't discovered from the lower-id side first.
+      const absorberId = Math.min(Number(t.id), neighbor.id);
+      const absorbedId = Math.max(Number(t.id), neighbor.id);
+
+      // Haiku-confirm using a representative story from the absorbed
+      // theme as the "incoming" and the absorber theme as the candidate.
+      // Reuses confirmThemeContinuation; not a perfect semantic match
+      // (the prompt is story→theme, not theme↔theme) but close enough
+      // since the representative story IS the strongest signal of the
+      // absorbed theme's content.
+      const repr = await loadRepresentativeStory(absorbedId);
+      if (repr === null) continue;
+      const recentSummaries = await loadRecentSummaries(absorberId);
+      const absorberTheme = await db
+        .selectFrom("theme")
+        .select(["name", "description"])
+        .where("id", "=", absorberId)
+        .executeTakeFirst();
+      if (!absorberTheme) continue;
+
+      let isContinuation: boolean;
+      try {
+        const result = await confirmThemeContinuation({
+          story_title: repr.title,
+          story_summary: repr.summary,
+          theme_name: absorberTheme.name,
+          theme_description: absorberTheme.description,
+          recent_summaries: recentSummaries,
+          cosine_similarity: neighbor.cosine,
+        });
+        isContinuation = result.is_continuation;
+      } catch (err) {
+        console.warn(
+          `[reattach] theme-merge confirm failed for ${absorberId}↔${absorbedId}: ${err instanceof Error ? err.message : err}`,
+        );
+        continue;
+      }
+      if (!isContinuation) {
+        rejectedByLlm++;
+        continue;
+      }
+
+      await mergeThemeInto(absorbedId, absorberId);
+      await recomputeThemeCentroid(absorberId);
+      merged++;
     }
 
-    await mergeThemeInto(absorbedId, absorberId);
-    await recomputeThemeCentroid(absorberId);
-    merged++;
+    console.log(
+      `[reattach] phase 2 pass ${pass} done — merged=${merged} rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
+    );
+    totalMerged += merged;
+    if (merged === 0) {
+      console.log(
+        `[reattach] phase 2 stable after ${pass} pass${pass === 1 ? "" : "es"} (total merged=${totalMerged})`,
+      );
+      return;
+    }
   }
 
   console.log(
-    `[reattach] phase 2 done — merged=${merged} rejected_by_llm=${rejectedByLlm} below_threshold=${belowThreshold} no_neighbor=${noNeighbor}`,
+    `[reattach] phase 2 hit MAX_PASSES=${MAX_PASSES} cap (total merged=${totalMerged}); rerun if needed`,
   );
 }
 
