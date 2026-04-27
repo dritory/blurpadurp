@@ -31,6 +31,9 @@ export interface StoryFilter {
   sort?: SortKey;
   dir?: SortDir;
   page?: number;
+  // "flagged" = any noise_pattern, "clean" = no noise_pattern, or
+  // an exact pattern string ("/entertainment/", "/viral/", …).
+  noise?: string;
 }
 
 export interface StoryRow {
@@ -52,6 +55,7 @@ export interface StoryRow {
   publishedAt: Date | null;
   scoredAt: Date | null;
   factors: string[];
+  noisePattern: string | null;
 }
 
 export interface StoriesData {
@@ -59,6 +63,7 @@ export interface StoriesData {
   categories: string[];
   sources: string[];
   factors: string[];
+  noisePatterns: string[];
   total: number;
   page: number;
   pageSize: number;
@@ -114,6 +119,7 @@ function qs(f: StoryFilter, overrides: Partial<StoryFilter> = {}): string {
   if (merged.gate) parts.push(`gate=${merged.gate}`);
   if (merged.source) parts.push(`source=${encodeURIComponent(merged.source)}`);
   if (merged.factor) parts.push(`factor=${encodeURIComponent(merged.factor)}`);
+  if (merged.noise) parts.push(`noise=${encodeURIComponent(merged.noise)}`);
   if (merged.q) parts.push(`q=${encodeURIComponent(merged.q)}`);
   if (merged.sort) parts.push(`sort=${merged.sort}`);
   if (merged.dir) parts.push(`dir=${merged.dir}`);
@@ -261,6 +267,23 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
               ))}
             </select>
           </div>
+          <div>
+            <label for="noise">Noise flag</label>
+            <select id="noise" name="noise">
+              <option value="">any</option>
+              <option value="flagged" selected={filter.noise === "flagged"}>
+                flagged (any)
+              </option>
+              <option value="clean" selected={filter.noise === "clean"}>
+                clean
+              </option>
+              {data.noisePatterns.map((p) => (
+                <option value={p} selected={filter.noise === p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
           <input type="hidden" name="sort" value={filter.sort ?? "composite"} />
           <input type="hidden" name="dir" value={filter.dir ?? "desc"} />
           <div class="actions">
@@ -286,6 +309,7 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
             </th>
             <th class="title">Title</th>
             <th>Source</th>
+            <th>Noise</th>
             <th>Cat</th>
             <th>Theme</th>
             <th class="num">
@@ -330,6 +354,18 @@ export const AdminExploreStories: FC<{ data: StoriesData }> = ({ data }) => {
                   <a href={`/admin/explore/story/${r.id}`}>{r.title}</a>
                 </td>
                 <td>{r.source}</td>
+                <td>
+                  {r.noisePattern !== null ? (
+                    <span
+                      class="chip"
+                      style="background: rgba(166, 58, 58, 0.12); color: #7a2929;"
+                    >
+                      {r.noisePattern}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td>{r.category ?? "—"}</td>
                 <td>
                   {r.themeId !== null ? (
