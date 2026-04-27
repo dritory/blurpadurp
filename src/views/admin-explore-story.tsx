@@ -13,6 +13,7 @@ export interface StoryDrilldown {
   sourceName: string;
   sourceUrl: string | null;
   sourceHost: string | null;
+  noisePattern: string | null;
   additionalSourceUrls: string[];
   publishedAt: Date | null;
   ingestedAt: Date;
@@ -180,6 +181,16 @@ export const AdminExploreStory: FC<{ d: StoryDrilldown }> = ({ d }) => {
             <dd style="color: var(--ink-soft); font-size: 12px;">
               {d.additionalSourceUrls.length} more source
               {d.additionalSourceUrls.length > 1 ? "s" : ""}
+            </dd>
+          </>
+        ) : null}
+        {d.noisePattern !== null ? (
+          <>
+            <dt>Noise flag</dt>
+            <dd>
+              <span style="display: inline-block; padding: 2px 8px; background: rgba(166, 58, 58, 0.1); color: #7a2929; font-family: var(--sans); font-size: 12px;">
+                {d.noisePattern}
+              </span>
             </dd>
           </>
         ) : null}

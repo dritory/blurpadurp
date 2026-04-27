@@ -40,6 +40,7 @@ export interface Database {
     source_name: string;
     source_event_id: string | null;
     source_url: string | null;
+    noise_pattern: string | null;
     title: string;
     summary: string | null;
     published_at: Date | null;

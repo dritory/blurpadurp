@@ -1815,6 +1815,7 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     sourceName: row.source_name,
     sourceUrl: row.source_url,
     sourceHost: extractHost(row.source_url),
+    noisePattern: row.noise_pattern,
     additionalSourceUrls: row.additional_source_urls ?? [],
     publishedAt: row.published_at,
     ingestedAt: row.ingested_at,
