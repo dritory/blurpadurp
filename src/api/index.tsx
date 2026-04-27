@@ -1612,6 +1612,7 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
     source: q.source || undefined,
     confidence: q.conf || undefined,
     factor: q.factor || undefined,
+    noise: q.noise || undefined,
     gate,
     sort,
     dir,
@@ -1675,6 +1676,13 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       ),
     );
   }
+  if (filter.noise === "flagged") {
+    q = q.where("story.noise_pattern", "is not", null);
+  } else if (filter.noise === "clean") {
+    q = q.where("story.noise_pattern", "is", null);
+  } else if (filter.noise) {
+    q = q.where("story.noise_pattern", "=", filter.noise);
+  }
 
   const countRow = await q
     .select(sql<string>`count(*)`.as("n"))
@@ -1718,6 +1726,7 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       "story.early_reject",
       "story.published_at",
       "story.scored_at",
+      "story.noise_pattern",
     ])
     .orderBy(orderExpr)
     .limit(pageSize)
@@ -1740,7 +1749,7 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
     }
   }
 
-  const [cats, srcs, facs] = await Promise.all([
+  const [cats, srcs, facs, noises] = await Promise.all([
     db.selectFrom("category").select("slug").orderBy("slug").execute(),
     db
       .selectFrom("story")
@@ -1754,6 +1763,13 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       .distinct()
       .orderBy("factor")
       .execute(),
+    db
+      .selectFrom("story")
+      .select("noise_pattern")
+      .distinct()
+      .where("noise_pattern", "is not", null)
+      .orderBy("noise_pattern")
+      .execute(),
   ]);
 
   return {
@@ -1764,6 +1780,9 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
     categories: cats.map((r) => r.slug),
     sources: srcs.map((r) => r.source_name),
     factors: facs.map((r) => r.factor),
+    noisePatterns: noises
+      .map((r) => r.noise_pattern)
+      .filter((p): p is string => p !== null),
     rows: rawRows.map((r) => ({
       id: Number(r.id),
       title: r.title,
@@ -1783,6 +1802,7 @@ async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {
       publishedAt: r.published_at,
       scoredAt: r.scored_at,
       factors: factorMap.get(Number(r.id)) ?? [],
+      noisePattern: r.noise_pattern,
     })),
   };
 }
@@ -1815,6 +1835,7 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     sourceName: row.source_name,
     sourceUrl: row.source_url,
     sourceHost: extractHost(row.source_url),
+    noisePattern: row.noise_pattern,
     additionalSourceUrls: row.additional_source_urls ?? [],
     publishedAt: row.published_at,
     ingestedAt: row.ingested_at,

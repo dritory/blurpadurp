@@ -12,6 +12,7 @@ import type {
 import { db } from "../db/index.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { extractHost, loadBlocklist, type Blocklist } from "../shared/source-blocklist.ts";
+import { classifyUrlNoise } from "../shared/url-noise.ts";
 
 const DEFAULT_SCOPE = "global";
 
@@ -193,6 +194,7 @@ async function upsertStories(items: NormalizedStoryInput[]): Promise<number> {
       source_name: n.source_name,
       source_event_id: n.source_event_id,
       source_url: n.source_url,
+      noise_pattern: classifyUrlNoise(n.source_url),
       additional_source_urls: n.additional_source_urls ?? [],
       title: n.title,
       summary: n.summary,
