@@ -23,6 +23,8 @@ export interface SchedulerStageRow {
   lastError: string | null;
   nextDueAt: Date | null;
   lockHeldUntil: Date | null;
+  progressDone: number | null;
+  progressTotal: number | null;
 }
 
 export interface SchedulerData {
@@ -47,6 +49,9 @@ const STYLES = `
   .ok { color: #4a6b4a; font-weight: 600; }
   .warn { color: var(--flash-err); font-weight: 600; }
   .muted { color: var(--ink-soft); }
+  .sched-progress-bar { display: inline-block; width: 80px; height: 6px; background: var(--rule); border-radius: 2px; overflow: hidden; vertical-align: middle; margin-left: 6px; }
+  .sched-progress-bar > span { display: block; height: 100%; background: #4a6b4a; }
+  .sched-progress-num { font-variant-numeric: tabular-nums; }
 `;
 
 function fmtDuration(sec: number | null): string {
@@ -108,7 +113,7 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
             <th>Last success</th>
             <th>Last attempt</th>
             <th>Next due</th>
-            <th>Lock</th>
+            <th>Progress / lock</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -185,7 +190,20 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
               <td class="num">{r.enabled ? fmtUntil(r.nextDueAt) : "—"}</td>
               <td class="num">
                 {r.lockHeldUntil !== null ? (
-                  <span class="warn">held</span>
+                  r.progressTotal !== null && r.progressTotal > 0 ? (
+                    <span class="ok">
+                      <span class="sched-progress-num">
+                        {r.progressDone ?? 0}/{r.progressTotal}
+                      </span>
+                      <span class="sched-progress-bar">
+                        <span
+                          style={`width: ${Math.min(100, Math.round(((r.progressDone ?? 0) / r.progressTotal) * 100))}%`}
+                        />
+                      </span>
+                    </span>
+                  ) : (
+                    <span class="warn">running</span>
+                  )
                 ) : (
                   <span class="muted">free</span>
                 )}

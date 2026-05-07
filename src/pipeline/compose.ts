@@ -21,7 +21,7 @@ import type {
 } from "../shared/composer-schema.ts";
 import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
-import { withLock } from "../shared/pipeline-lock.ts";
+import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
 // Penalty factors that push an otherwise-picked story into the Worth
@@ -84,6 +84,10 @@ export type ConfigMap = {
 };
 
 export async function compose(): Promise<void> {
+  if (await isLockHeld("score")) {
+    console.log("[compose] score is still running, skipping");
+    return;
+  }
   await withLock("compose", 15 * 60_000, runCompose);
 }
 
