@@ -109,7 +109,7 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
           <tr>
             <th>Stage</th>
             <th>Interval</th>
-            <th>Enabled</th>
+            <th>Schedule</th>
             <th>Last success</th>
             <th>Last attempt</th>
             <th>Next due</th>
@@ -158,8 +158,11 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
                     value={r.enabled ? "0" : "1"}
                   />
                   <button type="submit" class={r.enabled ? "" : "danger"}>
-                    {r.enabled ? "on" : "off"}
+                    {r.enabled ? "Hold" : "Resume"}
                   </button>
+                  {!r.enabled ? (
+                    <span class="warn" style="margin-left: 6px;">on hold</span>
+                  ) : null}
                 </form>
               </td>
               <td class="num">
