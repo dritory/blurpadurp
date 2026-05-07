@@ -47,8 +47,9 @@ export type TriggerSource = "cron" | "manual" | "deploy";
 
 export async function runTick(): Promise<void> {
   const schedule = await loadSchedule();
+  const forced = await loadForceRun();
   console.log(
-    `[scheduler] tick @ ${new Date().toISOString()} — ${schedule.size} configured stages`,
+    `[scheduler] tick @ ${new Date().toISOString()} — ${schedule.size} configured, ${forced.size} forced`,
   );
   for (const job of STAGES) {
     const cfg = schedule.get(job.stage);
@@ -60,19 +61,31 @@ export async function runTick(): Promise<void> {
       console.log(`[scheduler] ${job.stage}: disabled, skipping`);
       continue;
     }
-    const lastSuccess = await loadLastSuccess(job.stage);
-    if (lastSuccess !== null) {
-      const dueAt = lastSuccess.getTime() + cfg.interval_sec * 1000;
-      if (Date.now() < dueAt) {
-        const minsUntil = Math.ceil((dueAt - Date.now()) / 60_000);
-        console.log(
-          `[scheduler] ${job.stage}: not due (next in ~${minsUntil}m)`,
-        );
-        continue;
+    const isForced = forced.has(job.stage);
+    if (!isForced) {
+      const lastSuccess = await loadLastSuccess(job.stage);
+      if (lastSuccess !== null) {
+        const dueAt = lastSuccess.getTime() + cfg.interval_sec * 1000;
+        if (Date.now() < dueAt) {
+          const minsUntil = Math.ceil((dueAt - Date.now()) / 60_000);
+          console.log(
+            `[scheduler] ${job.stage}: not due (next in ~${minsUntil}m)`,
+          );
+          continue;
+        }
       }
     }
-    console.log(`[scheduler] ${job.stage}: firing`);
-    await runWithBookkeeping(job, "cron");
+    // Delete the force-run row before firing so a crash mid-run does
+    // not auto-retry on the next tick. Operator re-queues by clicking
+    // "Run now" again. Cron path is unaffected.
+    if (isForced) {
+      await db
+        .deleteFrom("pipeline_force_run")
+        .where("stage", "=", job.stage)
+        .execute();
+    }
+    console.log(`[scheduler] ${job.stage}: firing (${isForced ? "manual" : "cron"})`);
+    await runWithBookkeeping(job, isForced ? "manual" : "cron");
   }
   console.log(`[scheduler] tick done`);
 }
@@ -139,6 +152,14 @@ async function loadSchedule(): Promise<Map<string, ScheduleRow>> {
       { interval_sec: r.interval_sec, enabled: r.enabled },
     ]),
   );
+}
+
+async function loadForceRun(): Promise<Set<string>> {
+  const rows = await db
+    .selectFrom("pipeline_force_run")
+    .select("stage")
+    .execute();
+  return new Set(rows.map((r) => r.stage));
 }
 
 async function loadLastSuccess(stage: string): Promise<Date | null> {

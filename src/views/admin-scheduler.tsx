@@ -23,6 +23,7 @@ export interface SchedulerStageRow {
   lastError: string | null;
   nextDueAt: Date | null;
   lockHeldUntil: Date | null;
+  forceQueued: boolean;
 }
 
 export interface SchedulerData {
@@ -83,8 +84,8 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
 
     {d.flash?.triggered ? (
       <div class="sched-flash">
-        Fired <strong>{d.flash.triggered}</strong>. It runs in the background;
-        refresh in a few seconds to see status.
+        Queued <strong>{d.flash.triggered}</strong> for the next scheduler
+        tick (≤1h). The stage runs on the scheduler machine, not here.
       </div>
     ) : null}
     {d.flash?.cleared ? (
@@ -182,7 +183,15 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
                   <div class="sched-error">{r.lastError}</div>
                 ) : null}
               </td>
-              <td class="num">{r.enabled ? fmtUntil(r.nextDueAt) : "—"}</td>
+              <td class="num">
+                {r.forceQueued ? (
+                  <span class="warn">queued</span>
+                ) : r.enabled ? (
+                  fmtUntil(r.nextDueAt)
+                ) : (
+                  "—"
+                )}
+              </td>
               <td class="num">
                 {r.lockHeldUntil !== null ? (
                   <span class="warn">held</span>

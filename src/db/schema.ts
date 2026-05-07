@@ -261,4 +261,9 @@ export interface Database {
     duration_ms: number | null;
     triggered_by: Generated<string>;
   };
+
+  pipeline_force_run: {
+    stage: string;
+    requested_at: Generated<Date>;
+  };
 }
