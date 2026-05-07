@@ -54,7 +54,7 @@ const SilencePanel: FC<{
   <article class="issue-body">
     <div class="issue-meta">Quiet week.</div>
     <p>
-      <em>Nothing rose above the noise. Back when something does.</em>
+      <em>Blurp didn't find anything worth sending.</em>
     </p>
     <p style="margin-top: 1.5em;">
       The last brief is still here:{" "}
