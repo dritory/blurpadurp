@@ -124,6 +124,16 @@ import {
   type SourcesData,
 } from "../views/admin-sources.tsx";
 import {
+  AdminScheduler,
+  type SchedulerData,
+  type SchedulerStageRow,
+} from "../views/admin-scheduler.tsx";
+import {
+  getStage as getSchedulerStage,
+  listStages as listSchedulerStages,
+  runWithBookkeeping,
+} from "../scheduler.ts";
+import {
   AdminEditorSandbox,
   type EditorSandboxData,
   type SandboxBucket,
@@ -419,6 +429,57 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   app.get("/admin/status", async (c) => {
     const s = await loadPipelineStatus();
     return c.html(<AdminStatus s={s} />);
+  });
+
+  app.get("/admin/scheduler", async (c) => {
+    const q = c.req.query();
+    const flash =
+      q.triggered || q.cleared || q.saved
+        ? {
+            triggered: q.triggered,
+            cleared: q.cleared,
+            saved: q.saved,
+          }
+        : null;
+    const data = await loadSchedulerData(flash);
+    return c.html(<AdminScheduler d={data} />);
+  });
+
+  app.post("/admin/scheduler/edit", async (c) => {
+    const form = await c.req.parseBody();
+    const stage = String(form.stage ?? "");
+    if (getSchedulerStage(stage) === undefined) return c.text("unknown stage", 404);
+    const intervalSec = Number(form.interval_sec);
+    const enabled = String(form.enabled ?? "1") === "1";
+    if (!Number.isFinite(intervalSec) || intervalSec < 60) {
+      return c.redirect("/admin/scheduler", 303);
+    }
+    await db
+      .updateTable("pipeline_schedule")
+      .set({ interval_sec: Math.floor(intervalSec), enabled, updated_at: sql`now()` })
+      .where("stage", "=", stage)
+      .execute();
+    return c.redirect(`/admin/scheduler?saved=${encodeURIComponent(stage)}`, 303);
+  });
+
+  // Manual trigger. Fire-and-forget — the HTTP request returns
+  // immediately, the stage runs in the background. pipeline_lock
+  // catches collisions with the scheduled tick.
+  app.post("/admin/run/:stage", (c) => {
+    const stage = c.req.param("stage");
+    const job = getSchedulerStage(stage);
+    if (job === undefined) return c.text("unknown stage", 404);
+    void runWithBookkeeping(job, "manual").catch((err) => {
+      console.error(`[admin/run] ${stage} threw outside bookkeeping:`, err);
+    });
+    return c.redirect(`/admin/scheduler?triggered=${encodeURIComponent(stage)}`, 303);
+  });
+
+  app.post("/admin/lock/:stage/clear", async (c) => {
+    const stage = c.req.param("stage");
+    if (getSchedulerStage(stage) === undefined) return c.text("unknown stage", 404);
+    await db.deleteFrom("pipeline_lock").where("stage_name", "=", stage).execute();
+    return c.redirect(`/admin/scheduler?cleared=${encodeURIComponent(stage)}`, 303);
   });
 
   app.get("/admin/costs", async (c) => {
@@ -1626,6 +1687,81 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
         ? maxComposite
         : undefined,
   };
+}
+
+async function loadSchedulerData(
+  flash: SchedulerData["flash"],
+): Promise<SchedulerData> {
+  const stages = listSchedulerStages();
+  const scheduleRows = await db
+    .selectFrom("pipeline_schedule")
+    .select(["stage", "interval_sec", "enabled"])
+    .execute();
+  const scheduleMap = new Map(scheduleRows.map((r) => [r.stage, r]));
+
+  const lockRows = await db
+    .selectFrom("pipeline_lock")
+    .select(["stage_name", "expires_at"])
+    .execute();
+  const lockMap = new Map(lockRows.map((r) => [r.stage_name, r.expires_at]));
+
+  const now = Date.now();
+  const out: SchedulerStageRow[] = [];
+  for (const job of stages) {
+    const cfg = scheduleMap.get(job.stage);
+    const intervalSec = cfg?.interval_sec ?? 0;
+    const enabled = cfg?.enabled ?? false;
+
+    const lastSuccessRow = await db
+      .selectFrom("pipeline_run")
+      .select(["completed_at"])
+      .where("stage", "=", job.stage)
+      .where("status", "=", "success")
+      .orderBy("completed_at", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    const lastSuccessAt = lastSuccessRow?.completed_at ?? null;
+
+    const lastAttemptRow = await db
+      .selectFrom("pipeline_run")
+      .select(["started_at", "status", "error"])
+      .where("stage", "=", job.stage)
+      .orderBy("started_at", "desc")
+      .limit(1)
+      .executeTakeFirst();
+
+    // Don't surface the error string after a subsequent successful
+    // run — keeps the column from showing stale failures.
+    const showError =
+      lastAttemptRow?.status === "error" &&
+      (lastSuccessAt === null ||
+        (lastAttemptRow.started_at !== null &&
+          lastAttemptRow.started_at > lastSuccessAt));
+
+    const nextDueAt =
+      cfg !== undefined && lastSuccessAt !== null
+        ? new Date(lastSuccessAt.getTime() + intervalSec * 1000)
+        : cfg !== undefined
+          ? new Date(now)
+          : null;
+
+    out.push({
+      stage: job.stage,
+      intervalSec,
+      enabled,
+      lastSuccessAt,
+      lastSuccessAgeSec:
+        lastSuccessAt !== null
+          ? Math.floor((now - lastSuccessAt.getTime()) / 1000)
+          : null,
+      lastAttemptAt: lastAttemptRow?.started_at ?? null,
+      lastAttemptStatus: lastAttemptRow?.status ?? null,
+      lastError: showError ? (lastAttemptRow?.error ?? null) : null,
+      nextDueAt,
+      lockHeldUntil: lockMap.get(job.stage) ?? null,
+    });
+  }
+  return { rows: out, flash };
 }
 
 async function loadStoriesData(filter: StoryFilter): Promise<StoriesData> {

@@ -27,6 +27,7 @@ export type AdminNavKey =
   | "status"
   | "costs"
   | "config"
+  | "scheduler"
   | "review"
   | null;
 
@@ -39,6 +40,7 @@ const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: strin
   { key: "fixtures", href: "/admin/fixtures", label: "Fixtures" },
   { key: "eval", href: "/admin/eval", label: "Eval" },
   { key: "status", href: "/admin/status", label: "Status" },
+  { key: "scheduler", href: "/admin/scheduler", label: "Scheduler" },
   { key: "costs", href: "/admin/costs", label: "Costs" },
   { key: "config", href: "/admin/config", label: "Config" },
 ];
