@@ -52,19 +52,26 @@ const SilencePanel: FC<{
   };
 }> = ({ last }) => (
   <article class="issue-body">
-    <div class="issue-meta">Quiet week.</div>
+    <div class="issue-meta">{formatIssueDate(new Date())}</div>
+    <h1 class="issue-title">Quiet week.</h1>
     <p>
       <em>Blurp didn't find anything worth sending.</em>
     </p>
+    <div style="margin-top: 3em;">
+      <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">
+        Last brief
+      </p>
+      <p style="margin: 6px 0 0;">
+        <a href={`/issue/${last.id}`}>
+          {last.title ?? issueLabel(last)}
+        </a>
+      </p>
+      <p style="margin: 2px 0 0; color: var(--ink-soft); font-size: 14px;">
+        {formatIssueDate(last.publishedAt)}
+      </p>
+    </div>
     <p style="margin-top: 1.5em;">
-      The last brief is still here:{" "}
-      <a href={`/issue/${last.id}`}>
-        {last.title ?? issueLabel(last)}
-      </a>{" "}
-      <span style="color: var(--ink-soft);">
-        · {formatIssueDate(last.publishedAt)}
-      </span>.
-      Older issues live in the <a href="/archive">archive</a>.
+      Older issues are in the <a href="/archive">archive</a>.
     </p>
   </article>
 );
