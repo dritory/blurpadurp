@@ -149,7 +149,7 @@ import {
 import { Privacy } from "../views/privacy.tsx";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
-import { Home, type Flash } from "../views/home.tsx";
+import { Home, type Flash, type HomeViewData } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
 import { SubscribePage } from "../views/subscribe.tsx";
 import { ThemePage, type ThemeViewData } from "../views/theme.tsx";
@@ -210,8 +210,8 @@ app.get("/health", async (c) => {
 });
 
 app.get("/", async (c) => {
-  const latest = await loadLatestIssue();
-  return c.html(<Home latest={latest} flash={null} />);
+  const home = await loadHome();
+  return c.html(<Home home={home} flash={null} />);
 });
 
 app.get("/subscribe", (c) => {
@@ -1256,6 +1256,41 @@ app.post("/webhooks/resend", async (c) => {
 });
 
 // --- data loaders ---
+
+// Compose the home-page state. If the most recent issue is older than
+// `home.staleness_threshold_days`, the front page goes quiet — see
+// migration 042. Returns the surrogate id + public seq of the
+// most-recent issue so the silence panel can deep-link it.
+async function loadHome(): Promise<HomeViewData> {
+  const latest = await loadLatestIssue();
+  if (latest === null) return { kind: "empty" };
+
+  const thresholdDays = await loadHomeStalenessThresholdDays();
+  const ageMs = Date.now() - latest.publishedAt.getTime();
+  if (ageMs > thresholdDays * 24 * 3600_000) {
+    return {
+      kind: "silent",
+      lastIssue: {
+        id: latest.id,
+        publishedSeq: latest.publishedSeq,
+        publishedAt: latest.publishedAt,
+        title: latest.title,
+      },
+    };
+  }
+  return { kind: "issue", issue: latest };
+}
+
+async function loadHomeStalenessThresholdDays(): Promise<number> {
+  const row = await db
+    .selectFrom("config")
+    .select("value")
+    .where("key", "=", "home.staleness_threshold_days")
+    .executeTakeFirst();
+  if (row === undefined) return 8;
+  const n = typeof row.value === "number" ? row.value : Number(row.value);
+  return Number.isFinite(n) && n > 0 ? n : 8;
+}
 
 async function loadLatestIssue(): Promise<IssueView | null> {
   const row = await db
