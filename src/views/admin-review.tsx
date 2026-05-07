@@ -192,6 +192,8 @@ export interface EditorReviewData {
     composerPromptVersion: string | null;
     composerModelId: string | null;
     composedHtml: string;
+    title: string | null;
+    composedMarkdown: string;
   };
   annotations: Annotation[];
   editor: {
@@ -349,6 +351,18 @@ export const AdminReview: FC<{
           .editor-bar a:hover { border-color: var(--ink); }
           .editor-bar .cli { color: var(--ink-soft); padding: 5px 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
           .editor-bar .label { color: var(--ink-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+          .edit-body { margin: 0 0 24px; border: 1px solid var(--rule); background: #fff; }
+          .edit-body > summary { padding: 8px 14px; cursor: pointer; font-family: var(--sans); font-size: 13px; font-weight: 600; background: #f6f4ee; }
+          .edit-body[open] > summary { border-bottom: 1px solid var(--rule); }
+          .edit-body .edit-form { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+          .edit-body label { font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
+          .edit-body input[type=text], .edit-body textarea { font: inherit; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; padding: 8px 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); width: 100%; box-sizing: border-box; }
+          .edit-body textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
+          .edit-body textarea[name=composed_html] { min-height: 280px; }
+          .edit-body .edit-actions { display: flex; gap: 8px; align-items: center; }
+          .edit-body .edit-actions button { padding: 6px 12px; background: #2b4f2b; color: #fff; border: 1px solid #2b4f2b; font: inherit; font-family: var(--sans); font-size: 13px; font-weight: 600; cursor: pointer; }
+          .edit-body .edit-actions button:hover { background: #1e3b1e; }
+          .edit-body .edit-hint { color: var(--ink-soft); font-family: var(--sans); font-size: 12px; }
         `,
       }}
     />
@@ -427,6 +441,51 @@ export const AdminReview: FC<{
         <span class="cli">bun run cli composer-replay {data.issue.id}</span>
       )}
     </nav>
+    {data.issue.isDraft ? (
+      <details class="edit-body">
+        <summary>Edit body directly</summary>
+        <form
+          method="post"
+          action={`/admin/review/${data.issue.id}/edit`}
+          class="edit-form"
+        >
+          <label for={`edit-title-${data.issue.id}`}>Title</label>
+          <input
+            id={`edit-title-${data.issue.id}`}
+            type="text"
+            name="title"
+            value={data.issue.title ?? ""}
+          />
+          <label for={`edit-html-${data.issue.id}`}>
+            Composed HTML (drives web + email rendering)
+          </label>
+          <textarea
+            id={`edit-html-${data.issue.id}`}
+            name="composed_html"
+            spellcheck={false}
+          >
+            {data.issue.composedHtml}
+          </textarea>
+          <label for={`edit-md-${data.issue.id}`}>
+            Composed markdown (plain-text email body)
+          </label>
+          <textarea
+            id={`edit-md-${data.issue.id}`}
+            name="composed_markdown"
+            spellcheck={false}
+          >
+            {data.issue.composedMarkdown}
+          </textarea>
+          <div class="edit-actions">
+            <button type="submit">Save edits</button>
+            <span class="edit-hint">
+              Edits to one field don't update the others — keep HTML and
+              markdown in sync if you care about the email plain-text fallback.
+            </span>
+          </div>
+        </form>
+      </details>
+    ) : null}
     {(() => {
       const decorated = decorateBriefHtml(data.issue.composedHtml);
       return (

@@ -302,6 +302,33 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     return c.redirect("/admin/issues?discarded=1", 303);
   });
 
+  app.post("/admin/review/:id/edit", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const body = await c.req.parseBody();
+    const title = String(body.title ?? "").trim();
+    const composedHtml = String(body.composed_html ?? "");
+    const composedMarkdown = String(body.composed_markdown ?? "");
+    if (title.length === 0 || composedHtml.length === 0) {
+      return c.redirect(`/admin/review/${id}?error=empty_edit`, 303);
+    }
+    const updated = await db
+      .updateTable("issue")
+      .set({
+        title,
+        composed_html: composedHtml,
+        composed_markdown: composedMarkdown,
+      })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .returning("id")
+      .executeTakeFirst();
+    if (updated === undefined) {
+      return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?edited=1`, 303);
+  });
+
   app.post("/admin/review/:id/recompose", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
@@ -3330,6 +3357,8 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       "composer_model_id",
       "story_ids",
       "composed_html",
+      "composed_markdown",
+      "title",
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
     ])
@@ -3383,6 +3412,8 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       composerPromptVersion: iss.composer_prompt_version,
       composerModelId: iss.composer_model_id,
       composedHtml: iss.composed_html,
+      composedMarkdown: iss.composed_markdown,
+      title: iss.title,
     },
     annotations: annotations.map((a) => ({
       id: Number(a.id),
@@ -3655,6 +3686,12 @@ function parseReviewFlash(
     return { kind: "err", msg: "Note body can't be empty." };
   if (q.noted === "1") return { kind: "ok", msg: "Note added." };
   if (q.deleted_note === "1") return { kind: "ok", msg: "Note deleted." };
+  if (q.edited === "1") return { kind: "ok", msg: "Draft edits saved." };
+  if (q.error === "empty_edit")
+    return {
+      kind: "err",
+      msg: "Title and HTML body can't be empty.",
+    };
   return null;
 }
 

@@ -10,10 +10,12 @@
 
 import { sql, type Selectable } from "kysely";
 
+import { BudgetExceededError } from "../ai/budget.ts";
 import { embed, embedBatch, toPgVector } from "../ai/embed.ts";
 import { recomputeThemeCentroid } from "../shared/embedding-utils.ts";
 import { makeScorer } from "../ai/scorer.ts";
 import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
+import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
@@ -49,6 +51,38 @@ type ConfigMap = {
 
 export async function score(): Promise<void> {
   await withLock("score", 60 * 60_000, runScore);
+}
+
+// Provider quota / out-of-funds detection. Anthropic and Voyage both
+// surface insufficient-credit conditions as 4xx errors with messages
+// mentioning credit/billing/quota; Resend phrasing varies. Catching
+// the prose is a heuristic — when in doubt we keep going, since a real
+// transient network error shouldn't abort the whole batch.
+function isOutOfFundsError(err: unknown): boolean {
+  if (err instanceof BudgetExceededError) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(insufficient[_\s-]?(credit|funds|quota)|credit_balance_too_low|billing|payment[_\s-]?required|quota[_\s-]?exceeded)\b/i.test(
+    msg,
+  );
+}
+
+async function notifyScorerHalted(reason: string, err: unknown): Promise<void> {
+  const detail = err instanceof Error ? err.message : String(err);
+  const notice = renderAdminNotice({
+    heading: "Scorer halted — out of funds",
+    bodyLines: [
+      `The scoring pipeline aborted because: ${reason}.`,
+      `Underlying error: ${detail}`,
+      `Top up the affected provider (or raise budget.daily_usd_cap) and the next scheduled tick will resume.`,
+    ],
+  });
+  await notifyAdmin({
+    subject: "[blurpadurp] Scorer halted — out of funds",
+    html: notice.html,
+    text: notice.text,
+    dedupeKey: "scorer-out-of-funds",
+    cooldownMs: 6 * 3600_000,
+  });
 }
 
 async function runScore(): Promise<void> {
@@ -122,7 +156,14 @@ async function runScore(): Promise<void> {
 
   console.log(`[score] starting with concurrency=${SCORING_CONCURRENCY}`);
 
+  const abort: AbortFlag = { stopped: false, reason: null };
+  let aborted = 0;
+
   await mapLimit(refreshed, SCORING_CONCURRENCY, async (story) => {
+    if (abort.stopped) {
+      aborted++;
+      return;
+    }
     const t0 = Date.now();
     try {
       const result = await processStory(story, scorer, cfg);
@@ -141,12 +182,38 @@ async function runScore(): Promise<void> {
         `[score] ${done}/${total} id=${story.id} ${outcome} (${elapsed}s, total ${totalElapsed}s)`,
       );
     } catch (err) {
+      if (isOutOfFundsError(err)) {
+        abort.stopped = true;
+        abort.reason =
+          err instanceof BudgetExceededError
+            ? "daily budget cap exceeded"
+            : "provider account out of funds";
+        fail++;
+        done++;
+        console.error(
+          `[score] ${done}/${total} id=${story.id} out-of-funds — aborting batch:`,
+          err,
+        );
+        await notifyScorerHalted(abort.reason, err);
+        return;
+      }
       fail++;
       done++;
       console.error(`[score] ${done}/${total} id=${story.id} failed:`, err);
     }
   });
-  console.log(`[score] done ok=${ok} fail=${fail}`);
+  if (abort.stopped) {
+    console.log(
+      `[score] aborted: ${abort.reason}. ok=${ok} fail=${fail} skipped=${aborted}`,
+    );
+  } else {
+    console.log(`[score] done ok=${ok} fail=${fail}`);
+  }
+}
+
+interface AbortFlag {
+  stopped: boolean;
+  reason: string | null;
 }
 
 // Progressive scoring phase A. Runs every unscored story through the
@@ -170,7 +237,9 @@ async function runPrefilterPass(
     `[score] prefilter: ${stories.length} stories with ${modelId}`,
   );
   let done = 0;
+  const abort: AbortFlag = { stopped: false, reason: null };
   await mapLimit(stories, SCORING_CONCURRENCY, async (story) => {
+    if (abort.stopped) return;
     try {
       // Prefilter pass: no theme context (embeddings + attach happen in
       // the final pass). Scorer input's theme_context is nullable.
@@ -196,6 +265,19 @@ async function runPrefilterPass(
         console.log(`[score] prefilter ${done}/${stories.length}`);
       }
     } catch (err) {
+      if (isOutOfFundsError(err)) {
+        abort.stopped = true;
+        abort.reason =
+          err instanceof BudgetExceededError
+            ? "daily budget cap exceeded"
+            : "provider account out of funds";
+        console.error(
+          `[score] prefilter id=${story.id} out-of-funds — aborting:`,
+          err,
+        );
+        await notifyScorerHalted(abort.reason, err);
+        return;
+      }
       done++;
       console.error(
         `[score] prefilter id=${story.id} failed:`,
@@ -203,6 +285,10 @@ async function runPrefilterPass(
       );
     }
   });
+  if (abort.stopped) {
+    console.log(`[score] prefilter aborted: ${abort.reason}`);
+    throw new Error(`prefilter aborted: ${abort.reason}`);
+  }
   console.log(`[score] prefilter done`);
 }
 
