@@ -9,6 +9,8 @@ import { sql } from "kysely";
 import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
+import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
+import { getEnvOptional } from "../shared/env.ts";
 import { loadSystemPromptText, type PromptMode } from "../shared/prompts.ts";
 import { selectEditorPool } from "../shared/editor-pool.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
@@ -19,7 +21,7 @@ import type {
 } from "../shared/composer-schema.ts";
 import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
-import { withLock } from "../shared/pipeline-lock.ts";
+import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 
 // Penalty factors that push an otherwise-picked story into the Worth
@@ -61,10 +63,12 @@ function readScorerOutput(rawOutput: unknown): {
 const COMPOSER_PROMPT_PATH = "docs/composer-prompt.md";
 const EDITOR_PROMPT_PATH = "docs/editor-prompt.md";
 
-// Only consider stories ingested within this window. Defense-in-depth
-// against stale content leaking through (evergreen RSS items, re-ingested
-// archive URLs). Independent of published_at, which can be NULL.
-const COMPOSE_INGEST_WINDOW_MS = 14 * 24 * 3600_000;
+// One-week freshness gate. Stories whose published_at sits outside this
+// window are excluded from the editor pool and the shrug pool — even if
+// they were just ingested. Undated items (published_at IS NULL) fall
+// back to ingested_at; same window applies, so re-ingested archive
+// URLs can't smuggle ancient material into the brief.
+const COMPOSE_STORY_MAX_AGE_MS = 7 * 24 * 3600_000;
 
 export type ConfigMap = {
   "composer.model_id": string;
@@ -80,6 +84,10 @@ export type ConfigMap = {
 };
 
 export async function compose(): Promise<void> {
+  if (await isLockHeld("score")) {
+    console.log("[compose] score is still running, skipping");
+    return;
+  }
   await withLock("compose", 15 * 60_000, runCompose);
 }
 
@@ -137,6 +145,27 @@ async function runCompose(): Promise<void> {
   console.log(
     `[compose] draft issue ${issueId} created: ${draft.storyIds.length} stories, ${draft.output.markdown.length} md chars — publish via /admin/review/${issueId}`,
   );
+
+  const publicUrl =
+    getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
+  const reviewUrl = `${publicUrl}/admin/review/${issueId}`;
+  const notice = renderAdminNotice({
+    heading: `New draft #${issueId} ready for review`,
+    bodyLines: [
+      draft.output.title.length > 0
+        ? `Title: ${draft.output.title}`
+        : `Title: (untitled)`,
+      `${draft.storyIds.length} stories selected.`,
+      `Review, edit, or publish before the next dispatch tick.`,
+    ],
+    ctaLabel: "Open review page",
+    ctaUrl: reviewUrl,
+  });
+  await notifyAdmin({
+    subject: `[blurpadurp] New draft #${issueId} ready for review`,
+    html: notice.html,
+    text: notice.text,
+  });
 }
 
 // Result of a full editor → composer run. Returned by produceDraft so
@@ -196,7 +225,7 @@ export async function produceDraft(
     systemPromptText: editorPrompt.text,
   });
 
-  const cutoff = new Date(Date.now() - COMPOSE_INGEST_WINDOW_MS);
+  const cutoff = new Date(Date.now() - COMPOSE_STORY_MAX_AGE_MS);
   const rows = await db
     .selectFrom("story")
     .leftJoin("theme", "theme.id", "story.theme_id")
@@ -223,6 +252,12 @@ export async function produceDraft(
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
     .where("story.ingested_at", ">=", cutoff)
+    .where((eb) =>
+      eb.or([
+        eb("story.published_at", "is", null),
+        eb("story.published_at", ">=", cutoff),
+      ]),
+    )
     // Wikipedia entries are editorial-curation signal, not journalism
     // we'd write about. They still ride the ingest/score/theme path so
     // their theme attachment lights up wikipedia_corroborated below;
@@ -804,6 +839,12 @@ async function loadShrugCandidates(
     .where("story_factor.kind", "=", "penalty")
     .where("story_factor.factor", "in", [...SHRUG_PENALTY_FACTORS])
     .where("story.ingested_at", ">=", cutoff)
+    .where((eb) =>
+      eb.or([
+        eb("story.published_at", "is", null),
+        eb("story.published_at", ">=", cutoff),
+      ]),
+    )
     .where("story.scored_at", "is not", null)
     .where("story.passed_gate", "=", false)
     .where("story.published_to_reader", "=", false)

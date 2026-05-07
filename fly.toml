@@ -18,6 +18,7 @@ primary_region = "ams"
   PORT = "3000"
   NODE_ENV = "production"
   BLURPADURP_PUBLIC_URL = "https://blurpadurp.fly.dev"
+  ADMIN_EMAIL = "dritory@gmail.com"
 
 # Single HTTP service handling port 80 + 443 with auto-TLS. Fly's
 # modern pattern — don't mix with [[services]], that triggers the

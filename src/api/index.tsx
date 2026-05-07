@@ -148,7 +148,7 @@ import {
 import { Privacy } from "../views/privacy.tsx";
 import { NotFoundPage, ServerErrorPage } from "../views/error-pages.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
-import { Home, type Flash } from "../views/home.tsx";
+import { Home, type Flash, type HomeViewData } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
 import { SubscribePage } from "../views/subscribe.tsx";
 import { ThemePage, type ThemeViewData } from "../views/theme.tsx";
@@ -209,8 +209,8 @@ app.get("/health", async (c) => {
 });
 
 app.get("/", async (c) => {
-  const latest = await loadLatestIssue();
-  return c.html(<Home latest={latest} flash={null} />);
+  const home = await loadHome();
+  return c.html(<Home home={home} flash={null} />);
 });
 
 app.get("/subscribe", (c) => {
@@ -299,6 +299,33 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     const ok = await discardDraft(id);
     if (!ok) return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
     return c.redirect("/admin/issues?discarded=1", 303);
+  });
+
+  app.post("/admin/review/:id/edit", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const body = await c.req.parseBody();
+    const title = String(body.title ?? "").trim();
+    const composedHtml = String(body.composed_html ?? "");
+    const composedMarkdown = String(body.composed_markdown ?? "");
+    if (title.length === 0 || composedHtml.length === 0) {
+      return c.redirect(`/admin/review/${id}?error=empty_edit`, 303);
+    }
+    const updated = await db
+      .updateTable("issue")
+      .set({
+        title,
+        composed_html: composedHtml,
+        composed_markdown: composedMarkdown,
+      })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .returning("id")
+      .executeTakeFirst();
+    if (updated === undefined) {
+      return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?edited=1`, 303);
   });
 
   app.post("/admin/review/:id/recompose", async (c) => {
@@ -880,13 +907,14 @@ app.get("/sitemap.xml", async (c) => {
 app.get("/feed.xml", async (c) => {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(FEED_MAX_ENTRIES)
     .execute();
   const entries = rows.map((r) => ({
     id: Number(r.id),
+    publishedSeq: r.published_seq,
     publishedAt: r.published_at,
     html: r.composed_html,
     isEventDriven: r.is_event_driven,
@@ -1230,10 +1258,45 @@ app.post("/webhooks/resend", async (c) => {
 
 // --- data loaders ---
 
+// Compose the home-page state. If the most recent issue is older than
+// `home.staleness_threshold_days`, the front page goes quiet — see
+// migration 042. Returns the surrogate id + public seq of the
+// most-recent issue so the silence panel can deep-link it.
+async function loadHome(): Promise<HomeViewData> {
+  const latest = await loadLatestIssue();
+  if (latest === null) return { kind: "empty" };
+
+  const thresholdDays = await loadHomeStalenessThresholdDays();
+  const ageMs = Date.now() - latest.publishedAt.getTime();
+  if (ageMs > thresholdDays * 24 * 3600_000) {
+    return {
+      kind: "silent",
+      lastIssue: {
+        id: latest.id,
+        publishedSeq: latest.publishedSeq,
+        publishedAt: latest.publishedAt,
+        title: latest.title,
+      },
+    };
+  }
+  return { kind: "issue", issue: latest };
+}
+
+async function loadHomeStalenessThresholdDays(): Promise<number> {
+  const row = await db
+    .selectFrom("config")
+    .select("value")
+    .where("key", "=", "home.staleness_threshold_days")
+    .executeTakeFirst();
+  if (row === undefined) return 8;
+  const n = typeof row.value === "number" ? row.value : Number(row.value);
+  return Number.isFinite(n) && n > 0 ? n : 8;
+}
+
 async function loadLatestIssue(): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(1)
@@ -1241,6 +1304,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
   if (!row) return null;
   return {
     id: Number(row.id),
+    publishedSeq: row.published_seq,
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
     title: row.title,
@@ -1251,13 +1315,14 @@ async function loadLatestIssue(): Promise<IssueView | null> {
 async function loadIssue(id: number): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
     .where("id", "=", id)
     .where("is_draft", "=", false)
     .executeTakeFirst();
   if (!row) return null;
   return {
     id: Number(row.id),
+    publishedSeq: row.published_seq,
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
     title: row.title,
@@ -1731,7 +1796,13 @@ async function loadSchedulerData(
 
     const lastAttemptRow = await db
       .selectFrom("pipeline_run")
-      .select(["started_at", "status", "error"])
+      .select([
+        "started_at",
+        "status",
+        "error",
+        "progress_done",
+        "progress_total",
+      ])
       .where("stage", "=", job.stage)
       .orderBy("started_at", "desc")
       .limit(1)
@@ -1767,6 +1838,14 @@ async function loadSchedulerData(
       nextDueAt,
       lockHeldUntil: lockMap.get(job.stage) ?? null,
       forceQueued: forceSet.has(job.stage),
+      progressDone:
+        lastAttemptRow?.status === "running"
+          ? (lastAttemptRow.progress_done ?? null)
+          : null,
+      progressTotal:
+        lastAttemptRow?.status === "running"
+          ? (lastAttemptRow.progress_total ?? null)
+          : null,
     });
   }
   return { rows: out, flash };
@@ -3255,18 +3334,20 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
   // weekly cadence puts an upper bound around ~50 issues/year, so we
   // skip the ANY/&& array indexing dance for now.
   const storyIdSet = new Set(stories.map((s) => Number(s.id)));
-  const issueOf = new Map<number, number>();
+  const issueOf = new Map<number, { id: number; seq: number | null }>();
   if (storyIdSet.size > 0) {
     const issueRows = await db
       .selectFrom("issue")
-      .select(["id", "story_ids"])
+      .select(["id", "published_seq", "story_ids"])
       .where("is_draft", "=", false)
       .orderBy("published_at", "desc")
       .execute();
     for (const iss of issueRows) {
       for (const sid of iss.story_ids ?? []) {
         const n = Number(sid);
-        if (storyIdSet.has(n) && !issueOf.has(n)) issueOf.set(n, Number(iss.id));
+        if (storyIdSet.has(n) && !issueOf.has(n)) {
+          issueOf.set(n, { id: Number(iss.id), seq: iss.published_seq });
+        }
       }
     }
   }
@@ -3280,6 +3361,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
     nStoriesPublished: theme.n_stories_published,
     stories: stories.map((s) => {
       const r = s.raw_output as { summary?: string; one_line_summary?: string } | null;
+      const issue = issueOf.get(Number(s.id));
       return {
         id: Number(s.id),
         title: s.title,
@@ -3287,7 +3369,8 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
         publishedToReader: s.published_to_reader,
         sourceUrl: s.source_url,
         oneLiner: r?.summary ?? r?.one_line_summary ?? "",
-        issueId: issueOf.get(Number(s.id)) ?? null,
+        issueId: issue?.id ?? null,
+        issueSeq: issue?.seq ?? null,
       };
     }),
   };
@@ -3338,6 +3421,8 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       "composer_model_id",
       "story_ids",
       "composed_html",
+      "composed_markdown",
+      "title",
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
     ])
@@ -3391,6 +3476,8 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       composerPromptVersion: iss.composer_prompt_version,
       composerModelId: iss.composer_model_id,
       composedHtml: iss.composed_html,
+      composedMarkdown: iss.composed_markdown,
+      title: iss.title,
     },
     annotations: annotations.map((a) => ({
       id: Number(a.id),
@@ -3552,12 +3639,13 @@ async function loadAdminIssues(): Promise<AdminIssueRow[]> {
 async function loadArchive(): Promise<ArchiveEntry[]> {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title"])
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .execute();
   return rows.map((r) => ({
     id: Number(r.id),
+    publishedSeq: r.published_seq,
     publishedAt: r.published_at,
     isEventDriven: r.is_event_driven,
     title: r.title,
@@ -3663,6 +3751,12 @@ function parseReviewFlash(
     return { kind: "err", msg: "Note body can't be empty." };
   if (q.noted === "1") return { kind: "ok", msg: "Note added." };
   if (q.deleted_note === "1") return { kind: "ok", msg: "Note deleted." };
+  if (q.edited === "1") return { kind: "ok", msg: "Draft edits saved." };
+  if (q.error === "empty_edit")
+    return {
+      kind: "err",
+      msg: "Title and HTML body can't be empty.",
+    };
   return null;
 }
 

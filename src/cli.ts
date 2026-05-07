@@ -23,6 +23,7 @@ const SUBCOMMANDS = [
   "retention",
   "eval",
   "scheduler-tick",
+  "status",
 ] as const;
 
 type Sub = (typeof SUBCOMMANDS)[number];
@@ -113,6 +114,26 @@ async function run(sub: Sub, args: string[]): Promise<void> {
     case "scheduler-tick":
       await (await import("./scheduler.ts")).runTick();
       return;
+    case "status": {
+      const { loadStageStatus, loadAllStageStatuses, formatStageStatus } =
+        await import("./shared/pipeline-status.ts");
+      const stage = args[0];
+      if (stage !== undefined) {
+        const s = await loadStageStatus(stage);
+        console.log(formatStageStatus(s));
+        return;
+      }
+      const all = await loadAllStageStatuses();
+      if (all.length === 0) {
+        console.log("(no pipeline_run rows yet)");
+        return;
+      }
+      for (const s of all) {
+        console.log(formatStageStatus(s));
+        console.log("");
+      }
+      return;
+    }
   }
 }
 

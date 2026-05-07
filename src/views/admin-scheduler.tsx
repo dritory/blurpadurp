@@ -24,6 +24,8 @@ export interface SchedulerStageRow {
   nextDueAt: Date | null;
   lockHeldUntil: Date | null;
   forceQueued: boolean;
+  progressDone: number | null;
+  progressTotal: number | null;
 }
 
 export interface SchedulerData {
@@ -48,6 +50,9 @@ const STYLES = `
   .ok { color: #4a6b4a; font-weight: 600; }
   .warn { color: var(--flash-err); font-weight: 600; }
   .muted { color: var(--ink-soft); }
+  .sched-progress-bar { display: inline-block; width: 80px; height: 6px; background: var(--rule); border-radius: 2px; overflow: hidden; vertical-align: middle; margin-left: 6px; }
+  .sched-progress-bar > span { display: block; height: 100%; background: #4a6b4a; }
+  .sched-progress-num { font-variant-numeric: tabular-nums; }
 `;
 
 function fmtDuration(sec: number | null): string {
@@ -105,11 +110,11 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
           <tr>
             <th>Stage</th>
             <th>Interval</th>
-            <th>Enabled</th>
+            <th>Schedule</th>
             <th>Last success</th>
             <th>Last attempt</th>
             <th>Next due</th>
-            <th>Lock</th>
+            <th>Progress / lock</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -154,8 +159,11 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
                     value={r.enabled ? "0" : "1"}
                   />
                   <button type="submit" class={r.enabled ? "" : "danger"}>
-                    {r.enabled ? "on" : "off"}
+                    {r.enabled ? "Hold" : "Resume"}
                   </button>
+                  {!r.enabled ? (
+                    <span class="warn" style="margin-left: 6px;">on hold</span>
+                  ) : null}
                 </form>
               </td>
               <td class="num">
@@ -194,7 +202,21 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
               </td>
               <td class="num">
                 {r.lockHeldUntil !== null ? (
-                  <span class="warn">held</span>
+                  <>
+                    <span class="warn">held</span>
+                    {r.progressTotal !== null && r.progressTotal > 0 ? (
+                      <div style="margin-top: 4px;">
+                        <span class="sched-progress-num">
+                          {r.progressDone ?? 0}/{r.progressTotal}
+                        </span>
+                        <span class="sched-progress-bar">
+                          <span
+                            style={`width: ${Math.min(100, Math.round(((r.progressDone ?? 0) / r.progressTotal) * 100))}%`}
+                          />
+                        </span>
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
                   <span class="muted">free</span>
                 )}

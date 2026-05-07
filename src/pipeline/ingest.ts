@@ -11,6 +11,7 @@ import type {
 } from "../connectors/types.ts";
 import { db } from "../db/index.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
+import { reportProgress } from "../shared/pipeline-status.ts";
 import { extractHost, loadBlocklist, type Blocklist } from "../shared/source-blocklist.ts";
 import { classifyUrlNoise } from "../shared/url-noise.ts";
 
@@ -50,6 +51,7 @@ async function runIngest(): Promise<void> {
   let done = 0;
   let totalFetched = 0;
   let totalInserted = 0;
+  await reportProgress("ingest", 0, plan.length, true);
   for (const { conn, scope } of plan) {
     const i = ++done;
     const tag = `(${i}/${plan.length}) ${conn.name}[${scope}]`;
@@ -76,7 +78,9 @@ async function runIngest(): Promise<void> {
         console.error(`[ingest] ${tag} error capture failed: ${String(e)}`),
       );
     }
+    await reportProgress("ingest", done, plan.length);
   }
+  await reportProgress("ingest", done, plan.length, true);
   const durSec = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
     `[ingest] done · ${totalFetched} fetched, ${totalInserted} inserted across ${plan.length} source${plan.length === 1 ? "" : "s"} in ${durSec}s`,

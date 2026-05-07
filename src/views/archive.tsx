@@ -1,9 +1,10 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
-import { formatIssueDate } from "./issue.tsx";
+import { formatIssueDate, issueLabel } from "./issue.tsx";
 
 export interface ArchiveEntry {
   id: number;
+  publishedSeq: number | null;
   publishedAt: Date;
   isEventDriven: boolean;
   title: string | null;
@@ -26,7 +27,7 @@ export const Archive: FC<{ issues: ArchiveEntry[] }> = ({ issues }) => (
                 {iss.isEventDriven ? " · event-driven" : ""}
               </span>
               <span class="title">
-                {iss.title ?? `Issue #${iss.id}`}
+                {iss.title ?? issueLabel(iss)}
               </span>
             </a>
           </li>

@@ -10,6 +10,7 @@ export interface ThemeStoryRow {
   sourceUrl: string | null;
   oneLiner: string;
   issueId: number | null;
+  issueSeq: number | null;
 }
 
 export interface ThemeViewData {
@@ -48,7 +49,7 @@ export const ThemePage: FC<{ data: ThemeViewData }> = ({ data }) => (
             <span class="date">
               {s.publishedAt ? formatIssueDate(s.publishedAt) : "no date"}
               {s.publishedToReader && s.issueId !== null
-                ? ` · in issue #${s.issueId}`
+                ? ` · in issue #${s.issueSeq ?? s.issueId}`
                 : s.publishedToReader
                   ? ""
                   : " · unpublished"}

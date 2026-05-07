@@ -80,3 +80,17 @@ export async function listActiveLocks(): Promise<
   }>;
 }
 
+// True iff `stage` currently holds an unexpired lock — i.e. another
+// process is mid-run. Used by downstream stages to refuse to start
+// while a prerequisite is still in flight. Stale rows past expiry
+// don't count: a crashed run shouldn't gate the pipeline forever.
+export async function isLockHeld(stage: string): Promise<boolean> {
+  const row = await db
+    .selectFrom("pipeline_lock")
+    .select("stage_name")
+    .where("stage_name", "=", stage)
+    .where("expires_at", ">", new Date())
+    .executeTakeFirst();
+  return row !== undefined;
+}
+

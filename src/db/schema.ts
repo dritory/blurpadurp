@@ -103,6 +103,7 @@ export interface Database {
     shrug_candidates_jsonb: Jsonb | null;
     composer_input_jsonb: Jsonb | null;
     is_draft: Generated<boolean>;
+    published_seq: number | null;
   };
 
   issue_pick: {
@@ -260,6 +261,8 @@ export interface Database {
     error: string | null;
     duration_ms: number | null;
     triggered_by: Generated<string>;
+    progress_done: number | null;
+    progress_total: number | null;
   };
 
   pipeline_force_run: {
