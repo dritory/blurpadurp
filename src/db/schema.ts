@@ -264,4 +264,9 @@ export interface Database {
     progress_done: number | null;
     progress_total: number | null;
   };
+
+  pipeline_force_run: {
+    stage: string;
+    requested_at: Generated<Date>;
+  };
 }

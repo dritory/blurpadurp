@@ -131,7 +131,6 @@ import {
 import {
   getStage as getSchedulerStage,
   listStages as listSchedulerStages,
-  runWithBookkeeping,
 } from "../scheduler.ts";
 import {
   AdminEditorSandbox,
@@ -489,16 +488,18 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
     return c.redirect(`/admin/scheduler?saved=${encodeURIComponent(stage)}`, 303);
   });
 
-  // Manual trigger. Fire-and-forget — the HTTP request returns
-  // immediately, the stage runs in the background. pipeline_lock
-  // catches collisions with the scheduled tick.
-  app.post("/admin/run/:stage", (c) => {
+  // Manual trigger. Inserts a row into pipeline_force_run; the next
+  // scheduler tick (≤1h) drains it and fires the stage on the
+  // scheduler machine. We do NOT run pipeline work on the http_service
+  // — long stages outlast Fly's idle-stop and get killed mid-flight.
+  app.post("/admin/run/:stage", async (c) => {
     const stage = c.req.param("stage");
-    const job = getSchedulerStage(stage);
-    if (job === undefined) return c.text("unknown stage", 404);
-    void runWithBookkeeping(job, "manual").catch((err) => {
-      console.error(`[admin/run] ${stage} threw outside bookkeeping:`, err);
-    });
+    if (getSchedulerStage(stage) === undefined) return c.text("unknown stage", 404);
+    await db
+      .insertInto("pipeline_force_run")
+      .values({ stage })
+      .onConflict((oc) => oc.column("stage").doNothing())
+      .execute();
     return c.redirect(`/admin/scheduler?triggered=${encodeURIComponent(stage)}`, 303);
   });
 
@@ -1770,6 +1771,12 @@ async function loadSchedulerData(
     .execute();
   const lockMap = new Map(lockRows.map((r) => [r.stage_name, r.expires_at]));
 
+  const forceRows = await db
+    .selectFrom("pipeline_force_run")
+    .select("stage")
+    .execute();
+  const forceSet = new Set(forceRows.map((r) => r.stage));
+
   const now = Date.now();
   const out: SchedulerStageRow[] = [];
   for (const job of stages) {
@@ -1830,6 +1837,7 @@ async function loadSchedulerData(
       lastError: showError ? (lastAttemptRow?.error ?? null) : null,
       nextDueAt,
       lockHeldUntil: lockMap.get(job.stage) ?? null,
+      forceQueued: forceSet.has(job.stage),
       progressDone:
         lastAttemptRow?.status === "running"
           ? (lastAttemptRow.progress_done ?? null)
