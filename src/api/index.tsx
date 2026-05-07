@@ -906,13 +906,14 @@ app.get("/sitemap.xml", async (c) => {
 app.get("/feed.xml", async (c) => {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(FEED_MAX_ENTRIES)
     .execute();
   const entries = rows.map((r) => ({
     id: Number(r.id),
+    publishedSeq: r.published_seq,
     publishedAt: r.published_at,
     html: r.composed_html,
     isEventDriven: r.is_event_driven,
@@ -1259,7 +1260,7 @@ app.post("/webhooks/resend", async (c) => {
 async function loadLatestIssue(): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .limit(1)
@@ -1267,6 +1268,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
   if (!row) return null;
   return {
     id: Number(row.id),
+    publishedSeq: row.published_seq,
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
     title: row.title,
@@ -1277,13 +1279,14 @@ async function loadLatestIssue(): Promise<IssueView | null> {
 async function loadIssue(id: number): Promise<IssueView | null> {
   const row = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title", "composed_html"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
     .where("id", "=", id)
     .where("is_draft", "=", false)
     .executeTakeFirst();
   if (!row) return null;
   return {
     id: Number(row.id),
+    publishedSeq: row.published_seq,
     publishedAt: row.published_at,
     isEventDriven: row.is_event_driven,
     title: row.title,
@@ -3288,18 +3291,20 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
   // weekly cadence puts an upper bound around ~50 issues/year, so we
   // skip the ANY/&& array indexing dance for now.
   const storyIdSet = new Set(stories.map((s) => Number(s.id)));
-  const issueOf = new Map<number, number>();
+  const issueOf = new Map<number, { id: number; seq: number | null }>();
   if (storyIdSet.size > 0) {
     const issueRows = await db
       .selectFrom("issue")
-      .select(["id", "story_ids"])
+      .select(["id", "published_seq", "story_ids"])
       .where("is_draft", "=", false)
       .orderBy("published_at", "desc")
       .execute();
     for (const iss of issueRows) {
       for (const sid of iss.story_ids ?? []) {
         const n = Number(sid);
-        if (storyIdSet.has(n) && !issueOf.has(n)) issueOf.set(n, Number(iss.id));
+        if (storyIdSet.has(n) && !issueOf.has(n)) {
+          issueOf.set(n, { id: Number(iss.id), seq: iss.published_seq });
+        }
       }
     }
   }
@@ -3313,6 +3318,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
     nStoriesPublished: theme.n_stories_published,
     stories: stories.map((s) => {
       const r = s.raw_output as { summary?: string; one_line_summary?: string } | null;
+      const issue = issueOf.get(Number(s.id));
       return {
         id: Number(s.id),
         title: s.title,
@@ -3320,7 +3326,8 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
         publishedToReader: s.published_to_reader,
         sourceUrl: s.source_url,
         oneLiner: r?.summary ?? r?.one_line_summary ?? "",
-        issueId: issueOf.get(Number(s.id)) ?? null,
+        issueId: issue?.id ?? null,
+        issueSeq: issue?.seq ?? null,
       };
     }),
   };
@@ -3589,12 +3596,13 @@ async function loadAdminIssues(): Promise<AdminIssueRow[]> {
 async function loadArchive(): Promise<ArchiveEntry[]> {
   const rows = await db
     .selectFrom("issue")
-    .select(["id", "published_at", "is_event_driven", "title"])
+    .select(["id", "published_seq", "published_at", "is_event_driven", "title"])
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .execute();
   return rows.map((r) => ({
     id: Number(r.id),
+    publishedSeq: r.published_seq,
     publishedAt: r.published_at,
     isEventDriven: r.is_event_driven,
     title: r.title,

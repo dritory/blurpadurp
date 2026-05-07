@@ -31,9 +31,22 @@ import { buildPickRows, produceDraft } from "./compose.ts";
 
 export async function publishDraft(issueId: number): Promise<boolean> {
   return db.transaction().execute(async (tx) => {
+    // Allocate the public issue number from max+1 inside the same
+    // transaction. Doing this in SQL (not as a JS read-then-write) keeps
+    // it race-safe under the unique partial index on published_seq:
+    // two simultaneous publishes would collide on the index, the loser
+    // retries. Compose runs weekly so contention is theoretical, but
+    // the unique index is cheap insurance.
     const updated = await tx
       .updateTable("issue")
-      .set({ is_draft: false, published_at: new Date() })
+      .set({
+        is_draft: false,
+        published_at: new Date(),
+        published_seq: sql<number>`coalesce(
+          (SELECT max(published_seq) FROM issue WHERE published_seq IS NOT NULL),
+          0
+        ) + 1`,
+      })
       .where("id", "=", issueId)
       .where("is_draft", "=", true)
       .returning("id")

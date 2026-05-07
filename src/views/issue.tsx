@@ -3,10 +3,18 @@ import { Layout } from "./layout.tsx";
 
 export interface IssueView {
   id: number;
+  publishedSeq: number | null;
   publishedAt: Date;
   isEventDriven: boolean;
   title: string | null;
   html: string;
+}
+
+// Reader-facing issue label. `published_seq` is gap-free (drafts don't
+// burn numbers); fall back to the surrogate id only for issues
+// pre-dating migration 041 that somehow weren't backfilled.
+export function issueLabel(issue: { id: number; publishedSeq: number | null }): string {
+  return `Issue #${issue.publishedSeq ?? issue.id}`;
 }
 
 export function formatIssueDate(d: Date): string {
@@ -20,7 +28,7 @@ export function formatIssueDate(d: Date): string {
 export const IssueBody: FC<{ issue: IssueView }> = ({ issue }) => (
   <article class="issue-body">
     <div class="issue-meta">
-      Issue #{issue.id} · {formatIssueDate(issue.publishedAt)}
+      {issueLabel(issue)} · {formatIssueDate(issue.publishedAt)}
       {issue.isEventDriven ? " · event-driven" : ""}
     </div>
     {issue.title !== null ? (
@@ -32,7 +40,7 @@ export const IssueBody: FC<{ issue: IssueView }> = ({ issue }) => (
 
 export const IssuePage: FC<{ issue: IssueView }> = ({ issue }) => (
   <Layout
-    title={`${issue.title ?? `Issue #${issue.id}`} — Blurpadurp`}
+    title={`${issue.title ?? issueLabel(issue)} — Blurpadurp`}
     nav="archive"
   >
     <IssueBody issue={issue} />

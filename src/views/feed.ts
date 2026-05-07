@@ -4,6 +4,7 @@
 
 interface FeedEntry {
   id: number;
+  publishedSeq: number | null;
   publishedAt: Date;
   html: string;
   isEventDriven: boolean;
@@ -20,10 +21,13 @@ function xmlEscape(s: string): string {
 }
 
 function entry(e: FeedEntry, baseUrl: string): string {
+  // URL stays on the surrogate id to preserve every existing link;
+  // only the human-readable number swaps to published_seq.
   const url = `${baseUrl}/issue/${e.id}`;
+  const num = e.publishedSeq ?? e.id;
   const fallback = e.isEventDriven
-    ? `Issue #${e.id} — event-driven`
-    : `Issue #${e.id}`;
+    ? `Issue #${num} — event-driven`
+    : `Issue #${num}`;
   const title = e.title ?? fallback;
   return `  <entry>
     <id>${xmlEscape(url)}</id>
