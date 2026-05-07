@@ -260,5 +260,7 @@ export interface Database {
     error: string | null;
     duration_ms: number | null;
     triggered_by: Generated<string>;
+    progress_done: number | null;
+    progress_total: number | null;
   };
 }

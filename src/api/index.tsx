@@ -1751,7 +1751,13 @@ async function loadSchedulerData(
 
     const lastAttemptRow = await db
       .selectFrom("pipeline_run")
-      .select(["started_at", "status", "error"])
+      .select([
+        "started_at",
+        "status",
+        "error",
+        "progress_done",
+        "progress_total",
+      ])
       .where("stage", "=", job.stage)
       .orderBy("started_at", "desc")
       .limit(1)
@@ -1786,6 +1792,14 @@ async function loadSchedulerData(
       lastError: showError ? (lastAttemptRow?.error ?? null) : null,
       nextDueAt,
       lockHeldUntil: lockMap.get(job.stage) ?? null,
+      progressDone:
+        lastAttemptRow?.status === "running"
+          ? (lastAttemptRow.progress_done ?? null)
+          : null,
+      progressTotal:
+        lastAttemptRow?.status === "running"
+          ? (lastAttemptRow.progress_total ?? null)
+          : null,
     });
   }
   return { rows: out, flash };

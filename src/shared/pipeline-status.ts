@@ -20,6 +20,51 @@ export interface StageStatus {
   last_error: string | null;
   last_triggered_by: string | null;
   last_success_at: Date | null;
+  progress_done: number | null;
+  progress_total: number | null;
+}
+
+// Minimum gap between progress writes per stage. Score with concurrency=4
+// can finish a story every ~250ms; without throttling we'd hammer the DB
+// with redundant updates that the operator would never see at a faster
+// cadence anyway.
+const PROGRESS_THROTTLE_MS = 1500;
+const lastWriteAt = new Map<string, number>();
+
+// Update the live `progress_done`/`progress_total` of the latest still-
+// running pipeline_run row for `stage`. No-op if no such row exists
+// (e.g. when a stage is invoked outside runWithBookkeeping, like a
+// direct CLI call without scheduler bookkeeping). `force=true` bypasses
+// the throttle — use it for "first" and "final" calls so the start
+// and end states are always visible.
+export async function reportProgress(
+  stage: string,
+  done: number,
+  total: number,
+  force = false,
+): Promise<void> {
+  const now = Date.now();
+  if (!force) {
+    const prev = lastWriteAt.get(stage);
+    if (prev !== undefined && now - prev < PROGRESS_THROTTLE_MS) return;
+  }
+  lastWriteAt.set(stage, now);
+
+  const row = await db
+    .selectFrom("pipeline_run")
+    .select("id")
+    .where("stage", "=", stage)
+    .where("status", "=", "running")
+    .orderBy("id", "desc")
+    .limit(1)
+    .executeTakeFirst();
+  if (row === undefined) return;
+
+  await db
+    .updateTable("pipeline_run")
+    .set({ progress_done: done, progress_total: total })
+    .where("id", "=", row.id)
+    .execute();
 }
 
 export async function loadStageStatus(stage: string): Promise<StageStatus> {
@@ -40,6 +85,8 @@ export async function loadStageStatus(stage: string): Promise<StageStatus> {
       "duration_ms",
       "error",
       "triggered_by",
+      "progress_done",
+      "progress_total",
     ])
     .where("stage", "=", stage)
     .orderBy("started_at", "desc")
@@ -66,6 +113,8 @@ export async function loadStageStatus(stage: string): Promise<StageStatus> {
     last_error: lastAttempt?.error ?? null,
     last_triggered_by: lastAttempt?.triggered_by ?? null,
     last_success_at: lastSuccess?.completed_at ?? null,
+    progress_done: lastAttempt?.progress_done ?? null,
+    progress_total: lastAttempt?.progress_total ?? null,
   };
 }
 
@@ -85,6 +134,10 @@ export function formatStageStatus(s: StageStatus): string {
   lines.push(`running:      ${s.running ? "yes" : "no"}`);
   if (s.running && s.lock_expires_at !== null) {
     lines.push(`lock expires: ${s.lock_expires_at.toISOString()}`);
+  }
+  if (s.progress_total !== null && s.progress_total > 0) {
+    const pct = Math.round(((s.progress_done ?? 0) / s.progress_total) * 100);
+    lines.push(`progress:     ${s.progress_done ?? 0}/${s.progress_total} (${pct}%)`);
   }
   lines.push(
     `last attempt: ${s.last_started_at?.toISOString() ?? "(never)"} ` +

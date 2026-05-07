@@ -19,6 +19,7 @@ import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
 import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
+import { reportProgress } from "../shared/pipeline-status.ts";
 import type {
   ScorerInput,
   ScorerOutput,
@@ -159,6 +160,7 @@ async function runScore(): Promise<void> {
   let fail = 0;
 
   console.log(`[score] starting with concurrency=${SCORING_CONCURRENCY}`);
+  await reportProgress("score", 0, total, true);
 
   const abort: AbortFlag = { stopped: false, reason: null };
   let aborted = 0;
@@ -185,6 +187,7 @@ async function runScore(): Promise<void> {
       console.log(
         `[score] ${done}/${total} id=${story.id} ${outcome} (${elapsed}s, total ${totalElapsed}s)`,
       );
+      await reportProgress("score", done, total);
     } catch (err) {
       if (isOutOfFundsError(err)) {
         abort.stopped = true;
@@ -199,13 +202,16 @@ async function runScore(): Promise<void> {
           err,
         );
         await notifyScorerHalted(abort.reason, err);
+        await reportProgress("score", done, total, true);
         return;
       }
       fail++;
       done++;
       console.error(`[score] ${done}/${total} id=${story.id} failed:`, err);
+      await reportProgress("score", done, total);
     }
   });
+  await reportProgress("score", done, total, true);
   if (abort.stopped) {
     console.log(
       `[score] aborted: ${abort.reason}. ok=${ok} fail=${fail} skipped=${aborted}`,
