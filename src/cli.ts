@@ -22,6 +22,7 @@ const SUBCOMMANDS = [
   "reset-publish",
   "retention",
   "eval",
+  "scheduler-tick",
 ] as const;
 
 type Sub = (typeof SUBCOMMANDS)[number];
@@ -108,6 +109,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       return;
     case "eval":
       await (await import("./pipeline/eval.ts")).evalSummary();
+      return;
+    case "scheduler-tick":
+      await (await import("./scheduler.ts")).runTick();
       return;
   }
 }

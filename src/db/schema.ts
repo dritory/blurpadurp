@@ -243,4 +243,22 @@ export interface Database {
     reason: string | null;
     blocked_at: Created;
   };
+
+  pipeline_schedule: {
+    stage: string;
+    interval_sec: number;
+    enabled: Generated<boolean>;
+    updated_at: Generated<Date>;
+  };
+
+  pipeline_run: {
+    id: Id;
+    stage: string;
+    started_at: Generated<Date>;
+    completed_at: Date | null;
+    status: Generated<string>;
+    error: string | null;
+    duration_ms: number | null;
+    triggered_by: Generated<string>;
+  };
 }
