@@ -18,7 +18,7 @@ import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
-import { withLock } from "../shared/pipeline-lock.ts";
+import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import type {
   ScorerInput,
   ScorerOutput,
@@ -50,6 +50,10 @@ type ConfigMap = {
 };
 
 export async function score(): Promise<void> {
+  if (await isLockHeld("ingest")) {
+    console.log("[score] ingest is still running, skipping");
+    return;
+  }
   await withLock("score", 60 * 60_000, runScore);
 }
 
