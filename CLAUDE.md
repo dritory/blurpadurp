@@ -94,6 +94,18 @@ if they reappear it's a tuning regression):
   source articles. Source-fidelity guard in the prompt.
 - Reader-guide openers: "Let's start with…," "We'll cover…"
 - Source citations as plain text instead of markdown links.
+- Stacked-clause sentences past the 30-word cap — three
+  threads pretending to be one with em-dashes ("At $126,
+  the standoff has fractured OPEC — the UAE quit after 59
+  years — triggered a food warning…").
+- Bare acronyms with no gloss (VRA, ICC, IRGC, EMA, OPEC).
+  Universal acronyms only — US, UK, EU, NATO, AI, FBI, GDP —
+  go bare; everything else gets a six-word gloss on first use.
+- Telegraphic headline fragments ("Third attempt, charges
+  filed, officer shot."). Brief is prose, not chyron.
+- Detail-before-meaning leads: opening with what happened
+  before what it means. The first sentence carries
+  significance; the second carries evidence.
 
 **Observed wins to preserve:**
 
