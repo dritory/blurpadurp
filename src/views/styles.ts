@@ -144,10 +144,8 @@ em { color: var(--ink-soft); }
 .issue-body p > a:hover { color: var(--ink); }
 .issue-body p strong a { font-size: inherit; color: var(--accent); }
 
-/* Shrug section — last H2 plus everything after it — muted to read as
-   dismissal, not news. Composer always emits shrug last. */
-.issue-body h2:last-of-type,
-.issue-body h2:last-of-type ~ p { color: var(--ink-soft); }
+/* Shrug section reads as dismissal via the composer's wording and the
+   shrug-tag label, not via colour. Body text stays full-strength. */
 
 @media (max-width: 640px) {
   .issue-title { font-size: 32px; margin-bottom: 22px; }
