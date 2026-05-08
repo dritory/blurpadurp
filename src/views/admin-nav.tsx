@@ -28,6 +28,8 @@ export type AdminNavKey =
   | "costs"
   | "config"
   | "scheduler"
+  | "path-filters"
+  | "title-filters"
   | "review"
   | null;
 
@@ -37,6 +39,8 @@ const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: strin
   { key: "explore", href: "/admin/explore", label: "Explore" },
   { key: "themes", href: "/admin/themes", label: "Themes" },
   { key: "sources", href: "/admin/sources", label: "Sources" },
+  { key: "path-filters", href: "/admin/path-filters", label: "Path filters" },
+  { key: "title-filters", href: "/admin/title-filters", label: "Title filters" },
   { key: "fixtures", href: "/admin/fixtures", label: "Fixtures" },
   { key: "eval", href: "/admin/eval", label: "Eval" },
   { key: "status", href: "/admin/status", label: "Status" },
