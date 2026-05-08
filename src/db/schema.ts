@@ -41,6 +41,7 @@ export interface Database {
     source_event_id: string | null;
     source_url: string | null;
     noise_pattern: string | null;
+    noise_title_pattern: string | null;
     title: string;
     summary: string | null;
     published_at: Date | null;
@@ -268,5 +269,21 @@ export interface Database {
   pipeline_force_run: {
     stage: string;
     requested_at: Generated<Date>;
+  };
+
+  url_path_filter: {
+    pattern: string;
+    mode: Generated<string>;
+    hits: Generated<number>;
+    note: string | null;
+    created_at: Created;
+  };
+
+  title_regex_filter: {
+    pattern: string;
+    mode: Generated<string>;
+    hits: Generated<number>;
+    note: string | null;
+    created_at: Created;
   };
 }

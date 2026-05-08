@@ -13,7 +13,18 @@ import { db } from "../db/index.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { reportProgress } from "../shared/pipeline-status.ts";
 import { extractHost, loadBlocklist, type Blocklist } from "../shared/source-blocklist.ts";
-import { classifyUrlNoise } from "../shared/url-noise.ts";
+import {
+  classifyUrl,
+  loadUrlPathFilters,
+  recordFilterHits,
+  type UrlPathFilter,
+} from "../shared/url-noise.ts";
+import {
+  classifyTitle,
+  loadTitleRegexFilters,
+  recordTitleFilterHits,
+  type TitleRegexFilter,
+} from "../shared/title-noise.ts";
 
 const DEFAULT_SCOPE = "global";
 
@@ -27,12 +38,28 @@ async function runIngest(): Promise<void> {
     return;
   }
 
-  // Load the host blocklist once for the whole run — the cost of one
-  // SELECT outweighs threading state through every connector.
+  // Load the host blocklist + url path filters once for the whole run
+  // — cheap up-front cost vs threading state through every connector.
+  // Filters are a snapshot; admin edits take effect on the next run.
   const blocklist = await loadBlocklist();
   if (blocklist.size > 0) {
     console.log(`[ingest] ${blocklist.size} host(s) on blocklist`);
   }
+  const pathFilters = await loadUrlPathFilters();
+  if (pathFilters.length > 0) {
+    const blockN = pathFilters.filter((f) => f.mode === "block").length;
+    const tagN = pathFilters.length - blockN;
+    console.log(`[ingest] ${blockN} block + ${tagN} tag path filter(s)`);
+  }
+  const titleFilters = await loadTitleRegexFilters();
+  if (titleFilters.length > 0) {
+    const blockN = titleFilters.filter((f) => f.mode === "block").length;
+    const tagN = titleFilters.length - blockN;
+    console.log(`[ingest] ${blockN} block + ${tagN} tag title regex(es)`);
+  }
+  // Aggregate hits across connectors; written back at end of run.
+  const filterHits = new Map<string, number>();
+  const titleHits = new Map<string, number>();
 
   // Pre-compute every (connector, scope) pair so the progress counter is
   // meaningful — scopes() may itself be async (RSS has ~15 feeds).
@@ -58,16 +85,24 @@ async function runIngest(): Promise<void> {
     console.log(`[ingest] ${tag} pulling…`);
     const t0 = Date.now();
     try {
-      const { fetched, inserted, blocked } = await runConnector(
-        conn,
-        scope,
-        blocklist,
-      );
+      const { fetched, inserted, blocked, blockedByPath, blockedByTitle, tagged } =
+        await runConnector(
+          conn,
+          scope,
+          blocklist,
+          pathFilters,
+          titleFilters,
+          filterHits,
+          titleHits,
+        );
       totalFetched += fetched;
       totalInserted += inserted;
-      const blockSuffix = blocked > 0 ? ` blocked=${blocked}` : "";
+      const blockSuffix = blocked > 0 ? ` blocked_host=${blocked}` : "";
+      const pathSuffix = blockedByPath > 0 ? ` blocked_path=${blockedByPath}` : "";
+      const titleSuffix = blockedByTitle > 0 ? ` blocked_title=${blockedByTitle}` : "";
+      const tagSuffix = tagged > 0 ? ` tagged=${tagged}` : "";
       console.log(
-        `[ingest] ${tag} fetched=${fetched} inserted=${inserted}${blockSuffix} (${Date.now() - t0}ms)`,
+        `[ingest] ${tag} fetched=${fetched} inserted=${inserted}${blockSuffix}${pathSuffix}${titleSuffix}${tagSuffix} (${Date.now() - t0}ms)`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -81,6 +116,8 @@ async function runIngest(): Promise<void> {
     await reportProgress("ingest", done, plan.length);
   }
   await reportProgress("ingest", done, plan.length, true);
+  await recordFilterHits(filterHits);
+  await recordTitleFilterHits(titleHits);
   const durSec = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
     `[ingest] done · ${totalFetched} fetched, ${totalInserted} inserted across ${plan.length} source${plan.length === 1 ? "" : "s"} in ${durSec}s`,
@@ -91,25 +128,94 @@ async function runConnector(
   conn: Connector,
   scope: string,
   blocklist: Blocklist,
-): Promise<{ fetched: number; inserted: number; blocked: number }> {
+  pathFilters: readonly UrlPathFilter[],
+  titleFilters: readonly TitleRegexFilter[],
+  filterHits: Map<string, number>,
+  titleHits: Map<string, number>,
+): Promise<{
+  fetched: number;
+  inserted: number;
+  blocked: number;
+  blockedByPath: number;
+  blockedByTitle: number;
+  tagged: number;
+}> {
   const cursor = await loadCursor(conn.name, scope);
   const raws = await conn.fetchSince(cursor);
   const normalized = raws.map((r) => conn.normalize(r));
-  // Drop blocklisted hosts before upsert. Hard filter — no row written,
-  // so no embedding/scoring cost. Items without a parseable host fall
-  // through (extractHost returns null → not blocked).
+
+  // Single classification pass per item:
+  //   - blocklisted host        → drop, no embedding/scoring cost
+  //   - block-mode path match   → drop
+  //   - block-mode title match  → drop
+  //   - tag-mode match (either) → persist with the matching column set
+  //   - otherwise               → persist clean
+  // A story can match both a path filter and a title filter; we record
+  // each in its own column. Hits are accumulated for every match (both
+  // block and tag) and flushed back to the filter tables at run end.
   let blocked = 0;
-  const allowed = normalized.filter((n) => {
+  let blockedByPath = 0;
+  let blockedByTitle = 0;
+  let tagged = 0;
+  const allowed: Array<
+    NormalizedStoryInput & {
+      noise_pattern: string | null;
+      noise_title_pattern: string | null;
+    }
+  > = [];
+  for (const n of normalized) {
     const host = extractHost(n.source_url);
     if (host !== null && blocklist.has(host)) {
       blocked++;
-      return false;
+      continue;
     }
-    return true;
-  });
+
+    let pathPattern: string | null = null;
+    const pathMatch = classifyUrl(n.source_url, pathFilters);
+    if (pathMatch !== null) {
+      filterHits.set(
+        pathMatch.pattern,
+        (filterHits.get(pathMatch.pattern) ?? 0) + 1,
+      );
+      if (pathMatch.mode === "block") {
+        blockedByPath++;
+        continue;
+      }
+      pathPattern = pathMatch.pattern;
+    }
+
+    let titlePattern: string | null = null;
+    const titleMatch = classifyTitle(n.title, titleFilters);
+    if (titleMatch !== null) {
+      titleHits.set(
+        titleMatch.pattern,
+        (titleHits.get(titleMatch.pattern) ?? 0) + 1,
+      );
+      if (titleMatch.mode === "block") {
+        blockedByTitle++;
+        continue;
+      }
+      titlePattern = titleMatch.pattern;
+    }
+
+    if (pathPattern !== null || titlePattern !== null) tagged++;
+    allowed.push({
+      ...n,
+      noise_pattern: pathPattern,
+      noise_title_pattern: titlePattern,
+    });
+  }
+
   const inserted = await upsertStories(allowed);
   await saveCursor(conn.name, scope, new Date());
-  return { fetched: raws.length, inserted, blocked };
+  return {
+    fetched: raws.length,
+    inserted,
+    blocked,
+    blockedByPath,
+    blockedByTitle,
+    tagged,
+  };
 }
 
 async function loadCursor(
@@ -191,14 +297,22 @@ async function recordRunError(
     .execute();
 }
 
-async function upsertStories(items: NormalizedStoryInput[]): Promise<number> {
+async function upsertStories(
+  items: Array<
+    NormalizedStoryInput & {
+      noise_pattern: string | null;
+      noise_title_pattern: string | null;
+    }
+  >,
+): Promise<number> {
   const rows = items
     .filter((n) => n.source_event_id !== null && n.source_event_id !== "")
     .map((n) => ({
       source_name: n.source_name,
       source_event_id: n.source_event_id,
       source_url: n.source_url,
-      noise_pattern: classifyUrlNoise(n.source_url),
+      noise_pattern: n.noise_pattern,
+      noise_title_pattern: n.noise_title_pattern,
       additional_source_urls: n.additional_source_urls ?? [],
       title: n.title,
       summary: n.summary,

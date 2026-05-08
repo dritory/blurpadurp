@@ -124,6 +124,17 @@ import {
   type SourcesData,
 } from "../views/admin-sources.tsx";
 import {
+  AdminPathFilters,
+  type PathFiltersData,
+  type PathFilterRow,
+} from "../views/admin-path-filters.tsx";
+import {
+  AdminTitleFilters,
+  type TitleFiltersData,
+  type TitleFilterRow,
+} from "../views/admin-title-filters.tsx";
+import { validateTitleRegex } from "../shared/title-noise.ts";
+import {
   AdminScheduler,
   type SchedulerData,
   type SchedulerStageRow,
@@ -706,6 +717,174 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .where("host", "=", host)
       .execute();
     return c.redirect(`/admin/sources?unblocked=${encodeURIComponent(host)}`, 303);
+  });
+
+  app.get("/admin/path-filters", async (c) => {
+    const q = c.req.query();
+    const flash =
+      q.added || q.removed || q.toggled || q.error
+        ? {
+            added: q.added,
+            removed: q.removed,
+            toggled: q.toggled,
+            error: q.error,
+          }
+        : null;
+    const data = await loadPathFiltersData(flash);
+    return c.html(<AdminPathFilters d={data} />);
+  });
+
+  app.post("/admin/path-filters/add", async (c) => {
+    const body = await c.req.parseBody();
+    const pattern = normalizePathPattern(String(body.pattern ?? ""));
+    const mode = String(body.mode ?? "block") === "tag" ? "tag" : "block";
+    const note = String(body.note ?? "").trim().slice(0, 400) || null;
+    if (pattern === null) {
+      return c.redirect(
+        "/admin/path-filters?error=" + encodeURIComponent("pattern required"),
+        303,
+      );
+    }
+    try {
+      await db
+        .insertInto("url_path_filter")
+        .values({ pattern, mode, note })
+        .execute();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.redirect(
+        "/admin/path-filters?error=" + encodeURIComponent(msg.slice(0, 200)),
+        303,
+      );
+    }
+    return c.redirect(
+      "/admin/path-filters?added=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.post("/admin/path-filters/toggle", async (c) => {
+    const body = await c.req.parseBody();
+    const pattern = String(body.pattern ?? "");
+    const row = await db
+      .selectFrom("url_path_filter")
+      .select(["mode"])
+      .where("pattern", "=", pattern)
+      .executeTakeFirst();
+    if (!row) return c.redirect("/admin/path-filters", 303);
+    const next = row.mode === "block" ? "tag" : "block";
+    await db
+      .updateTable("url_path_filter")
+      .set({ mode: next })
+      .where("pattern", "=", pattern)
+      .execute();
+    return c.redirect(
+      "/admin/path-filters?toggled=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.post("/admin/path-filters/delete", async (c) => {
+    const body = await c.req.parseBody();
+    const pattern = String(body.pattern ?? "");
+    await db
+      .deleteFrom("url_path_filter")
+      .where("pattern", "=", pattern)
+      .execute();
+    return c.redirect(
+      "/admin/path-filters?removed=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.get("/admin/title-filters", async (c) => {
+    const q = c.req.query();
+    const flash =
+      q.added || q.removed || q.toggled || q.error
+        ? {
+            added: q.added,
+            removed: q.removed,
+            toggled: q.toggled,
+            error: q.error,
+          }
+        : null;
+    const data = await loadTitleFiltersData(flash);
+    return c.html(<AdminTitleFilters d={data} />);
+  });
+
+  app.post("/admin/title-filters/add", async (c) => {
+    const body = await c.req.parseBody();
+    // Title regex is opaque user input — preserve case (regex flags
+    // already force `i`-mode at compile time) and only trim outer
+    // whitespace. Empty after trim → reject.
+    const pattern = String(body.pattern ?? "").trim();
+    const mode = String(body.mode ?? "block") === "tag" ? "tag" : "block";
+    const note = String(body.note ?? "").trim().slice(0, 400) || null;
+    if (pattern.length === 0 || pattern.length > 500) {
+      return c.redirect(
+        "/admin/title-filters?error=" +
+          encodeURIComponent("pattern must be 1–500 chars"),
+        303,
+      );
+    }
+    const v = validateTitleRegex(pattern);
+    if (!v.ok) {
+      return c.redirect(
+        "/admin/title-filters?error=" +
+          encodeURIComponent("invalid regex: " + v.error),
+        303,
+      );
+    }
+    try {
+      await db
+        .insertInto("title_regex_filter")
+        .values({ pattern, mode, note })
+        .execute();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.redirect(
+        "/admin/title-filters?error=" + encodeURIComponent(msg.slice(0, 200)),
+        303,
+      );
+    }
+    return c.redirect(
+      "/admin/title-filters?added=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.post("/admin/title-filters/toggle", async (c) => {
+    const body = await c.req.parseBody();
+    const pattern = String(body.pattern ?? "");
+    const row = await db
+      .selectFrom("title_regex_filter")
+      .select(["mode"])
+      .where("pattern", "=", pattern)
+      .executeTakeFirst();
+    if (!row) return c.redirect("/admin/title-filters", 303);
+    const next = row.mode === "block" ? "tag" : "block";
+    await db
+      .updateTable("title_regex_filter")
+      .set({ mode: next })
+      .where("pattern", "=", pattern)
+      .execute();
+    return c.redirect(
+      "/admin/title-filters?toggled=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.post("/admin/title-filters/delete", async (c) => {
+    const body = await c.req.parseBody();
+    const pattern = String(body.pattern ?? "");
+    await db
+      .deleteFrom("title_regex_filter")
+      .where("pattern", "=", pattern)
+      .execute();
+    return c.redirect(
+      "/admin/title-filters?removed=" + encodeURIComponent(pattern),
+      303,
+    );
   });
 
   app.get("/admin/eval", async (c) => {
@@ -1753,6 +1932,102 @@ function parseStoryFilter(q: Record<string, string>): StoryFilter {
         ? maxComposite
         : undefined,
   };
+}
+
+function normalizePathPattern(raw: string): string | null {
+  // Lowercased, leading/trailing slashes preserved if present, and a
+  // hard length cap to keep the table readable. Empty after trim → null.
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 200) return null;
+  return trimmed;
+}
+
+async function loadPathFiltersData(
+  flash: PathFiltersData["flash"],
+): Promise<PathFiltersData> {
+  const filterRows = await db
+    .selectFrom("url_path_filter")
+    .select(["pattern", "mode", "hits", "note", "created_at"])
+    .orderBy("mode", "asc")
+    .orderBy("pattern", "asc")
+    .execute();
+
+  // Live counts: how many persisted stories currently match each
+  // tag-mode pattern. Useful for spot-checking false positives before
+  // promoting to block. Block-mode rows always read 0 because those
+  // stories were dropped at ingest.
+  const tagPatterns = filterRows
+    .filter((r) => r.mode === "tag")
+    .map((r) => r.pattern);
+  const liveCountMap = new Map<string, number>();
+  if (tagPatterns.length > 0) {
+    const liveRows = await db
+      .selectFrom("story")
+      .select([
+        "noise_pattern",
+        sql<string>`count(*)`.as("n"),
+      ])
+      .where("noise_pattern", "in", tagPatterns)
+      .groupBy("noise_pattern")
+      .execute();
+    for (const r of liveRows) {
+      if (r.noise_pattern !== null) liveCountMap.set(r.noise_pattern, Number(r.n));
+    }
+  }
+
+  const rows: PathFilterRow[] = filterRows.map((r) => ({
+    pattern: r.pattern,
+    mode: r.mode === "block" ? "block" : "tag",
+    hits: r.hits,
+    note: r.note,
+    createdAt: r.created_at,
+    liveStoryCount: liveCountMap.get(r.pattern) ?? 0,
+  }));
+  return { rows, flash };
+}
+
+async function loadTitleFiltersData(
+  flash: TitleFiltersData["flash"],
+): Promise<TitleFiltersData> {
+  const filterRows = await db
+    .selectFrom("title_regex_filter")
+    .select(["pattern", "mode", "hits", "note", "created_at"])
+    .orderBy("mode", "asc")
+    .orderBy("pattern", "asc")
+    .execute();
+
+  // Live counts only for tag-mode rows (block-mode stories were
+  // dropped at ingest, so noise_title_pattern is never set for them).
+  const tagPatterns = filterRows
+    .filter((r) => r.mode === "tag")
+    .map((r) => r.pattern);
+  const liveCountMap = new Map<string, number>();
+  if (tagPatterns.length > 0) {
+    const liveRows = await db
+      .selectFrom("story")
+      .select([
+        "noise_title_pattern",
+        sql<string>`count(*)`.as("n"),
+      ])
+      .where("noise_title_pattern", "in", tagPatterns)
+      .groupBy("noise_title_pattern")
+      .execute();
+    for (const r of liveRows) {
+      if (r.noise_title_pattern !== null) {
+        liveCountMap.set(r.noise_title_pattern, Number(r.n));
+      }
+    }
+  }
+
+  const rows: TitleFilterRow[] = filterRows.map((r) => ({
+    pattern: r.pattern,
+    mode: r.mode === "block" ? "block" : "tag",
+    hits: r.hits,
+    note: r.note,
+    createdAt: r.created_at,
+    liveStoryCount: liveCountMap.get(r.pattern) ?? 0,
+  }));
+  return { rows, flash };
 }
 
 async function loadSchedulerData(

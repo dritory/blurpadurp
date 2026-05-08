@@ -19,6 +19,13 @@ import { compose } from "./pipeline/compose.ts";
 import { dispatch } from "./pipeline/dispatch.ts";
 import { retention } from "./pipeline/retention.ts";
 
+// The Fly machine schedule. Used as the lookahead window in the
+// cooldown check: a stage whose due-time would fall before the next
+// tick fires now, instead of waiting another full tick. Without this
+// rounding, a stage that's due 2 minutes after a tick gets skipped
+// and waits ~58 minutes to fire — visible as "dispatch ran late".
+const TICK_INTERVAL_MS = 60 * 60_000;
+
 export interface StageJob {
   stage: string;
   run: () => Promise<void>;
@@ -66,7 +73,10 @@ export async function runTick(): Promise<void> {
       const lastSuccess = await loadLastSuccess(job.stage);
       if (lastSuccess !== null) {
         const dueAt = lastSuccess.getTime() + cfg.interval_sec * 1000;
-        if (Date.now() < dueAt) {
+        // Fire if due before the next scheduled tick. Without this
+        // rounding, a stage whose dueAt falls a few minutes after this
+        // tick would skip and wait ~one full tick interval to fire.
+        if (dueAt > Date.now() + TICK_INTERVAL_MS) {
           const minsUntil = Math.ceil((dueAt - Date.now()) / 60_000);
           console.log(
             `[scheduler] ${job.stage}: not due (next in ~${minsUntil}m)`,
