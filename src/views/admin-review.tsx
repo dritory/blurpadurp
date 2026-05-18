@@ -12,6 +12,7 @@ export interface Annotation {
   slot: string;
   body: string;
   anchorKey: string | null;
+  reviewerName: string | null;
   createdAt: Date;
 }
 
@@ -162,6 +163,12 @@ const NoteGroup: FC<{
         <li>
           <span style="color: var(--ink-soft); font-size: 12px; font-family: var(--sans);">
             {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}Z
+            {a.reviewerName !== null ? (
+              <>
+                {" · "}
+                <strong style="color: #4a3800;">{a.reviewerName}</strong>
+              </>
+            ) : null}
           </span>
           <p class="annot-body">{a.body}</p>
           <div class="annot-meta">
@@ -229,7 +236,8 @@ export const AdminReview: FC<{
   replays: Array<{ base: string; mtime: Date }>;
   editorReplays: Array<{ base: string; mtime: Date }>;
   flash: { kind: "ok"; msg: string } | { kind: "err"; msg: string } | null;
-}> = ({ data, replays, editorReplays, flash }) => (
+  share: { url: string; reviewerName: string } | null;
+}> = ({ data, replays, editorReplays, flash, share }) => (
   <Layout title={`Review #${data.issue.id} — Blurpadurp`}>
     <style
       dangerouslySetInnerHTML={{
@@ -363,6 +371,33 @@ export const AdminReview: FC<{
           .edit-body .edit-actions button { padding: 6px 12px; background: #2b4f2b; color: #fff; border: 1px solid #2b4f2b; font: inherit; font-family: var(--sans); font-size: 13px; font-weight: 600; cursor: pointer; }
           .edit-body .edit-actions button:hover { background: #1e3b1e; }
           .edit-body .edit-hint { color: var(--ink-soft); font-family: var(--sans); font-size: 12px; }
+          .share-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+          .share-hint { color: var(--ink-soft); font-family: var(--sans); font-size: 12px; margin: 0; }
+          .share-form { display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
+          .share-form label, .share-result label {
+            font-family: var(--sans); font-size: 12px; font-weight: 600;
+            color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em;
+          }
+          .share-form input, .share-result input {
+            font: inherit; font-size: 13px; padding: 6px 10px;
+            border: 1px solid var(--rule); background: #fff; color: var(--ink);
+            box-sizing: border-box;
+          }
+          .share-result input {
+            font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+            width: 100%;
+          }
+          .share-form button {
+            padding: 6px 12px; background: #2b4f2b; color: #fff;
+            border: 1px solid #2b4f2b; font: inherit; font-family: var(--sans);
+            font-size: 13px; font-weight: 600; cursor: pointer; align-self: flex-start;
+          }
+          .share-form button:hover { background: #1e3b1e; }
+          .share-result {
+            background: #f6f4ee; border: 1px solid var(--rule); padding: 10px 12px;
+            display: flex; flex-direction: column; gap: 6px;
+          }
+          .share-result strong { color: #4a3800; }
         `,
       }}
     />
@@ -441,6 +476,54 @@ export const AdminReview: FC<{
         <span class="cli">bun run cli composer-replay {data.issue.id}</span>
       )}
     </nav>
+    {data.issue.isDraft ? (
+      <details class="edit-body" id="share" open={share !== null}>
+        <summary>Share draft with a reviewer</summary>
+        <div class="share-body">
+          <p class="share-hint">
+            Generates a signed read-only preview URL with an inline feedback
+            form. The reviewer's notes appear in the sidebar alongside your
+            own. Link expires after 14 days.
+          </p>
+          <form
+            method="post"
+            action={`/admin/review/${data.issue.id}/share`}
+            class="share-form"
+          >
+            <label for={`share-name-${data.issue.id}`}>Reviewer name</label>
+            <input
+              id={`share-name-${data.issue.id}`}
+              type="text"
+              name="reviewer_name"
+              placeholder="e.g. Jane"
+              required
+              maxLength={60}
+              value={share?.reviewerName ?? ""}
+            />
+            <button type="submit">Generate preview link</button>
+          </form>
+          {share !== null ? (
+            <div class="share-result">
+              <label for={`share-url-${data.issue.id}`}>
+                Preview link for <strong>{share.reviewerName}</strong>
+              </label>
+              <input
+                id={`share-url-${data.issue.id}`}
+                type="text"
+                readonly
+                value={share.url}
+                onfocus="this.select()"
+              />
+              <p class="share-hint">
+                Click the field to select, then copy. Each name gets a
+                distinct link; the reviewer's notes are attributed to that
+                name.
+              </p>
+            </div>
+          ) : null}
+        </div>
+      </details>
+    ) : null}
     {data.issue.isDraft ? (
       <details class="edit-body">
         <summary>Edit body directly</summary>

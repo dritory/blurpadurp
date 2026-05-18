@@ -120,6 +120,7 @@ export interface Database {
     slot: string;
     body: string;
     anchor_key: string | null;
+    reviewer_name: string | null;
     created_at: Created;
   };
 

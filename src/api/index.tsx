@@ -150,6 +150,10 @@ import {
 } from "../views/admin-editor-sandbox.tsx";
 import { selectEditorPool } from "../shared/editor-pool.ts";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
+import {
+  DraftPreview,
+  type DraftPreviewData,
+} from "../views/draft-preview.tsx";
 import { renderConfirmationEmail } from "../views/email.ts";
 import {
   ManagePage,
@@ -246,6 +250,78 @@ app.get("/issue/:id", async (c) => {
   return c.html(<IssuePage issue={issue} />);
 });
 
+// Draft preview for non-admin reviewers. Authorized via a signed
+// magic-link token (kind=draft-preview) generated from the admin
+// review page. The token carries the issue id + reviewer's display
+// name; the reviewer can read the draft and leave feedback (stored
+// in issue_annotation with reviewer_name set) but cannot publish,
+// discard, or recompose. Tokens expire after 14 days.
+app.get("/draft/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id) || id <= 0) return c.notFound();
+  const tokenStr = c.req.query("token") ?? "";
+  if (tokenStr.length === 0) return c.notFound();
+  const v = verifyToken(tokenStr);
+  if (!v.ok) return c.notFound();
+  if (
+    v.payload.kind !== "draft-preview" ||
+    v.payload.subscriptionId !== id ||
+    v.payload.reviewerName === undefined
+  ) {
+    return c.notFound();
+  }
+  const data = await loadDraftForPreview(id);
+  if (data === null) return c.notFound();
+  const flash = parseDraftFlash(c.req.query("noted"), c.req.query("error"));
+  return c.html(
+    <DraftPreview
+      data={{
+        issue: data,
+        reviewerName: v.payload.reviewerName,
+        token: tokenStr,
+        annotations: await loadAnnotations(id),
+      }}
+      flash={flash}
+    />,
+  );
+});
+
+app.post("/draft/:id/notes", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id) || id <= 0) return c.notFound();
+  const tokenStr = c.req.query("token") ?? "";
+  if (tokenStr.length === 0) return c.notFound();
+  const v = verifyToken(tokenStr);
+  if (!v.ok) return c.notFound();
+  if (
+    v.payload.kind !== "draft-preview" ||
+    v.payload.subscriptionId !== id ||
+    v.payload.reviewerName === undefined
+  ) {
+    return c.notFound();
+  }
+  const draft = await loadDraftForPreview(id);
+  if (draft === null) return c.notFound();
+  const body = await c.req.parseBody();
+  const text = String(body.body ?? "").trim();
+  const rawAnchor = String(body.anchor_key ?? "").trim();
+  const anchorKey = rawAnchor.length > 0 ? rawAnchor : null;
+  const back = `/draft/${id}?token=${encodeURIComponent(tokenStr)}`;
+  if (text.length === 0) return c.redirect(`${back}&error=empty`, 303);
+  if (text.length > 5000) return c.redirect(`${back}&error=too_long`, 303);
+  await db
+    .insertInto("issue_annotation")
+    .values({
+      issue_id: id,
+      slot: "general",
+      body: text,
+      anchor_key: anchorKey,
+      reviewer_name: v.payload.reviewerName,
+    })
+    .execute();
+  return c.redirect(`${back}&noted=1#notes`, 303);
+});
+
 app.get("/about", (c) => c.html(<About />));
 
 app.get("/privacy", (c) => c.html(<Privacy />));
@@ -286,12 +362,25 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       loadEditorReplaysForIssue(id),
     ]);
     const flash = parseReviewFlash(c.req.query());
+    const shareToken = c.req.query("share_token");
+    const shareName = c.req.query("share_name");
+    const share =
+      shareToken !== undefined &&
+      shareToken.length > 0 &&
+      shareName !== undefined &&
+      shareName.length > 0
+        ? {
+            url: `${PUBLIC_URL}/draft/${id}?token=${encodeURIComponent(shareToken)}`,
+            reviewerName: shareName,
+          }
+        : null;
     return c.html(
       <AdminReview
         data={data}
         replays={replays}
         editorReplays={editorReplays}
         flash={flash}
+        share={share}
       />,
     );
   });
@@ -337,6 +426,35 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
     }
     return c.redirect(`/admin/review/${id}?edited=1`, 303);
+  });
+
+  app.post("/admin/review/:id/share", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const body = await c.req.parseBody();
+    const reviewerName = String(body.reviewer_name ?? "").trim().slice(0, 60);
+    if (reviewerName.length === 0) {
+      return c.redirect(`/admin/review/${id}?error=empty_reviewer`, 303);
+    }
+    const iss = await db
+      .selectFrom("issue")
+      .select("is_draft")
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (iss === undefined || !iss.is_draft) {
+      return c.redirect(`/admin/review/${id}?error=not_draft_share`, 303);
+    }
+    const token = signToken({
+      kind: "draft-preview",
+      subscriptionId: id,
+      reviewerName,
+    });
+    const params = new URLSearchParams({
+      shared: "1",
+      share_token: token,
+      share_name: reviewerName,
+    });
+    return c.redirect(`/admin/review/${id}?${params.toString()}#share`, 303);
   });
 
   app.post("/admin/review/:id/recompose", async (c) => {
@@ -1507,6 +1625,40 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     title: row.title,
     html: row.composed_html,
   };
+}
+
+// Load a draft for the reviewer preview page. Only returns drafts —
+// published issues use the normal /issue/:id route. Published_at is
+// used for display only; on a draft it's set when compose ran, not
+// when the issue ships.
+async function loadDraftForPreview(
+  id: number,
+): Promise<DraftPreviewData["issue"] | null> {
+  const row = await db
+    .selectFrom("issue")
+    .select(["id", "published_at", "title", "composed_html"])
+    .where("id", "=", id)
+    .where("is_draft", "=", true)
+    .executeTakeFirst();
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    publishedAt: row.published_at,
+    title: row.title,
+    composedHtml: row.composed_html,
+  };
+}
+
+function parseDraftFlash(
+  noted: string | undefined,
+  error: string | undefined,
+): { kind: "ok"; msg: string } | { kind: "err"; msg: string } | null {
+  if (noted === "1") return { kind: "ok", msg: "Note added. Thanks." };
+  if (error === "empty")
+    return { kind: "err", msg: "Note was empty — write something first." };
+  if (error === "too_long")
+    return { kind: "err", msg: "Note is too long (5000 chars max)." };
+  return null;
 }
 
 async function listFixtures(): Promise<FixtureFile[]> {
@@ -3656,7 +3808,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
 async function loadAnnotations(issueId: number): Promise<Annotation[]> {
   const rows = await db
     .selectFrom("issue_annotation")
-    .select(["id", "slot", "body", "anchor_key", "created_at"])
+    .select(["id", "slot", "body", "anchor_key", "reviewer_name", "created_at"])
     .where("issue_id", "=", issueId)
     .orderBy("created_at", "desc")
     .execute();
@@ -3665,6 +3817,7 @@ async function loadAnnotations(issueId: number): Promise<Annotation[]> {
     slot: r.slot,
     body: r.body,
     anchorKey: r.anchor_key,
+    reviewerName: r.reviewer_name,
     createdAt: r.created_at,
   }));
 }
@@ -3737,7 +3890,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
 
   const annotations = await db
     .selectFrom("issue_annotation")
-    .select(["id", "slot", "body", "anchor_key", "created_at"])
+    .select(["id", "slot", "body", "anchor_key", "reviewer_name", "created_at"])
     .where("issue_id", "=", id)
     .orderBy("created_at", "desc")
     .execute();
@@ -3759,6 +3912,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
       slot: a.slot,
       body: a.body,
       anchorKey: a.anchor_key,
+      reviewerName: a.reviewer_name,
       createdAt: a.created_at,
     })),
     editor: iss.editor_output_jsonb as EditorReviewData["editor"],
@@ -4032,6 +4186,12 @@ function parseReviewFlash(
       kind: "err",
       msg: "Title and HTML body can't be empty.",
     };
+  if (q.shared === "1")
+    return { kind: "ok", msg: "Preview link generated below — copy and send it." };
+  if (q.error === "empty_reviewer")
+    return { kind: "err", msg: "Reviewer name can't be empty." };
+  if (q.error === "not_draft_share")
+    return { kind: "err", msg: "Preview links are only for drafts." };
   return null;
 }
 
