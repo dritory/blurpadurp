@@ -42,6 +42,21 @@ describe("tokens", () => {
     if (!r.ok) expect(r.reason).toBe("expired");
   });
 
+  test("round-trips a draft-preview token with reviewer name", () => {
+    const t = signToken({
+      kind: "draft-preview",
+      subscriptionId: 123,
+      reviewerName: "Jane",
+    });
+    const r = verifyToken(t);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.payload.kind).toBe("draft-preview");
+      expect(r.payload.subscriptionId).toBe(123);
+      expect(r.payload.reviewerName).toBe("Jane");
+    }
+  });
+
   test("rejects token signed with a different secret", () => {
     const t = signToken({ kind: "confirm-email", subscriptionId: 99 });
     const orig = process.env.BLURPADURP_TOKEN_SECRET;
