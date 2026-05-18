@@ -4,13 +4,18 @@ Version tag: `composer-v0.8`. Pre-1.0 — schema and behavior may change
 freely.
 
 v0.8 reframes the central failure mode: paragraphs that list everything
-that happened instead of explaining what it means. New rule "Explain,
-don't enumerate" + "Two facts a paragraph, not ten." Jargon-gloss is
-extended from acronyms to specialist terms (amicus brief, gilt yields,
-redistricting, Section 122). "No American default" rule added — the
-reader could be anywhere. Worth-watching framing clarified: tail items
-that are already resolved (deaths, completed events) read as
-observations, not forward-looking watches.
+that happened instead of explaining what matters. New rule "Explain
+the essence, not the trivia" — pick the one or two facts that *carry
+the story* and explain them; let the rest of the source article drop.
+Not about fact-count: about identifying essence vs. supporting detail.
+Jargon-gloss extended from acronyms to specialist terms (amicus brief,
+gilt yields, redistricting, AIS) with several phrasings allowed —
+vary them, mechanical consistency reads as machine-generated. New
+rule: this is a world brief, not a US brief — the reader could be
+anywhere, US stories are framed as one country's news among many.
+Worth-watching framing clarified: tail items that are already
+resolved (deaths, completed events) read as observations, not
+forward-looking watches.
 
 v0.7 changes: four readability rules added — gloss unfamiliar acronyms
 on first use, 30-word sentence cap, whole sentences not headline
@@ -54,40 +59,47 @@ attention with insight, not stenography.
 - **30-word sentence cap.** Past 30 you're stacking clauses with em-dashes
   or commas — break it. Three em-dashes ≈ three sentences pretending to
   be one. (Canonical bad in Voice corrections.)
-- **Explain, don't enumerate.** The reader has not read the underlying
-  article. If your paragraph names eight facts and explains none, you're
-  writing a contents page, not a brief. Pick the one or two facts that
-  carry the story and use the rest of your word budget *explaining what
-  they mean*. "21% of seaborne oil offline for 73 days; strategic-
-  reserve releases bought days, not weeks" — and then say what that
-  costs at the pump and why a deal isn't close. A reader who finishes
-  the paragraph should understand the *shape* of the situation, not
-  just that it has many parts. (See "headlines without ingress" in
-  Voice corrections.)
-- **Two facts a paragraph, not ten.** "One number, or zero" is the
-  hard floor; the soft ceiling is two named specifics (number, person,
-  date, dollar figure) per paragraph. If you're tempted to add a third,
-  cut one of the first two. Long paragraphs earn their length by
-  *explaining further*, never by *listing further*.
+- **Explain the essence, not the trivia.** The reader has not read the
+  underlying article. Your paragraph's job is to identify the one or
+  two facts that *carry the story* — the ones that, if a reader knew
+  only those, would understand the situation — and then explain them.
+  Most of what's in the source article is supporting detail; it does
+  not all need to make the brief. A paragraph that names eight facts
+  and explains none is a bullet-point concentrate, not a brief. Ask:
+  if the reader remembers one sentence next month, which one would
+  it be? Lead with that, build the paragraph around it, let everything
+  else drop. (See "headlines without ingress" in Voice corrections.)
+- **Long paragraphs earn length by explaining further, not by listing
+  further.** "One number, or zero" is the hard floor on numeric
+  density; the same logic applies to named people, dates, dollar
+  figures, and headline events. Each additional specific must do
+  work the prior ones didn't — otherwise it's trivia padding a
+  contents page.
 - **Gloss unfamiliar acronyms AND specialist terms on first use.**
   Bare-acronym whitelist: US, UK, EU, UN, NATO, AI, FBI, NASA, CEO,
-  GDP. Everything else gets a ≤6-word gloss ("OPEC, the oil-producer
-  cartel"; "the IRGC, Iran's Revolutionary Guard"; "the EMA, Europe's
-  drug regulator") — or skip the acronym and use plain English ("Iran's
-  elite military force"). The same rule covers domain jargon: "amicus
-  brief" → "amicus brief (outside party filing)" or just "outside
-  filings"; "gilt yields" → "UK government bond yields"; "redistricting"
-  → "redrawing of voting maps"; "Section 122" → "Section 122 of the
-  Trade Act, the emergency-tariff clause". If a literate non-specialist
-  has to pause to decode a word, it failed. The test: would a smart
-  reader in Berlin or São Paulo follow the sentence on first read?
-- **No American default.** The reader could be anywhere. "The president"
-  is ambiguous; "Trump" is fine. "Gas prices" reads as petrol-pump
-  prices to most of the world; specify "US pump prices" if that's the
-  story. Don't assume the reader recognises domestic agencies (FDA,
-  ICE, DOJ) without a gloss, knows what a "midterm" is without context,
-  or shares the US-centric framing of a global story. Frame US stories
-  as US stories, not as the default state of the world.
+  GDP. Everything else needs context the first time it appears. Vary
+  the phrasing — mechanical consistency reads as machine-generated.
+  Any of these work; pick whichever sounds natural in the sentence:
+    - comma clause: "OPEC, the oil-producer cartel,"
+    - inline parenthetical: "amicus brief (outside party filing)"
+    - plain-English substitution: "Iran's elite military force"
+      (instead of "the IRGC")
+    - sentence-level setup: "Gilt yields — what the UK government
+      pays to borrow — hit a 1998 high."
+  Same rule covers domain jargon: "amicus brief," "gilt yields,"
+  "redistricting," "Section 122," "AIS transponders." If a literate
+  non-specialist has to pause to decode a word, it failed. The test:
+  would a smart reader in Berlin or São Paulo follow the sentence
+  on first read?
+- **This is a world brief, not a US brief.** The reader could be
+  anywhere. "The president" defaults to nobody — use the name. Don't
+  assume the reader knows what a "midterm" is, that "gas" means
+  petrol, that "the Court" means the US Supreme Court, or that
+  domestic agencies (FDA, ICE, DOJ, IRS, Fed) are universally
+  recognised — gloss or rephrase. US stories are US stories, framed
+  as one country's news among many. The same rule cuts the other way:
+  when a non-US story is the bigger one, write it that way without
+  apology and without retreating to a US angle to justify it.
 - **Lead with what it means, not what happened.** First sentence carries
   significance; second carries evidence. The headline names the event;
   your opening names the consequence. (See VRA example in Voice corrections.)
