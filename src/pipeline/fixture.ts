@@ -23,6 +23,8 @@ import { resolve } from "node:path";
 
 import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
+import { callOpenAICompat } from "../ai/openai-client.ts";
+import type { ScorerClientKind } from "../ai/scorer.ts";
 import { db } from "../db/index.ts";
 import {
   ComposerInputSchema,
@@ -42,7 +44,14 @@ import {
 } from "../shared/scoring-schema.ts";
 
 const FIXTURES_DIR = "fixtures";
-const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
+
+let ANTHROPIC_CLIENT: Anthropic | null = null;
+function anthropicClient(): Anthropic {
+  if (ANTHROPIC_CLIENT === null) {
+    ANTHROPIC_CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
+  }
+  return ANTHROPIC_CLIENT;
+}
 
 export interface CapturedRow {
   story_id: number;
@@ -156,6 +165,7 @@ export async function replayScorerFixture(params: {
   promptVersion: string;
   modelId: string;
   maxTokens?: number;
+  client?: ScorerClientKind;
 }): Promise<void> {
   const raw = await Bun.file(params.inputPath).text();
   const rows: CapturedRow[] = raw
@@ -170,10 +180,11 @@ export async function replayScorerFixture(params: {
 
   const system = await loadSystemPrompt(params.promptPath);
   const maxTokens = params.maxTokens ?? 2000;
+  const client: ScorerClientKind = params.client ?? "anthropic";
   const replays: ReplayRow[] = [];
 
   console.log(
-    `[replay] ${rows.length} rows · ${params.modelId} · ${params.promptVersion}`,
+    `[replay] ${rows.length} rows · ${client} · ${params.modelId} · ${params.promptVersion}`,
   );
 
   for (let i = 0; i < rows.length; i++) {
@@ -181,20 +192,14 @@ export async function replayScorerFixture(params: {
     const startedAt = Date.now();
     try {
       const userMessage = JSON.stringify(r.raw_input, null, 2);
-      const resp = await CLIENT.messages.create({
+      const output = await callReplayScorer({
+        client,
         model: params.modelId,
-        max_tokens: maxTokens,
-        temperature: 0,
         system,
-        messages: [{ role: "user", content: userMessage }],
+        user: userMessage,
+        maxTokens,
       });
-      const text = resp.content
-        .filter((b): b is Anthropic.TextBlock => b.type === "text")
-        .map((b) => b.text)
-        .join("")
-        .trim();
-      const json = extractJsonObject(text);
-      const parsed = ScorerOutputSchema.parse(json);
+      const parsed = ScorerOutputSchema.parse(output);
       replays.push({
         story_id: r.story_id,
         source_prompt_version: r.scorer_prompt_version,
@@ -271,6 +276,135 @@ function extractJsonObject(text: string): unknown {
   }
   return JSON.parse(payload.slice(first, last + 1));
 }
+
+// Replay-time scorer call. Mirrors the production scorer's
+// tool/function-calling path for both clients so the diff reflects the
+// real prod behavior, not a parsing-strategy artifact. Does NOT log to
+// ai_call_log — replay is offline.
+async function callReplayScorer(params: {
+  client: ScorerClientKind;
+  model: string;
+  system: string;
+  user: string;
+  maxTokens: number;
+}): Promise<unknown> {
+  if (params.client === "openai_compat") {
+    const result = await callOpenAICompat({
+      model: params.model,
+      system: params.system,
+      user: params.user,
+      maxTokens: params.maxTokens,
+      temperature: 0,
+      tool: {
+        name: REPLAY_SCORER_TOOL.name,
+        description: REPLAY_SCORER_TOOL.description,
+        parameters: REPLAY_SCORER_TOOL.input_schema,
+      },
+    });
+    return result.output;
+  }
+
+  // Anthropic: try tool_use first (matches prod). If the model returns
+  // a text block instead (older prompts), fall back to JSON extraction.
+  const resp = await anthropicClient().messages.create({
+    model: params.model,
+    max_tokens: params.maxTokens,
+    temperature: 0,
+    system: params.system,
+    messages: [{ role: "user", content: params.user }],
+    tools: [REPLAY_SCORER_TOOL],
+    tool_choice: { type: "tool", name: REPLAY_SCORER_TOOL.name },
+  });
+  const toolBlock = resp.content.find(
+    (b): b is Anthropic.ToolUseBlock =>
+      b.type === "tool_use" && b.name === REPLAY_SCORER_TOOL.name,
+  );
+  if (toolBlock) return toolBlock.input;
+  const text = resp.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  return extractJsonObject(text);
+}
+
+// Replay-side copy of the scorer tool schema. Kept in sync manually
+// with src/ai/scorer.ts SCORER_TOOL — they describe the same wire
+// contract, and replays must use the prod shape to validate cleanly.
+const REPLAY_SCORER_TOOL = {
+  name: "emit_score",
+  description: "Emit the structured score for the provided story.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      classification: {
+        type: "object",
+        properties: {
+          category: { type: ["string", "null"] },
+          theme_continuation_of: { type: ["string", "null"] },
+          early_reject: { type: "boolean" },
+          reject_reason: { type: ["string", "null"] },
+        },
+        required: [
+          "category",
+          "theme_continuation_of",
+          "early_reject",
+          "reject_reason",
+        ],
+      },
+      reasoning: {
+        type: "object",
+        properties: {
+          base_rate_per_year: { type: ["number", "null"] },
+          retrodiction_12mo: { type: ["string", "null"] },
+          steelman_trivial: { type: ["string", "null"] },
+          steelman_important: { type: ["string", "null"] },
+          factors: {
+            type: "object",
+            properties: {
+              trigger: { type: "array", items: { type: "string" } },
+              penalty: { type: "array", items: { type: "string" } },
+              uncertainty: { type: "array", items: { type: "string" } },
+            },
+            required: ["trigger", "penalty", "uncertainty"],
+          },
+          theme_relationship: { type: "string" },
+          confidence: { type: "string", enum: ["low", "medium", "high"] },
+        },
+        required: [
+          "base_rate_per_year",
+          "retrodiction_12mo",
+          "steelman_trivial",
+          "steelman_important",
+          "factors",
+          "theme_relationship",
+          "confidence",
+        ],
+      },
+      scores: {
+        type: "object",
+        properties: {
+          zeitgeist: { type: "integer", minimum: 0, maximum: 5 },
+          half_life: { type: "integer", minimum: 0, maximum: 5 },
+          reach: { type: "integer", minimum: 0, maximum: 5 },
+          non_obviousness: { type: "integer", minimum: 0, maximum: 5 },
+          structural_importance: { type: "integer", minimum: 0, maximum: 5 },
+          composite: { type: "number" },
+        },
+        required: [
+          "zeitgeist",
+          "half_life",
+          "reach",
+          "non_obviousness",
+          "structural_importance",
+          "composite",
+        ],
+      },
+      summary: { type: ["string", "null"] },
+    },
+    required: ["classification", "reasoning", "scores", "summary"],
+  },
+};
 
 async function loadSystemPrompt(path: string): Promise<string> {
   const text = await Bun.file(path).text();

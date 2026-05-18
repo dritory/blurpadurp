@@ -1,7 +1,12 @@
 // Scorer stage: loads the prompt from docs/scoring-prompt.md, builds the
-// user message from ScorerInput, calls Anthropic, parses with
+// user message from ScorerInput, calls the configured LLM, parses with
 // ScorerOutputSchema, logs via logAICall. The prompt file's "User message
 // template" is documentation; the live format is rendered here in code.
+//
+// The model client is selected by `scorer.client` config: "anthropic"
+// (Haiku/Sonnet via the official SDK) or "openai_compat" (DeepSeek,
+// Gemini-compat, local vLLM/Ollama, anything speaking OpenAI's
+// chat/completions shape — see src/ai/openai-client.ts).
 
 import Anthropic from "@anthropic-ai/sdk";
 import { readFile } from "node:fs/promises";
@@ -16,10 +21,22 @@ import {
 import type { AIStage } from "./types.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
 import { checkBudget } from "./budget.ts";
+import { callOpenAICompat } from "./openai-client.ts";
 
-const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
+// Anthropic client is constructed lazily so deployments that switch to
+// an OpenAI-compatible provider (DeepSeek / Gemini-compat / local
+// vLLM) don't require ANTHROPIC_API_KEY just to boot.
+let ANTHROPIC: Anthropic | null = null;
+function anthropic(): Anthropic {
+  if (ANTHROPIC === null) {
+    ANTHROPIC = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
+  }
+  return ANTHROPIC;
+}
 
 const SYSTEM_PROMPT_CACHE = new Map<string, string>();
+
+export type ScorerClientKind = "anthropic" | "openai_compat";
 
 export function makeScorer(config: {
   version: string;
@@ -27,7 +44,9 @@ export function makeScorer(config: {
   promptPath: string;
   maxTokens: number;
   temperature: number;
+  client?: ScorerClientKind;
 }): AIStage<ScorerInput, ScorerOutput> {
+  const clientKind: ScorerClientKind = config.client ?? "anthropic";
   return {
     name: "scorer",
     version: config.version,
@@ -75,26 +94,46 @@ export function makeScorer(config: {
       let error: string | null = null;
 
       try {
-        const resp = await CLIENT.messages.create({
-          model: config.modelId,
-          max_tokens: config.maxTokens,
-          temperature: config.temperature,
-          system: [
-            {
-              type: "text",
-              text: system,
-              cache_control: { type: "ephemeral" },
+        if (clientKind === "openai_compat") {
+          const result = await callOpenAICompat({
+            model: config.modelId,
+            system,
+            user: userMessage,
+            maxTokens: config.maxTokens,
+            temperature: config.temperature,
+            tool: {
+              name: SCORER_TOOL.name,
+              description: SCORER_TOOL.description,
+              parameters: SCORER_TOOL.input_schema,
             },
-          ],
-          messages: [{ role: "user", content: userMessage }],
-          tools: [SCORER_TOOL],
-          tool_choice: { type: "tool", name: SCORER_TOOL.name },
-        });
-        tokens_in = resp.usage?.input_tokens ?? null;
-        tokens_out = resp.usage?.output_tokens ?? null;
-        cache_read = resp.usage?.cache_read_input_tokens ?? null;
-        cache_write = resp.usage?.cache_creation_input_tokens ?? null;
-        output = extractToolUse(resp, SCORER_TOOL.name);
+          });
+          output = result.output;
+          tokens_in = result.tokens_in;
+          tokens_out = result.tokens_out;
+          cache_read = result.cache_read;
+          cache_write = result.cache_write;
+        } else {
+          const resp = await anthropic().messages.create({
+            model: config.modelId,
+            max_tokens: config.maxTokens,
+            temperature: config.temperature,
+            system: [
+              {
+                type: "text",
+                text: system,
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+            messages: [{ role: "user", content: userMessage }],
+            tools: [SCORER_TOOL],
+            tool_choice: { type: "tool", name: SCORER_TOOL.name },
+          });
+          tokens_in = resp.usage?.input_tokens ?? null;
+          tokens_out = resp.usage?.output_tokens ?? null;
+          cache_read = resp.usage?.cache_read_input_tokens ?? null;
+          cache_write = resp.usage?.cache_creation_input_tokens ?? null;
+          output = extractToolUse(resp, SCORER_TOOL.name);
+        }
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
         throw e;
@@ -294,11 +333,24 @@ function hashJson(obj: unknown): string {
   return createHash("sha256").update(JSON.stringify(obj)).digest("hex");
 }
 
-// Approximate USD/1M tokens. Update when Anthropic pricing changes.
-const PRICING: Record<string, { in: number; out: number }> = {
-  "claude-haiku-4-5-20251001": { in: 1.0, out: 5.0 },
-  "claude-sonnet-4-6": { in: 3.0, out: 15.0 },
-  "claude-opus-4-7": { in: 15.0, out: 75.0 },
+// Approximate USD/1M tokens. Update when provider pricing changes.
+// cache_in / cache_out are multipliers on the base input rate:
+//   - Anthropic: cache write = 1.25× input, cache read = 0.1× input.
+//   - DeepSeek:  no explicit cache write, cache hit ≈ 0.1× input
+//                ($0.028/$0.28). Hit/miss reported separately so we
+//                feed only the miss tokens to tokensIn; the cache_in
+//                multiplier still applies on cache_read.
+//   - DeepSeek off-peak (16:30–00:30 UTC) is ~50% cheaper end-to-end
+//                — not modelled here; the daily aggregate is close
+//                enough for the budget gate.
+const PRICING: Record<
+  string,
+  { in: number; out: number; cache_in: number; cache_out: number }
+> = {
+  "claude-haiku-4-5-20251001": { in: 1.0, out: 5.0, cache_in: 0.1, cache_out: 1.25 },
+  "claude-sonnet-4-6": { in: 3.0, out: 15.0, cache_in: 0.1, cache_out: 1.25 },
+  "claude-opus-4-7": { in: 15.0, out: 75.0, cache_in: 0.1, cache_out: 1.25 },
+  "deepseek-chat": { in: 0.28, out: 0.42, cache_in: 0.1, cache_out: 0 },
 };
 
 function estimateCost(
@@ -310,10 +362,9 @@ function estimateCost(
 ): number | null {
   const p = PRICING[modelId];
   if (!p || tokensIn == null || tokensOut == null) return null;
-  // Anthropic pricing: cache write = 1.25× input, cache read = 0.1× input.
   const inCost =
     tokensIn * p.in +
-    (cacheWrite ?? 0) * p.in * 1.25 +
-    (cacheRead ?? 0) * p.in * 0.1;
+    (cacheWrite ?? 0) * p.in * p.cache_out +
+    (cacheRead ?? 0) * p.in * p.cache_in;
   return (inCost + tokensOut * p.out) / 1_000_000;
 }

@@ -31,6 +31,7 @@ import type {
 const SCORING_CONCURRENCY = 4;
 
 type ConfigMap = {
+  "scorer.client": "anthropic" | "openai_compat";
   "scorer.model_id": string;
   "scorer.prompt_version": string;
   "scorer.prompt_path": string;
@@ -93,6 +94,7 @@ async function notifyScorerHalted(reason: string, err: unknown): Promise<void> {
 async function runScore(): Promise<void> {
   const cfg = await loadConfig();
   const scorer = makeScorer({
+    client: cfg["scorer.client"],
     version: cfg["scorer.prompt_version"],
     modelId: cfg["scorer.model_id"],
     promptPath: cfg["scorer.prompt_path"],
@@ -236,6 +238,7 @@ async function runPrefilterPass(
   const modelId = cfg["scorer.prefilter_model_id"];
   if (modelId === null) return;
   const scorer = makeScorer({
+    client: cfg["scorer.client"],
     version: cfg["scorer.prefilter_prompt_version"],
     modelId,
     promptPath: cfg["scorer.prompt_path"],
@@ -1017,5 +1020,13 @@ async function loadConfig(): Promise<ConfigMap> {
   // constants that lived in code at that migration's time.
   map["theme.attach_threshold"] ??= 0.7;
   map["theme.create_recheck_threshold"] ??= 0.88;
+  // Scorer client dispatch (migration 047). Defaults to anthropic so a
+  // repo without the migration still scores through the Anthropic SDK.
+  map["scorer.client"] ??= "anthropic";
+  if (map["scorer.client"] !== "anthropic" && map["scorer.client"] !== "openai_compat") {
+    throw new Error(
+      `scorer.client must be "anthropic" or "openai_compat", got: ${String(map["scorer.client"])}`,
+    );
+  }
   return map as ConfigMap;
 }
