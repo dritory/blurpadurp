@@ -12,13 +12,17 @@
 --      stories framed as one country's news among many.
 --   4. Worth-watching clarified: not every tail item is forward-looking;
 --      obituaries read as observations, not invented open questions.
---   5. Tone pass — editorial-voice header rewritten around an
---      explanatory register (Espresso + Designing Data-Intensive
---      Applications as touchstones), several Voice-correction "Better"
---      rewrites de-snarked, chyron-rhythm headlines (colon-subtitle
---      lists, anchor clichés) explicitly banned. The 30-word sentence
---      cap softened to "sentences should be honest" — length is fine
---      when it's doing real explanatory work, not stacking clauses.
+--   5. Tone pass — fix US-internet-news clickbait shape without
+--      flattening the voice. Wit, raised eyebrows, wry asides all
+--      stay; what's banned is specifically the *shape* of clickbait:
+--      colon-subtitle headlines, comma-stacked fragments, anchor
+--      clichés ("enters its acute phase," "and counting"). Added
+--      Designing Data-Intensive Applications as a second register
+--      touchstone alongside Espresso — Espresso gives the voice,
+--      DDIA gives the explanatory discipline. The 30-word sentence
+--      cap softened to "sentences should be honest" — length is
+--      fine when the sentence is doing one idea's worth of work,
+--      not stacking clauses with em-dashes.
 --
 -- Pre-existing issues keep their old prose. Pre-1.0 no-backfill stance.
 
