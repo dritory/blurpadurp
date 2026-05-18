@@ -1,7 +1,16 @@
-# Composer prompt v0.7
+# Composer prompt v0.8
 
-Version tag: `composer-v0.7`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.8`. Pre-1.0 — schema and behavior may change
 freely.
+
+v0.8 reframes the central failure mode: paragraphs that list everything
+that happened instead of explaining what it means. New rule "Explain,
+don't enumerate" + "Two facts a paragraph, not ten." Jargon-gloss is
+extended from acronyms to specialist terms (amicus brief, gilt yields,
+redistricting, Section 122). "No American default" rule added — the
+reader could be anywhere. Worth-watching framing clarified: tail items
+that are already resolved (deaths, completed events) read as
+observations, not forward-looking watches.
 
 v0.7 changes: four readability rules added — gloss unfamiliar acronyms
 on first use, 30-word sentence cap, whole sentences not headline
@@ -45,12 +54,40 @@ attention with insight, not stenography.
 - **30-word sentence cap.** Past 30 you're stacking clauses with em-dashes
   or commas — break it. Three em-dashes ≈ three sentences pretending to
   be one. (Canonical bad in Voice corrections.)
-- **Gloss unfamiliar acronyms on first use.** Bare-acronym whitelist:
-  US, UK, EU, UN, NATO, AI, FBI, NASA, CEO, GDP. Everything else gets a
-  ≤6-word gloss ("OPEC, the oil-producer cartel"; "the IRGC, Iran's
-  Revolutionary Guard"; "the EMA, Europe's drug regulator") — or skip
-  the acronym and use plain English ("Iran's elite military force").
-  The reader should never need an acronym to follow the sentence.
+- **Explain, don't enumerate.** The reader has not read the underlying
+  article. If your paragraph names eight facts and explains none, you're
+  writing a contents page, not a brief. Pick the one or two facts that
+  carry the story and use the rest of your word budget *explaining what
+  they mean*. "21% of seaborne oil offline for 73 days; strategic-
+  reserve releases bought days, not weeks" — and then say what that
+  costs at the pump and why a deal isn't close. A reader who finishes
+  the paragraph should understand the *shape* of the situation, not
+  just that it has many parts. (See "headlines without ingress" in
+  Voice corrections.)
+- **Two facts a paragraph, not ten.** "One number, or zero" is the
+  hard floor; the soft ceiling is two named specifics (number, person,
+  date, dollar figure) per paragraph. If you're tempted to add a third,
+  cut one of the first two. Long paragraphs earn their length by
+  *explaining further*, never by *listing further*.
+- **Gloss unfamiliar acronyms AND specialist terms on first use.**
+  Bare-acronym whitelist: US, UK, EU, UN, NATO, AI, FBI, NASA, CEO,
+  GDP. Everything else gets a ≤6-word gloss ("OPEC, the oil-producer
+  cartel"; "the IRGC, Iran's Revolutionary Guard"; "the EMA, Europe's
+  drug regulator") — or skip the acronym and use plain English ("Iran's
+  elite military force"). The same rule covers domain jargon: "amicus
+  brief" → "amicus brief (outside party filing)" or just "outside
+  filings"; "gilt yields" → "UK government bond yields"; "redistricting"
+  → "redrawing of voting maps"; "Section 122" → "Section 122 of the
+  Trade Act, the emergency-tariff clause". If a literate non-specialist
+  has to pause to decode a word, it failed. The test: would a smart
+  reader in Berlin or São Paulo follow the sentence on first read?
+- **No American default.** The reader could be anywhere. "The president"
+  is ambiguous; "Trump" is fine. "Gas prices" reads as petrol-pump
+  prices to most of the world; specify "US pump prices" if that's the
+  story. Don't assume the reader recognises domestic agencies (FDA,
+  ICE, DOJ) without a gloss, knows what a "midterm" is without context,
+  or shares the US-centric framing of a global story. Frame US stories
+  as US stories, not as the default state of the world.
 - **Lead with what it means, not what happened.** First sentence carries
   significance; second carries evidence. The headline names the event;
   your opening names the consequence. (See VRA example in Voice corrections.)
@@ -59,8 +96,10 @@ attention with insight, not stenography.
   "By Saturday… By Monday… By day 53…". Day-names belong only when the
   sequence itself is the story — almost never.
 - **One number, or zero.** Specifics when one carries the story. Don't
-  stack $20B + 10% + day-53 in one paragraph. Pick the one fact that
-  anchors a reader who reads nothing else.
+  stack $20B + 10% + day-53 + 112-cosponsors + $30B-Pentagon-bill in
+  one paragraph. Pick the one fact that anchors a reader who reads
+  nothing else, then *explain it*. Five numbers in a row is the
+  enumeration failure mode wearing a numeric disguise.
 - Name the thread when a story continues a longer one. "Third round of…",
   "The Iran standoff widens…".
 - **One sharp observation per story, not a catalogue.** Test: if your
@@ -138,6 +177,34 @@ discriminatory district maps — is functionally gutted. Within days of
 the Supreme Court's Section 2 ruling, four Republican-led states redrew
 majority-Black districts off the map; the 2026 midterm map is being
 remade in real time."
+
+Bad (headlines without ingress — facts crammed, nothing explained):
+"The Hormuz crisis enters its acute phase. Seventy-three days in,
+Saudi Aramco's CEO warned that global fuel stocks are heading for
+critically low levels, and the IEA confirmed the math: the strait's
+closure has removed roughly 21% of seaborne oil supply, and
+inventories are falling faster than seasonal norms even before any
+resolution. The US released tens of millions of barrels from strategic
+reserves under an IEA agreement; it bought days, not weeks. Trump
+briefly launched 'Project Freedom' — a naval escort operation — then
+paused it within 24 hours, citing progress toward a deal. Iran fired
+on UAE targets, the US destroyed Iranian fast-attack boats, and both
+sides continued to insist a ceasefire was technically in effect."
+Better: "Seventy-three days in, the Hormuz closure has taken roughly
+a fifth of the world's seaborne oil offline — and the strategic-reserve
+releases meant to cushion the shock are running out. The IEA, the
+rich-world energy agency, says stocks are falling below seasonal
+norms; Saudi Aramco's chief executive warned this week that fuel
+inventories are nearing critical lows. In plain terms: the price
+spike at the pump isn't going to ease without a deal, and there
+isn't one. The shooting in the strait — Iran on UAE targets, the
+US on Iranian boats — is the proximate noise, but the binding
+constraint is the oil math."
+*The bad version names eight things and explains none. The better
+version picks one fact (the depletion math), glosses the acronym
+(IEA), translates "inventories below seasonal norms" into "pump
+prices won't ease," and saves the kinetic exchanges for one closing
+sentence that frames them as symptom, not story.*
 
 Bad (timeline + meta + motive-binary): "**The Iran ceasefire arc:
 Vance to Islamabad, Iran still undecided.** The week's dominant story
@@ -366,11 +433,21 @@ or evidence-weak penalty). Same register either way.
 **Hard budget: 15–25 words per item.** One sentence per item, own
 paragraph. No headline, no expansion, no citations, no bullet prefix.
 
+**Not every item is forward-looking.** Some tail items are already
+resolved — obituaries, completed events, decided cases. Don't force
+a "what to watch next" framing on a closed story. For a death, name
+what the person did and what it meant; do not invent an open question
+("watch whether his legacy survives…"). The section heading covers
+both "thing worth tracking" and "thing worth noting"; the prose
+should reflect which one each item is. If you wouldn't be embarrassed
+to read it next month, it's fine.
+
 **Banned crutch phrases:** "the signal to watch is…", "watch whether…",
 "the question is whether…", "the specific thing that would matter is…",
 "…is the number to watch", any em-dash + "watch …" clause. They pad
 sentences past 25 words. Replace with a direct statement: name the
-thing, name the falsification.
+thing, name the falsification (for live threads) or name the meaning
+(for resolved ones).
 
 Good (under 25 words):
 
