@@ -23,6 +23,16 @@
 --      cap softened to "sentences should be honest" — length is
 --      fine when the sentence is doing one idea's worth of work,
 --      not stacking clauses with em-dashes.
+--   6. Length pass — section word ranges were being read as
+--      targets, producing padded paragraphs on thin material. New
+--      rule "Length follows content, not the other way round":
+--      decide what to say before deciding how long to say it; if
+--      a story fits in one sentence, write one sentence; if it
+--      needs more room to be clear, take it. Section ranges
+--      reworded as descriptive ("typically") rather than
+--      prescriptive. Worth watching keeps its ~15–25-word soft
+--      ceiling because tight one-liners are the design of that
+--      section.
 --
 -- Pre-existing issues keep their old prose. Pre-1.0 no-backfill stance.
 

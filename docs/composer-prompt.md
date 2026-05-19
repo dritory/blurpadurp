@@ -32,6 +32,20 @@ explanatory discipline. The 30-word sentence cap softened to
 doing one idea's worth of work; the failure is clauses stacked with
 em-dashes.
 
+Length pass: section word ranges were being read as *targets* rather
+than typical-where-most-items-land. New rule "Length follows content,
+not the other way round" — if a story can be said in one tight
+sentence, say it that way; do not pad to a range. If a story
+genuinely needs more room to be clear (a gloss, a piece of context,
+a why-this-matters that doesn't fit in one clause), write it longer.
+The failure modes are symmetric: padding thin material AND cramping
+material that needs to breathe. Decide what to say before deciding
+how long to say it. Section ranges reworded as descriptive
+("typically") rather than prescriptive. Worth watching keeps its
+~15–25-word soft ceiling because tight one-liners are the *design*
+of that section, not an arbitrary cap — but a story that resists
+that compression belongs in Worth knowing.
+
 v0.7 changes: four readability rules added — gloss unfamiliar acronyms
 on first use, 30-word sentence cap, whole sentences not headline
 fragments (folded into "Clarity over brevity"), and lead with what a
@@ -115,6 +129,15 @@ overly online, no.
   if the reader remembers one sentence next month, which one would
   it be? Lead with that, build the paragraph around it, let everything
   else drop. (See "headlines without ingress" in Voice corrections.)
+- **Length follows content, not the other way round.** Section word
+  ranges (below) are *typical*, not targets. If a story can be said
+  in one tight sentence, say it in one tight sentence — do not pad
+  to hit a range. If a story genuinely needs a longer explanation
+  to be clear (a gloss, a piece of context, a "why this matters"
+  that doesn't fit in one clause), write the longer version. The
+  failure modes are symmetric: stretching thin material to fill
+  space, and cramping a story that needs to breathe. Both produce
+  worse briefs. Decide the length AFTER you decide what to say.
 - **Long paragraphs earn length by explaining further, not by listing
   further.** "One number, or zero" is the hard floor on numeric
   density; the same logic applies to named people, dates, dollar
@@ -290,7 +313,14 @@ version: shape, one number, the actual open question.*
 
 ## Gold examples — register per section
 
-### Conversation (full, ~40–70 words, target 50)
+The word ranges below are observational, not prescriptive. They
+describe where most well-judged items land — not where every item
+must land. A 25-word Conversation item that says exactly what
+needed saying is a better brief than a 60-word one that filled out
+to the range.
+
+### Conversation (typically ~40–70 words; shorter when the story
+allows, longer when the gloss needs room)
 
 **Iran's Hormuz threat, on schedule.** Iran threatened to close Hormuz
 again — something it does roughly twice a year when it wants Washington's
@@ -310,7 +340,8 @@ got a rubber stamp.
 ( [ft.com](...), [politico.eu](...), [reuters.com](...) )
 *Two-part structure; closing parallelism.*
 
-### Worth knowing (~30–50 words)
+### Worth knowing (typically ~30–50 words; less is fine if the story
+fits in one sentence)
 
 **A second drug in the weight-loss class showed cardiovascular benefits —
 this one from Roche, not Lilly or Novo.** The surprise wasn't the
@@ -480,22 +511,29 @@ Empty brief is valid output.
 
 ### `conversation[]` → `## This week's conversation`
 
-Full items: one declarative headline + 2–3 sentences. What happened,
-why people are discussing it, what to watch (only if obvious). Inline
-citations.
+Full items: one declarative headline + however many sentences the
+story needs — usually 2–3, occasionally one tight sentence, occasionally
+4 if a gloss or piece of context genuinely earns the room. What
+happened, why people are discussing it, what to watch (only if
+obvious). Inline citations.
 
 ### `worth_knowing[]` → `## Worth knowing`
 
-Tighter: one headline + 1–2 sentences. Same citation rule. No "watch
-next." Single tight paragraph.
+Tighter than conversation, but again length follows content: one
+headline + one or two sentences in most cases. Same citation rule.
+No "watch next." Single tight paragraph.
 
 ### `worth_watching[]` → `## Worth watching`
 
 Holds tail picks (rank-11+) and uncertainty overrides (low confidence
 or evidence-weak penalty). Same register either way.
 
-**Hard budget: 15–25 words per item.** One sentence per item, own
-paragraph. No headline, no expansion, no citations, no bullet prefix.
+**One sentence per item, own paragraph; aim for ~15–25 words.** This
+section IS the one place where a tight ceiling is part of the design —
+the reader is scanning, not settling in. If a story genuinely cannot
+be reduced to a sentence without losing the point, it probably
+belongs in Worth knowing instead. No headline, no expansion, no
+citations, no bullet prefix.
 
 **Not every item is forward-looking.** Some tail items are already
 resolved — obituaries, completed events, decided cases. Don't force
