@@ -15,5 +15,5 @@
 -- by accident from a form that didn't validate.
 
 ALTER TABLE issue_annotation
-  ADD COLUMN reviewer_name text
+  ADD COLUMN IF NOT EXISTS reviewer_name text
     CHECK (reviewer_name IS NULL OR length(reviewer_name) > 0);

@@ -9,8 +9,9 @@
 -- both kinds — keeping them separate avoids order-of-precedence
 -- ambiguity in the data.
 
-ALTER TABLE story ADD COLUMN noise_title_pattern text;
+-- Idempotent — see migration 043 for the rationale.
+ALTER TABLE story ADD COLUMN IF NOT EXISTS noise_title_pattern text;
 
-CREATE INDEX story_noise_title_pattern_idx
+CREATE INDEX IF NOT EXISTS story_noise_title_pattern_idx
   ON story (noise_title_pattern)
   WHERE noise_title_pattern IS NOT NULL;

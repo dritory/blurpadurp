@@ -10,7 +10,8 @@
 -- instead of writing the row). Loader still try-catches each row at
 -- runtime so a bad row never breaks ingest.
 
-CREATE TABLE title_regex_filter (
+-- Idempotent — see migration 043 for the rationale.
+CREATE TABLE IF NOT EXISTS title_regex_filter (
   pattern    text PRIMARY KEY,
   mode       text NOT NULL DEFAULT 'block' CHECK (mode IN ('block','tag')),
   hits       int  NOT NULL DEFAULT 0,
@@ -27,4 +28,5 @@ INSERT INTO title_regex_filter (pattern, mode, note) VALUES
   ('\byou won''t believe\b',
      'block', 'starter pack: classic clickbait'),
   ('\b(goes|went)\s+viral\b',
-     'tag',   'starter pack: virality framing — audit before block');
+     'tag',   'starter pack: virality framing — audit before block')
+ON CONFLICT (pattern) DO NOTHING;
