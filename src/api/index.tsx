@@ -21,7 +21,7 @@ import type {
   CapturedRow,
   ReplayRow,
 } from "../pipeline/fixture.ts";
-import { summarizeReplay } from "../pipeline/fixture.ts";
+import { replayComposer, summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
 import { getEnvOptional } from "../shared/env.ts";
@@ -426,6 +426,24 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
     }
     return c.redirect(`/admin/review/${id}?edited=1`, 303);
+  });
+
+  // Non-destructive composer replay: re-runs the composer on the
+  // issue's persisted composer_input_jsonb using the current prompt +
+  // model from config, writes the result to fixtures/, and never
+  // touches the issue row. Works for both drafts and published issues
+  // — the point is to preview how the latest prompt would render a
+  // past issue without overwriting it.
+  app.post("/admin/review/:id/replay-composer", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    try {
+      await replayComposer({ issueId: id });
+    } catch (err) {
+      console.error("[replay-composer]", err);
+      return c.redirect(`/admin/review/${id}?error=replay_failed`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?replayed=1`, 303);
   });
 
   app.post("/admin/review/:id/share", async (c) => {
@@ -4186,6 +4204,13 @@ function parseReviewFlash(
       kind: "err",
       msg: "Title and HTML body can't be empty.",
     };
+  if (q.replayed === "1")
+    return {
+      kind: "ok",
+      msg: "Composer replay complete — see 'Latest replay' below.",
+    };
+  if (q.error === "replay_failed")
+    return { kind: "err", msg: "Replay failed — check server logs." };
   if (q.shared === "1")
     return { kind: "ok", msg: "Preview link generated below — copy and send it." };
   if (q.error === "empty_reviewer")
