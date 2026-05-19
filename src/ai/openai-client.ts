@@ -135,10 +135,19 @@ export async function callOpenAICompat(
     output = JSON.parse(toolCall.function.arguments);
   } catch (e) {
     const args = toolCall.function.arguments;
+    // Dump the full bad payload to a tmp file for diagnosis. The error
+    // string can't carry the whole thing without making the replay
+    // JSONL unreadable; a side-channel file is easier to inspect.
+    const dumpPath = `/tmp/openai-compat-bad-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    try {
+      await Bun.write(dumpPath, args);
+    } catch {
+      // best-effort; don't shadow the real error
+    }
     const head = args.slice(0, 200);
     const tail = args.slice(-200);
     throw new Error(
-      `openai-compat: tool arguments failed JSON parse (${e instanceof Error ? e.message : e}): len=${args.length} head=${JSON.stringify(head)} tail=${JSON.stringify(tail)}`,
+      `openai-compat: tool arguments failed JSON parse (${e instanceof Error ? e.message : e}): len=${args.length} dump=${dumpPath} head=${JSON.stringify(head)} tail=${JSON.stringify(tail)}`,
     );
   }
 
