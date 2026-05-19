@@ -3883,6 +3883,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
     .selectFrom("issue")
     .select([
       "id",
+      "published_seq",
       "published_at",
       "is_event_driven",
       "is_draft",
@@ -3939,6 +3940,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
   return {
     issue: {
       id: Number(iss.id),
+      publishedSeq: iss.published_seq,
       publishedAt: iss.published_at,
       isEventDriven: iss.is_event_driven,
       isDraft: iss.is_draft,

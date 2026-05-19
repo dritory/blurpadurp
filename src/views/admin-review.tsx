@@ -193,6 +193,7 @@ const NoteGroup: FC<{
 export interface EditorReviewData {
   issue: {
     id: number;
+    publishedSeq: number | null;
     publishedAt: Date;
     isEventDriven: boolean;
     isDraft: boolean;
@@ -412,7 +413,14 @@ export const AdminReview: FC<{
       ]}
     />
     <div class="issue-meta">
-      Issue #{data.issue.id} · {formatIssueDate(data.issue.publishedAt)}
+      Issue #{data.issue.publishedSeq ?? data.issue.id}
+      {data.issue.publishedSeq === null && !data.issue.isDraft ? (
+        <span style="color: var(--ink-soft); font-family: var(--sans); font-size: 12px; margin-left: 6px;">
+          (no published_seq — pre-migration-041)
+        </span>
+      ) : null}
+      {" · "}
+      {formatIssueDate(data.issue.publishedAt)}
       {data.issue.isEventDriven ? " · event-driven" : ""}
       {" · "}
       {data.issue.composerPromptVersion ?? "unknown"} /{" "}
