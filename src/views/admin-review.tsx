@@ -462,6 +462,13 @@ export const AdminReview: FC<{
       ) : (
         <a href={`/issue/${data.issue.id}`}>View published</a>
       )}
+      <form
+        method="post"
+        action={`/admin/review/${data.issue.id}/replay-composer`}
+        data-confirm="Re-render this issue with the current composer prompt + model? Writes to fixtures/, does not touch the published issue. Takes ~10–30s."
+      >
+        <button type="submit">Replay composer</button>
+      </form>
       {replays.length > 0 ? (
         <>
           <a href={`/admin/fixtures/${replays[0]!.base}.diff.md`}>
