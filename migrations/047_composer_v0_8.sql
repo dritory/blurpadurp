@@ -14,9 +14,12 @@
 --      obituaries read as observations, not invented open questions.
 --   5. Tone pass — fix US-internet-news clickbait shape without
 --      flattening the voice. Wit, raised eyebrows, wry asides all
---      stay; what's banned is specifically the *shape* of clickbait:
---      colon-subtitle headlines, comma-stacked fragments, anchor
---      clichés ("enters its acute phase," "and counting"). Added
+--      stay; bold paragraph headlines can be playful (colon-subtitle
+--      "Trump in Beijing: smiles, CEOs, and unresolved everything"
+--      is fine). What's banned is the same TV-news rhythm sneaking
+--      into the *prose body*: comma-stacked fragments masquerading
+--      as a sentence, anchor clichés as opener-glue ("enters its
+--      acute phase," "on life support," "and counting"). Added
 --      Designing Data-Intensive Applications as a second register
 --      touchstone alongside Espresso — Espresso gives the voice,
 --      DDIA gives the explanatory discipline. The 30-word sentence

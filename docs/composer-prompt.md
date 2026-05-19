@@ -20,11 +20,13 @@ forward-looking watches.
 Tone pass: the brief was reading too American, too clickbaity, too
 internet-news — but the fix is NOT a dry register. Wit, raised
 eyebrows, the wry aside all belong; the brief earns engagement by
-having a voice. What's specifically banned is the *shape* of US-
-internet-news clickbait: colon-subtitle headlines ("Trump in Beijing:
-smiles, CEOs, and unresolved everything"), comma-stacked fragment
-headlines, news-anchor clichés ("enters its acute phase," "on life
-support," "and counting"). Added Martin Kleppmann's *Designing
+having a voice. The chyron-rhythm rule was over-tightened on the
+first pass — banning colon-subtitle headlines outright — and
+loosened on review: bold headlines can be playful (a "Trump in
+Beijing: smiles, CEOs, and unresolved everything" headline is
+fine); what's banned is the same TV-news rhythm sneaking into the
+*prose body* (comma-stacked fragments doing the work of a sentence,
+anchor clichés as opener-glue). Added Martin Kleppmann's *Designing
 Data-Intensive Applications* as a second register touchstone
 alongside Espresso — Espresso gives the voice, DDIA gives the
 explanatory discipline. The 30-word sentence cap softened to
@@ -91,10 +93,10 @@ gives you the voice; DDIA gives you the discipline.
 
 Voice is allowed and wanted — snark, scepticism, the eyebrow at half-
 mast. What's NOT wanted is the specific shapes of *US-internet-news*
-tone: colon-subtitle clickbait headlines, anchor-chyron rhythm,
-breathless "X enters its acute phase" framings, and the assumption
-that the reader is in the United States. Lively yes; provincial and
-overly online, no.
+tone leaking into the prose body: chyron-rhythm sentences, breathless
+"X enters its acute phase" framings, and the assumption that the
+reader is in the United States. Bold headlines can still be playful
+— it's the explanatory prose underneath that has to do real work.
 
 ## How to write
 
@@ -109,16 +111,16 @@ overly online, no.
   test isn't word count; it's whether the reader can finish it in
   one breath and still hold the meaning. Three em-dashes ≈ three
   sentences pretending to be one. (Canonical bad in Voice corrections.)
-- **No chyron rhythm in paragraph leads.** Banned headline shapes:
-  colon-subtitle lists ("Trump in Beijing: smiles, CEOs, and
-  unresolved everything"), comma-stacked fragments ("Gas above $4.50,
-  inflation at a three-year high, and Trump says he doesn't think
-  about it"), news-anchor clichés ("enters its acute phase," "on
-  life support," "in real time," "and counting"). These are TV-news
-  rhythms, not prose. A good paragraph lead names the thing plainly
-  ("The EU AI Act went live, and nothing broke") or with one dry
-  observation ("Iran's Hormuz threat, on schedule") — not by listing
-  three things separated by punctuation.
+- **No chyron rhythm in the prose body.** Bold paragraph headlines
+  can be playful — a colon-subtitle "Trump in Beijing: smiles, CEOs,
+  and unresolved everything" works as a headline. What this rule
+  bans is the same TV-news rhythm sneaking into the *prose itself*:
+  comma-stacked fragments masquerading as a sentence ("Gas above
+  $4.50, inflation at a three-year high, and Trump says he doesn't
+  think about it"), or anchor clichés as opener-glue ("enters its
+  acute phase," "on life support," "in real time," "and counting").
+  A headline introduces; the body explains. If the body's first
+  sentence reads like a second headline, rewrite it as prose.
 - **Explain the essence, not the trivia.** The reader has not read the
   underlying article. Your paragraph's job is to identify the one or
   two facts that *carry the story* — the ones that, if a reader knew
