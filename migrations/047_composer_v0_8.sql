@@ -1,0 +1,44 @@
+-- Composer v0.8: address reader-feedback failure modes.
+--   1. "Explain the essence, not the trivia" — paragraphs that name
+--      many facts and explain none are the dominant complaint. The
+--      fix isn't fact-count but identifying which facts carry the
+--      story. New rule + voice-correction pair built around the
+--      observed Hormuz paragraph.
+--   2. Jargon-gloss extended from acronyms to specialist terms
+--      (amicus brief, gilt yields, redistricting, Section 122, AIS),
+--      with multiple phrasings allowed so the gloss doesn't read as
+--      mechanical.
+--   3. "World brief, not US brief" — reader could be anywhere; US
+--      stories framed as one country's news among many.
+--   4. Worth-watching clarified: not every tail item is forward-looking;
+--      obituaries read as observations, not invented open questions.
+--   5. Tone pass — fix US-internet-news clickbait shape without
+--      flattening the voice. Wit, raised eyebrows, wry asides all
+--      stay; bold paragraph headlines can be playful (colon-subtitle
+--      "Trump in Beijing: smiles, CEOs, and unresolved everything"
+--      is fine). What's banned is the same TV-news rhythm sneaking
+--      into the *prose body*: comma-stacked fragments masquerading
+--      as a sentence, anchor clichés as opener-glue ("enters its
+--      acute phase," "on life support," "and counting"). Added
+--      Designing Data-Intensive Applications as a second register
+--      touchstone alongside Espresso — Espresso gives the voice,
+--      DDIA gives the explanatory discipline. The 30-word sentence
+--      cap softened to "sentences should be honest" — length is
+--      fine when the sentence is doing one idea's worth of work,
+--      not stacking clauses with em-dashes.
+--   6. Length pass — section word ranges were being read as
+--      targets, producing padded paragraphs on thin material. New
+--      rule "Length follows content, not the other way round":
+--      decide what to say before deciding how long to say it; if
+--      a story fits in one sentence, write one sentence; if it
+--      needs more room to be clear, take it. Section ranges
+--      reworded as descriptive ("typically") rather than
+--      prescriptive. Worth watching keeps its ~15–25-word soft
+--      ceiling because tight one-liners are the design of that
+--      section.
+--
+-- Pre-existing issues keep their old prose. Pre-1.0 no-backfill stance.
+
+UPDATE config
+SET value = '"composer-v0.8"'::jsonb, updated_at = now()
+WHERE key = 'composer.prompt_version';
