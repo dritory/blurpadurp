@@ -9,7 +9,10 @@
 -- Replaces the hardcoded list in src/shared/url-noise.ts. Operator
 -- manages via /admin/path-filters.
 
-CREATE TABLE url_path_filter (
+-- Idempotent (CREATE TABLE IF NOT EXISTS + INSERT … ON CONFLICT DO
+-- NOTHING) so prod can run this safely even if the table was created
+-- out-of-band — same defensive pattern as migration 043.
+CREATE TABLE IF NOT EXISTS url_path_filter (
   pattern    text PRIMARY KEY,
   mode       text NOT NULL DEFAULT 'block' CHECK (mode IN ('block','tag')),
   hits       int  NOT NULL DEFAULT 0,
@@ -23,7 +26,8 @@ CREATE TABLE url_path_filter (
 -- reads acceptable.
 INSERT INTO url_path_filter (pattern, mode, note) VALUES
   ('/entertainment/', 'tag',   'auto-promoted from migration 038'),
-  ('/viral/',         'tag',   'auto-promoted from migration 038');
+  ('/viral/',         'tag',   'auto-promoted from migration 038')
+ON CONFLICT (pattern) DO NOTHING;
 
 -- Starter pack of paths that are reliably low-signal across most
 -- outlets. /opinion/ is intentionally absent — NYT/Economist/FT
@@ -43,7 +47,8 @@ INSERT INTO url_path_filter (pattern, mode, note) VALUES
   ('/gaming/',    'block', 'starter pack'),
   ('/tv/',        'block', 'starter pack'),
   ('/movies/',    'block', 'starter pack'),
-  ('/music/',     'block', 'starter pack');
+  ('/music/',     'block', 'starter pack')
+ON CONFLICT (pattern) DO NOTHING;
 
 -- Backfill the hits column for the two 'tag' patterns from existing
 -- story rows so the admin UI shows real counts on day one rather than

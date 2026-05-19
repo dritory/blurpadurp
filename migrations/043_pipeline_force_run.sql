@@ -9,8 +9,13 @@
 -- timer on the http_service group, killing the work mid-flight. The
 -- scheduler machine is short-lived per fire and not idle-stopped, so
 -- it's the right place for any pipeline work.
+--
+-- IF NOT EXISTS because production has the table from an earlier
+-- deploy where the schema_migration row didn't get recorded (the
+-- table got created out-of-band before the migration runner saw it).
+-- Idempotency makes the migration safe to retry without manual SQL.
 
-CREATE TABLE pipeline_force_run (
+CREATE TABLE IF NOT EXISTS pipeline_force_run (
   stage text PRIMARY KEY,
   requested_at timestamptz NOT NULL DEFAULT now()
 );
