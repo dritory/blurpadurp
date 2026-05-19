@@ -35,6 +35,7 @@ import {
   type EditorOutput,
 } from "../shared/editor-schema.ts";
 import { getEnv } from "../shared/env.ts";
+import { loadSystemPromptText } from "../shared/prompts.ts";
 import {
   ScorerOutputSchema,
   type ScorerInput,
@@ -365,15 +366,29 @@ export async function replayComposer(params: {
   }
   const input: ComposerInput = parsed.data;
 
+  // Honour the prompt-staging mechanism: if /admin/prompts has staged a
+  // composer prompt in prompt_draft, prefer it over the file. The
+  // scheduled pipeline still reads docs/ — this only affects manual
+  // replay/recompose. Lets the operator test a prompt edit in prod
+  // against real data WITHOUT shipping it through git first.
+  const staged = await loadSystemPromptText(
+    "composer",
+    promptPath,
+    "replay",
+  );
+  const effectiveVersion =
+    staged.source === "staged" ? `${promptVersion}-staged` : promptVersion;
+
   const composer = makeComposer({
-    version: promptVersion,
+    version: effectiveVersion,
     modelId,
     promptPath,
     maxTokens,
+    systemPromptText: staged.text,
   });
 
   console.log(
-    `[composer-replay] issue #${row.id} · ${row.composer_prompt_version} (${row.composer_model_id}) → ${promptVersion} (${modelId})`,
+    `[composer-replay] issue #${row.id} · ${row.composer_prompt_version} (${row.composer_model_id}) → ${effectiveVersion} (${modelId})${staged.source === "staged" ? " [staged prompt]" : ""}`,
   );
   const t0 = Date.now();
   const output = await composer.run(input);
@@ -500,15 +515,21 @@ export async function replayEditor(params: {
       ? EditorOutputSchema.safeParse(row.editor_output_jsonb)
       : null;
 
+  // Honour prompt_draft staging (see replayComposer for the rationale).
+  const staged = await loadSystemPromptText("editor", promptPath, "replay");
+  const effectiveVersion =
+    staged.source === "staged" ? `${promptVersion}-staged` : promptVersion;
+
   const editor = makeEditor({
-    version: promptVersion,
+    version: effectiveVersion,
     modelId,
     promptPath,
     maxTokens,
+    systemPromptText: staged.text,
   });
 
   console.log(
-    `[editor-replay] issue #${row.id} · pool of ${input.stories.length} → ${promptVersion} (${modelId})`,
+    `[editor-replay] issue #${row.id} · pool of ${input.stories.length} → ${effectiveVersion} (${modelId})${staged.source === "staged" ? " [staged prompt]" : ""}`,
   );
   const t0 = Date.now();
   const output = await editor.run(input);
