@@ -469,6 +469,15 @@ export const AdminReview: FC<{
       >
         <button type="submit">Replay composer</button>
       </form>
+      {!data.issue.isDraft ? (
+        <form
+          method="post"
+          action={`/admin/review/${data.issue.id}/replay-replace`}
+          data-confirm="REWRITE THIS PUBLISHED ISSUE IN PLACE? Overwrites composed_html / composed_markdown / title with the output of the current composer prompt + model. There is no undo. Use only when the prompt rev is meaningfully better than what shipped."
+        >
+          <button type="submit" class="discard">Replay &amp; replace</button>
+        </form>
+      ) : null}
       {replays.length > 0 ? (
         <>
           <a href={`/admin/fixtures/${replays[0]!.base}.diff.md`}>
