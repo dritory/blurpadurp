@@ -179,7 +179,13 @@ export async function replayScorerFixture(params: {
   }
 
   const system = await loadSystemPrompt(params.promptPath);
-  const maxTokens = params.maxTokens ?? 2000;
+  // 8000 not 2000: DeepSeek's tool-call outputs are 2-4× longer than
+  // Haiku's for the same prompt, so the prod default (2000) truncates
+  // mid-string on ~25% of stories. Output tokens are cheap on
+  // OpenAI-compatible providers; raising the cap removes the cliff
+  // without changing steady-state cost. When flipping prod to
+  // DeepSeek, bump scorer.max_tokens config to match.
+  const maxTokens = params.maxTokens ?? 8000;
   const client: ScorerClientKind = params.client ?? "anthropic";
   const replays: ReplayRow[] = [];
 
