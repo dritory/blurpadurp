@@ -134,9 +134,11 @@ export async function callOpenAICompat(
   try {
     output = JSON.parse(toolCall.function.arguments);
   } catch (e) {
-    const preview = toolCall.function.arguments.slice(0, 300);
+    const args = toolCall.function.arguments;
+    const head = args.slice(0, 200);
+    const tail = args.slice(-200);
     throw new Error(
-      `openai-compat: tool arguments failed JSON parse (${e instanceof Error ? e.message : e}): ${preview}`,
+      `openai-compat: tool arguments failed JSON parse (${e instanceof Error ? e.message : e}): len=${args.length} head=${JSON.stringify(head)} tail=${JSON.stringify(tail)}`,
     );
   }
 
