@@ -65,34 +65,72 @@ export async function score(): Promise<void> {
   await withLock("score", 60 * 60_000, runScore);
 }
 
-// Provider quota / out-of-funds detection. Anthropic and Voyage both
-// surface insufficient-credit conditions as 4xx errors with messages
-// mentioning credit/billing/quota; Resend phrasing varies. Catching
-// the prose is a heuristic — when in doubt we keep going, since a real
-// transient network error shouldn't abort the whole batch.
-function isOutOfFundsError(err: unknown): boolean {
-  if (err instanceof BudgetExceededError) return true;
+// Classifies errors that won't fix themselves within the batch —
+// running the remaining 1299 stories after the first one fails for the
+// same reason just burns time (and on free tiers, retry quotas). The
+// scorer aborts and notifies the admin so the operator can intervene.
+//
+// Covers Anthropic / Voyage / Resend phrasing (Anthropic surfaces
+// insufficient-credit as 4xx with "credit_balance_too_low" or similar)
+// AND OpenAI-compatible HTTP status codes (401 auth, 402 billing,
+// 403 forbidden/TOS, 404 model-not-found). DeepSeek's "Insufficient
+// Balance" body is matched via the "balance" keyword.
+//
+// 429 (rate limit) and 5xx are intentionally NOT classified as
+// permanent — they're transient and the next scheduler tick should
+// retry.
+type PermanentErrorReason =
+  | "daily budget cap exceeded"
+  | "provider account out of funds"
+  | "provider auth failed (check API key)"
+  | "provider forbidden (check TOS / region / quota)"
+  | "model not found (check scorer.model_id)";
+
+function classifyPermanentError(err: unknown): PermanentErrorReason | null {
+  if (err instanceof BudgetExceededError) return "daily budget cap exceeded";
   const msg = err instanceof Error ? err.message : String(err);
-  return /\b(insufficient[_\s-]?(credit|funds|quota)|credit_balance_too_low|billing|payment[_\s-]?required|quota[_\s-]?exceeded)\b/i.test(
-    msg,
-  );
+
+  // Billing / payment / credit-exhaustion phrases, across providers.
+  if (
+    /\b(insufficient[_\s-]?(credit|funds|quota|balance)|credit_balance_too_low|billing|payment[_\s-]?required|quota[_\s-]?exceeded|out[_\s-]?of[_\s-]?credit)\b/i.test(
+      msg,
+    )
+  ) {
+    return "provider account out of funds";
+  }
+
+  // OpenAI-compat HTTP status codes (formatted in openai-client.ts as
+  // "openai-compat 4XX <statusText>: ..."). Anthropic SDK errors don't
+  // follow this format; their phrasing is caught by the regex above.
+  const httpMatch = /openai-compat (\d{3})\b/i.exec(msg);
+  if (httpMatch) {
+    const code = httpMatch[1];
+    if (code === "401") return "provider auth failed (check API key)";
+    if (code === "402") return "provider account out of funds";
+    if (code === "403") return "provider forbidden (check TOS / region / quota)";
+    if (code === "404") return "model not found (check scorer.model_id)";
+  }
+  return null;
 }
 
-async function notifyScorerHalted(reason: string, err: unknown): Promise<void> {
+async function notifyScorerHalted(
+  reason: PermanentErrorReason,
+  err: unknown,
+): Promise<void> {
   const detail = err instanceof Error ? err.message : String(err);
   const notice = renderAdminNotice({
-    heading: "Scorer halted — out of funds",
+    heading: `Scorer halted — ${reason}`,
     bodyLines: [
       `The scoring pipeline aborted because: ${reason}.`,
       `Underlying error: ${detail}`,
-      `Top up the affected provider (or raise budget.daily_usd_cap) and the next scheduled tick will resume.`,
+      `Fix the underlying issue (top up the provider, rotate the key, correct the model id, or raise budget.daily_usd_cap) and the next scheduled tick will resume.`,
     ],
   });
   await notifyAdmin({
-    subject: "[blurpadurp] Scorer halted — out of funds",
+    subject: `[blurpadurp] Scorer halted — ${reason}`,
     html: notice.html,
     text: notice.text,
-    dedupeKey: "scorer-out-of-funds",
+    dedupeKey: `scorer-halted-${reason.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
     cooldownMs: 6 * 3600_000,
   });
 }
@@ -212,19 +250,17 @@ async function runScore(): Promise<void> {
       );
       await reportProgress("score", done, total);
     } catch (err) {
-      if (isOutOfFundsError(err)) {
+      const fatalReason = classifyPermanentError(err);
+      if (fatalReason !== null) {
         abort.stopped = true;
-        abort.reason =
-          err instanceof BudgetExceededError
-            ? "daily budget cap exceeded"
-            : "provider account out of funds";
+        abort.reason = fatalReason;
         fail++;
         done++;
         console.error(
-          `[score] ${done}/${total} id=${story.id} out-of-funds — aborting batch:`,
+          `[score] ${done}/${total} id=${story.id} ${fatalReason} — aborting batch:`,
           err,
         );
-        await notifyScorerHalted(abort.reason, err);
+        await notifyScorerHalted(fatalReason, err);
         await reportProgress("score", done, total, true);
         return;
       }
@@ -246,7 +282,7 @@ async function runScore(): Promise<void> {
 
 interface AbortFlag {
   stopped: boolean;
-  reason: string | null;
+  reason: PermanentErrorReason | null;
 }
 
 // Progressive scoring phase A. Runs every unscored story through the
@@ -299,17 +335,15 @@ async function runPrefilterPass(
         console.log(`[score] prefilter ${done}/${stories.length}`);
       }
     } catch (err) {
-      if (isOutOfFundsError(err)) {
+      const fatalReason = classifyPermanentError(err);
+      if (fatalReason !== null) {
         abort.stopped = true;
-        abort.reason =
-          err instanceof BudgetExceededError
-            ? "daily budget cap exceeded"
-            : "provider account out of funds";
+        abort.reason = fatalReason;
         console.error(
-          `[score] prefilter id=${story.id} out-of-funds — aborting:`,
+          `[score] prefilter id=${story.id} ${fatalReason} — aborting:`,
           err,
         );
-        await notifyScorerHalted(abort.reason, err);
+        await notifyScorerHalted(fatalReason, err);
         return;
       }
       done++;
