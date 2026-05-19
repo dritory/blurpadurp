@@ -193,6 +193,7 @@ const NoteGroup: FC<{
 export interface EditorReviewData {
   issue: {
     id: number;
+    publishedSeq: number | null;
     publishedAt: Date;
     isEventDriven: boolean;
     isDraft: boolean;
@@ -412,7 +413,14 @@ export const AdminReview: FC<{
       ]}
     />
     <div class="issue-meta">
-      Issue #{data.issue.id} · {formatIssueDate(data.issue.publishedAt)}
+      Issue #{data.issue.publishedSeq ?? data.issue.id}
+      {data.issue.publishedSeq === null && !data.issue.isDraft ? (
+        <span style="color: var(--ink-soft); font-family: var(--sans); font-size: 12px; margin-left: 6px;">
+          (no published_seq — pre-migration-041)
+        </span>
+      ) : null}
+      {" · "}
+      {formatIssueDate(data.issue.publishedAt)}
       {data.issue.isEventDriven ? " · event-driven" : ""}
       {" · "}
       {data.issue.composerPromptVersion ?? "unknown"} /{" "}
@@ -469,6 +477,15 @@ export const AdminReview: FC<{
       >
         <button type="submit">Replay composer</button>
       </form>
+      {!data.issue.isDraft ? (
+        <form
+          method="post"
+          action={`/admin/review/${data.issue.id}/replay-replace`}
+          data-confirm="REWRITE THIS PUBLISHED ISSUE IN PLACE? Overwrites composed_html / composed_markdown / title with the output of the current composer prompt + model. There is no undo. Use only when the prompt rev is meaningfully better than what shipped."
+        >
+          <button type="submit" class="discard">Replay &amp; replace</button>
+        </form>
+      ) : null}
       {replays.length > 0 ? (
         <>
           <a href={`/admin/fixtures/${replays[0]!.base}.diff.md`}>

@@ -16,6 +16,7 @@ import {
   publishDraft,
   recomposeDraft,
   reeditDraft,
+  replayReplaceIssue,
 } from "../pipeline/draft.ts";
 import type {
   CapturedRow,
@@ -444,6 +445,28 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       return c.redirect(`/admin/review/${id}?error=replay_failed`, 303);
     }
     return c.redirect(`/admin/review/${id}?replayed=1`, 303);
+  });
+
+  // Destructive: re-runs the composer using the current prompt + model
+  // and overwrites the issue's stored prose. Same code path as
+  // recomposeDraft minus the is_draft gate. Cheat hatch for the rare
+  // case where a prompt rev produces meaningfully better prose than
+  // what shipped and the audience is small enough that rewriting a
+  // published issue in-place is acceptable. The UI gates this behind a
+  // strong confirm.
+  app.post("/admin/review/:id/replay-replace", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    try {
+      const res = await replayReplaceIssue(id);
+      if (!res.ok) {
+        return c.redirect(`/admin/review/${id}?error=${res.reason}`, 303);
+      }
+    } catch (err) {
+      console.error("[replay-replace]", err);
+      return c.redirect(`/admin/review/${id}?error=replay_replace_failed`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?replay_replaced=1`, 303);
   });
 
   app.post("/admin/review/:id/share", async (c) => {
@@ -3860,6 +3883,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
     .selectFrom("issue")
     .select([
       "id",
+      "published_seq",
       "published_at",
       "is_event_driven",
       "is_draft",
@@ -3916,6 +3940,7 @@ async function loadReview(id: number): Promise<EditorReviewData | null> {
   return {
     issue: {
       id: Number(iss.id),
+      publishedSeq: iss.published_seq,
       publishedAt: iss.published_at,
       isEventDriven: iss.is_event_driven,
       isDraft: iss.is_draft,
@@ -4211,6 +4236,20 @@ function parseReviewFlash(
     };
   if (q.error === "replay_failed")
     return { kind: "err", msg: "Replay failed — check server logs." };
+  if (q.replay_replaced === "1")
+    return {
+      kind: "ok",
+      msg: "Issue rewritten in place with the current prompt. The reader sees the new version on the next page load.",
+    };
+  if (q.error === "replay_replace_failed")
+    return { kind: "err", msg: "Replay-and-replace failed — check server logs. The issue is unchanged." };
+  if (q.error === "not_found")
+    return { kind: "err", msg: "Issue not found." };
+  if (q.error === "missing_input")
+    return {
+      kind: "err",
+      msg: "This issue predates the composer_input_jsonb persistence (migration 015) — no replay possible.",
+    };
   if (q.shared === "1")
     return { kind: "ok", msg: "Preview link generated below — copy and send it." };
   if (q.error === "empty_reviewer")

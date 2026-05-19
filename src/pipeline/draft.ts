@@ -114,7 +114,39 @@ export async function recomposeDraft(issueId: number): Promise<RecomposeResult> 
   if (iss === undefined || !iss.is_draft) return { ok: false, reason: "not_draft" };
   if (iss.composer_input_jsonb === null)
     return { ok: false, reason: "missing_input" };
+  return runRecompose(issueId, iss.composer_input_jsonb);
+}
 
+// Replay-and-replace on a PUBLISHED issue. Overwrites composed_html /
+// composed_markdown / title in place; no edit history, no rollback.
+// Cheat hatch for the case where a prompt rev produces meaningfully
+// better prose than what shipped — published issues are normally
+// supposed to be a stable record (silence-is-a-feature, every scored
+// item persisted forever — see CLAUDE.md), so this exists for the
+// small-audience case where re-rendering a past issue is preferable
+// to it standing as published. Use sparingly.
+export type ReplayReplaceResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "missing_input" };
+
+export async function replayReplaceIssue(
+  issueId: number,
+): Promise<ReplayReplaceResult> {
+  const iss = await db
+    .selectFrom("issue")
+    .select(["id", "composer_input_jsonb"])
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (iss === undefined) return { ok: false, reason: "not_found" };
+  if (iss.composer_input_jsonb === null)
+    return { ok: false, reason: "missing_input" };
+  return runRecompose(issueId, iss.composer_input_jsonb);
+}
+
+async function runRecompose(
+  issueId: number,
+  composerInput: unknown,
+): Promise<{ ok: true }> {
   const cfg = await loadComposerConfig();
   const prompt = await loadSystemPromptText(
     "composer",
@@ -133,7 +165,7 @@ export async function recomposeDraft(issueId: number): Promise<RecomposeResult> 
     systemPromptText: prompt.text,
   });
 
-  const input = iss.composer_input_jsonb as unknown as ComposerInput;
+  const input = composerInput as unknown as ComposerInput;
   const output = await composer.run(input);
 
   await db
