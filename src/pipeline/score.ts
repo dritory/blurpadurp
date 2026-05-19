@@ -18,6 +18,11 @@ import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
+import {
+  describeOffPeakWindow,
+  isWithinDeepSeekOffPeak,
+  minutesUntilOffPeakStart,
+} from "../shared/off-peak.ts";
 import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import { reportProgress } from "../shared/pipeline-status.ts";
 import type {
@@ -32,6 +37,7 @@ const SCORING_CONCURRENCY = 4;
 
 type ConfigMap = {
   "scorer.client": "anthropic" | "openai_compat";
+  "scorer.off_peak_only": boolean;
   "scorer.model_id": string;
   "scorer.prompt_version": string;
   "scorer.prompt_path": string;
@@ -93,6 +99,21 @@ async function notifyScorerHalted(reason: string, err: unknown): Promise<void> {
 
 async function runScore(): Promise<void> {
   const cfg = await loadConfig();
+
+  // Off-peak guard. When enabled, scoring only runs during DeepSeek's
+  // 50%-discount window. The scheduler will retry on its next tick;
+  // with hourly ticks the run self-corrects into the window within an
+  // hour of when it becomes due. Skipping here is cheaper than running
+  // at full price, and the existing dedup/embedding inheritance means
+  // a one-day delay on some stories costs nothing.
+  if (cfg["scorer.off_peak_only"] && !isWithinDeepSeekOffPeak()) {
+    const mins = minutesUntilOffPeakStart();
+    console.log(
+      `[score] off_peak_only=true, outside ${describeOffPeakWindow()} (in ~${mins}m). Skipping.`,
+    );
+    return;
+  }
+
   const scorer = makeScorer({
     client: cfg["scorer.client"],
     version: cfg["scorer.prompt_version"],
@@ -1028,5 +1049,8 @@ async function loadConfig(): Promise<ConfigMap> {
       `scorer.client must be "anthropic" or "openai_compat", got: ${String(map["scorer.client"])}`,
     );
   }
+  // Off-peak guard (migration 048). Defaults false so flipping the
+  // migration doesn't suddenly skip scoring on non-DeepSeek deployments.
+  map["scorer.off_peak_only"] ??= false;
   return map as ConfigMap;
 }
