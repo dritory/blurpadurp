@@ -18,6 +18,11 @@ import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
+import {
+  describeOffPeakWindow,
+  isWithinDeepSeekOffPeak,
+  minutesUntilOffPeakStart,
+} from "../shared/off-peak.ts";
 import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import { reportProgress } from "../shared/pipeline-status.ts";
 import type {
@@ -31,6 +36,8 @@ import type {
 const SCORING_CONCURRENCY = 4;
 
 type ConfigMap = {
+  "scorer.client": "anthropic" | "openai_compat";
+  "scorer.off_peak_only": boolean;
   "scorer.model_id": string;
   "scorer.prompt_version": string;
   "scorer.prompt_path": string;
@@ -58,41 +65,95 @@ export async function score(): Promise<void> {
   await withLock("score", 60 * 60_000, runScore);
 }
 
-// Provider quota / out-of-funds detection. Anthropic and Voyage both
-// surface insufficient-credit conditions as 4xx errors with messages
-// mentioning credit/billing/quota; Resend phrasing varies. Catching
-// the prose is a heuristic — when in doubt we keep going, since a real
-// transient network error shouldn't abort the whole batch.
-function isOutOfFundsError(err: unknown): boolean {
-  if (err instanceof BudgetExceededError) return true;
+// Classifies errors that won't fix themselves within the batch —
+// running the remaining 1299 stories after the first one fails for the
+// same reason just burns time (and on free tiers, retry quotas). The
+// scorer aborts and notifies the admin so the operator can intervene.
+//
+// Covers Anthropic / Voyage / Resend phrasing (Anthropic surfaces
+// insufficient-credit as 4xx with "credit_balance_too_low" or similar)
+// AND OpenAI-compatible HTTP status codes (401 auth, 402 billing,
+// 403 forbidden/TOS, 404 model-not-found). DeepSeek's "Insufficient
+// Balance" body is matched via the "balance" keyword.
+//
+// 429 (rate limit) and 5xx are intentionally NOT classified as
+// permanent — they're transient and the next scheduler tick should
+// retry.
+type PermanentErrorReason =
+  | "daily budget cap exceeded"
+  | "provider account out of funds"
+  | "provider auth failed (check API key)"
+  | "provider forbidden (check TOS / region / quota)"
+  | "model not found (check scorer.model_id)";
+
+function classifyPermanentError(err: unknown): PermanentErrorReason | null {
+  if (err instanceof BudgetExceededError) return "daily budget cap exceeded";
   const msg = err instanceof Error ? err.message : String(err);
-  return /\b(insufficient[_\s-]?(credit|funds|quota)|credit_balance_too_low|billing|payment[_\s-]?required|quota[_\s-]?exceeded)\b/i.test(
-    msg,
-  );
+
+  // Billing / payment / credit-exhaustion phrases, across providers.
+  if (
+    /\b(insufficient[_\s-]?(credit|funds|quota|balance)|credit_balance_too_low|billing|payment[_\s-]?required|quota[_\s-]?exceeded|out[_\s-]?of[_\s-]?credit)\b/i.test(
+      msg,
+    )
+  ) {
+    return "provider account out of funds";
+  }
+
+  // OpenAI-compat HTTP status codes (formatted in openai-client.ts as
+  // "openai-compat 4XX <statusText>: ..."). Anthropic SDK errors don't
+  // follow this format; their phrasing is caught by the regex above.
+  const httpMatch = /openai-compat (\d{3})\b/i.exec(msg);
+  if (httpMatch) {
+    const code = httpMatch[1];
+    if (code === "401") return "provider auth failed (check API key)";
+    if (code === "402") return "provider account out of funds";
+    if (code === "403") return "provider forbidden (check TOS / region / quota)";
+    if (code === "404") return "model not found (check scorer.model_id)";
+  }
+  return null;
 }
 
-async function notifyScorerHalted(reason: string, err: unknown): Promise<void> {
+async function notifyScorerHalted(
+  reason: PermanentErrorReason,
+  err: unknown,
+): Promise<void> {
   const detail = err instanceof Error ? err.message : String(err);
   const notice = renderAdminNotice({
-    heading: "Scorer halted — out of funds",
+    heading: `Scorer halted — ${reason}`,
     bodyLines: [
       `The scoring pipeline aborted because: ${reason}.`,
       `Underlying error: ${detail}`,
-      `Top up the affected provider (or raise budget.daily_usd_cap) and the next scheduled tick will resume.`,
+      `Fix the underlying issue (top up the provider, rotate the key, correct the model id, or raise budget.daily_usd_cap) and the next scheduled tick will resume.`,
     ],
   });
   await notifyAdmin({
-    subject: "[blurpadurp] Scorer halted — out of funds",
+    subject: `[blurpadurp] Scorer halted — ${reason}`,
     html: notice.html,
     text: notice.text,
-    dedupeKey: "scorer-out-of-funds",
+    dedupeKey: `scorer-halted-${reason.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
     cooldownMs: 6 * 3600_000,
   });
 }
 
 async function runScore(): Promise<void> {
   const cfg = await loadConfig();
+
+  // Off-peak guard. When enabled, scoring only runs during DeepSeek's
+  // 50%-discount window. The scheduler will retry on its next tick;
+  // with hourly ticks the run self-corrects into the window within an
+  // hour of when it becomes due. Skipping here is cheaper than running
+  // at full price, and the existing dedup/embedding inheritance means
+  // a one-day delay on some stories costs nothing.
+  if (cfg["scorer.off_peak_only"] && !isWithinDeepSeekOffPeak()) {
+    const mins = minutesUntilOffPeakStart();
+    console.log(
+      `[score] off_peak_only=true, outside ${describeOffPeakWindow()} (in ~${mins}m). Skipping.`,
+    );
+    return;
+  }
+
   const scorer = makeScorer({
+    client: cfg["scorer.client"],
     version: cfg["scorer.prompt_version"],
     modelId: cfg["scorer.model_id"],
     promptPath: cfg["scorer.prompt_path"],
@@ -189,19 +250,17 @@ async function runScore(): Promise<void> {
       );
       await reportProgress("score", done, total);
     } catch (err) {
-      if (isOutOfFundsError(err)) {
+      const fatalReason = classifyPermanentError(err);
+      if (fatalReason !== null) {
         abort.stopped = true;
-        abort.reason =
-          err instanceof BudgetExceededError
-            ? "daily budget cap exceeded"
-            : "provider account out of funds";
+        abort.reason = fatalReason;
         fail++;
         done++;
         console.error(
-          `[score] ${done}/${total} id=${story.id} out-of-funds — aborting batch:`,
+          `[score] ${done}/${total} id=${story.id} ${fatalReason} — aborting batch:`,
           err,
         );
-        await notifyScorerHalted(abort.reason, err);
+        await notifyScorerHalted(fatalReason, err);
         await reportProgress("score", done, total, true);
         return;
       }
@@ -223,7 +282,7 @@ async function runScore(): Promise<void> {
 
 interface AbortFlag {
   stopped: boolean;
-  reason: string | null;
+  reason: PermanentErrorReason | null;
 }
 
 // Progressive scoring phase A. Runs every unscored story through the
@@ -236,6 +295,7 @@ async function runPrefilterPass(
   const modelId = cfg["scorer.prefilter_model_id"];
   if (modelId === null) return;
   const scorer = makeScorer({
+    client: cfg["scorer.client"],
     version: cfg["scorer.prefilter_prompt_version"],
     modelId,
     promptPath: cfg["scorer.prompt_path"],
@@ -275,17 +335,15 @@ async function runPrefilterPass(
         console.log(`[score] prefilter ${done}/${stories.length}`);
       }
     } catch (err) {
-      if (isOutOfFundsError(err)) {
+      const fatalReason = classifyPermanentError(err);
+      if (fatalReason !== null) {
         abort.stopped = true;
-        abort.reason =
-          err instanceof BudgetExceededError
-            ? "daily budget cap exceeded"
-            : "provider account out of funds";
+        abort.reason = fatalReason;
         console.error(
-          `[score] prefilter id=${story.id} out-of-funds — aborting:`,
+          `[score] prefilter id=${story.id} ${fatalReason} — aborting:`,
           err,
         );
-        await notifyScorerHalted(abort.reason, err);
+        await notifyScorerHalted(fatalReason, err);
         return;
       }
       done++;
@@ -1017,5 +1075,16 @@ async function loadConfig(): Promise<ConfigMap> {
   // constants that lived in code at that migration's time.
   map["theme.attach_threshold"] ??= 0.7;
   map["theme.create_recheck_threshold"] ??= 0.88;
+  // Scorer client dispatch (migration 047). Defaults to anthropic so a
+  // repo without the migration still scores through the Anthropic SDK.
+  map["scorer.client"] ??= "anthropic";
+  if (map["scorer.client"] !== "anthropic" && map["scorer.client"] !== "openai_compat") {
+    throw new Error(
+      `scorer.client must be "anthropic" or "openai_compat", got: ${String(map["scorer.client"])}`,
+    );
+  }
+  // Off-peak guard (migration 048). Defaults false so flipping the
+  // migration doesn't suddenly skip scoring on non-DeepSeek deployments.
+  map["scorer.off_peak_only"] ??= false;
   return map as ConfigMap;
 }

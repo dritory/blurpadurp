@@ -67,10 +67,16 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       return;
     }
     case "fixture-replay": {
-      const [inputPath, promptPath, promptVersion, modelId] = args;
+      const [inputPath, promptPath, promptVersion, modelId, clientArg] = args;
       if (!inputPath || !promptPath || !promptVersion || !modelId) {
         throw new Error(
-          "fixture-replay: usage: fixture-replay <input.jsonl> <prompt.md> <version> <model_id>",
+          "fixture-replay: usage: fixture-replay <input.jsonl> <prompt.md> <version> <model_id> [anthropic|openai_compat]",
+        );
+      }
+      const client = clientArg ?? "anthropic";
+      if (client !== "anthropic" && client !== "openai_compat") {
+        throw new Error(
+          `fixture-replay: client must be "anthropic" or "openai_compat", got: ${client}`,
         );
       }
       const { replayScorerFixture } = await import("./pipeline/fixture.ts");
@@ -79,6 +85,7 @@ async function run(sub: Sub, args: string[]): Promise<void> {
         promptPath,
         promptVersion,
         modelId,
+        client,
       });
       return;
     }
