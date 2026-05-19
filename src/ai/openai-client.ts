@@ -132,7 +132,7 @@ export async function callOpenAICompat(
 
   let output: unknown;
   try {
-    output = JSON.parse(toolCall.function.arguments);
+    output = parseToolArguments(toolCall.function.arguments);
   } catch (e) {
     const args = toolCall.function.arguments;
     // Dump the full bad payload to a tmp file for diagnosis. The error
@@ -177,6 +177,50 @@ export async function callOpenAICompat(
     cache_read: cacheHit,
     cache_write: null,
   };
+}
+
+// Best-effort repair for malformed tool-call JSON from OpenAI-compat
+// providers. Strict JSON.parse first; if that fails, try a small set
+// of known fixups before giving up. Observed quirks:
+//
+//   * DeepSeek occasionally appends a phantom extra `}` (or `]`),
+//     wrapping the response in an unbalanced outer brace. Seen on
+//     ~25% of scoring calls. Strip up to 3 trailing closing-brackets
+//     and retry.
+//   * Some providers emit trailing commas before `}` / `]`. Regex
+//     them out before retry.
+//
+// Each candidate repair is tried in isolation — we don't combine
+// fixes silently. If none parse, the caller throws with full
+// diagnostic (length, head, tail, dump file).
+function parseToolArguments(args: string): unknown {
+  try {
+    return JSON.parse(args);
+  } catch (firstErr) {
+    const candidates: string[] = [];
+    const trimmed = args.trimEnd();
+    // Trailing-comma fix.
+    const noTrailingCommas = trimmed.replace(/,(\s*[}\]])/g, "$1");
+    if (noTrailingCommas !== trimmed) candidates.push(noTrailingCommas);
+    // Strip 1–3 trailing closing brackets (the DeepSeek case).
+    let s = trimmed;
+    for (let i = 0; i < 3; i++) {
+      if (s.endsWith("}") || s.endsWith("]")) {
+        s = s.slice(0, -1);
+        candidates.push(s);
+      } else {
+        break;
+      }
+    }
+    for (const c of candidates) {
+      try {
+        return JSON.parse(c);
+      } catch {
+        continue;
+      }
+    }
+    throw firstErr;
+  }
 }
 
 // Some OpenAI-compatible providers (notably strict-mode endpoints, and
