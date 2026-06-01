@@ -125,6 +125,10 @@ import {
   type SourcesData,
 } from "../views/admin-sources.tsx";
 import {
+  AdminReviewers,
+  type ReviewersData,
+} from "../views/admin-reviewers.tsx";
+import {
   AdminPathFilters,
   type PathFiltersData,
   type PathFilterRow,
@@ -876,6 +880,60 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       .where("host", "=", host)
       .execute();
     return c.redirect(`/admin/sources?unblocked=${encodeURIComponent(host)}`, 303);
+  });
+
+  app.get("/admin/reviewers", async (c) => {
+    const data = await loadReviewersData(c.req.query());
+    return c.html(<AdminReviewers data={data} />);
+  });
+
+  // Add a reviewer by email. Upsert: if the address already exists we
+  // flip is_reviewer on (and clear an unsubscribe) rather than erroring;
+  // a fresh address is inserted pre-confirmed so dispatch sends to it on
+  // the next sweep without a confirmation round-trip (operator-curated).
+  app.post("/admin/reviewers/add", async (c) => {
+    const body = await c.req.parseBody();
+    const email = String(body.email ?? "").trim().toLowerCase();
+    // Same shallow check the public subscribe path uses — a real address
+    // has one @ with text either side. Resend rejects the rest.
+    if (email.length === 0 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return c.redirect("/admin/reviewers?error=bad_email", 303);
+    }
+    await db
+      .insertInto("email_subscription")
+      .values({ email, confirmed_at: new Date(), is_reviewer: true })
+      .onConflict((oc) =>
+        oc.column("email").doUpdateSet({
+          is_reviewer: true,
+          unsubscribed_at: null,
+          confirmed_at: sql`coalesce(email_subscription.confirmed_at, now())`,
+        }),
+      )
+      .execute();
+    return c.redirect(
+      `/admin/reviewers?added=${encodeURIComponent(email)}`,
+      303,
+    );
+  });
+
+  app.post("/admin/reviewers/:id/toggle", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const body = await c.req.parseBody();
+    const make = String(body.make ?? "") === "1";
+    const updated = await db
+      .updateTable("email_subscription")
+      .set({ is_reviewer: make })
+      .where("id", "=", id)
+      .returning("email")
+      .executeTakeFirst();
+    if (updated === undefined) {
+      return c.redirect("/admin/reviewers?error=no_subscription", 303);
+    }
+    return c.redirect(
+      `/admin/reviewers?${make ? "promoted" : "demoted"}=${encodeURIComponent(updated.email)}`,
+      303,
+    );
   });
 
   app.get("/admin/path-filters", async (c) => {
@@ -3053,6 +3111,72 @@ function parseFlashGeneric(
   if (saved) return { kind: "ok", msg: "Saved." };
   if (error === "bad_id") return { kind: "error", msg: "Bad theme id." };
   return null;
+}
+
+async function loadReviewersData(
+  q: Record<string, string>,
+): Promise<ReviewersData> {
+  const subs = await db
+    .selectFrom("email_subscription")
+    .select([
+      "id",
+      "email",
+      "is_reviewer",
+      "confirmed_at",
+      "unsubscribed_at",
+    ])
+    // Reviewers first, then the rest of the subscriber list to promote
+    // from; newest within each group.
+    .orderBy("is_reviewer", "desc")
+    .orderBy("created_at", "desc")
+    .execute();
+
+  // Last successful send per (subscriber, kind) for the "last draft /
+  // last published sent" columns. One grouped scan, mapped in memory.
+  const sendRows = await db
+    .selectFrom("dispatch_log")
+    .select(({ fn }) => [
+      "subscription_id",
+      "subscription_kind",
+      fn.max("dispatched_at").as("last_at"),
+    ])
+    .where("subscription_kind", "in", ["draft", "email"])
+    .where("status", "in", ["sent", "noop"])
+    .groupBy(["subscription_id", "subscription_kind"])
+    .execute();
+  const draftSent = new Map<number, Date>();
+  const pubSent = new Map<number, Date>();
+  for (const r of sendRows) {
+    const at = r.last_at as Date | null;
+    if (at === null) continue;
+    const target = r.subscription_kind === "draft" ? draftSent : pubSent;
+    target.set(Number(r.subscription_id), at);
+  }
+
+  const rows = subs.map((s) => ({
+    id: Number(s.id),
+    email: s.email,
+    isReviewer: s.is_reviewer,
+    confirmedAt: s.confirmed_at,
+    unsubscribedAt: s.unsubscribed_at,
+    lastDraftSentAt: draftSent.get(Number(s.id)) ?? null,
+    lastPublishedSentAt: pubSent.get(Number(s.id)) ?? null,
+  }));
+
+  const flash: ReviewersData["flash"] =
+    q.added !== undefined
+      ? { kind: "ok", msg: `Added ${q.added} as a reviewer.` }
+      : q.promoted !== undefined
+        ? { kind: "ok", msg: `${q.promoted} is now a reviewer.` }
+        : q.demoted !== undefined
+          ? { kind: "ok", msg: `${q.demoted} is no longer a reviewer.` }
+          : q.error === "bad_email"
+            ? { kind: "err", msg: "That doesn't look like a valid email." }
+            : q.error === "no_subscription"
+              ? { kind: "err", msg: "No such subscription." }
+              : null;
+
+  return { rows, flash };
 }
 
 async function loadSourcesData(

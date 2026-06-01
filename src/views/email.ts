@@ -24,6 +24,13 @@ export interface ConfirmEmailCtx {
   confirmUrl: string;
 }
 
+export interface DraftReviewEmailCtx {
+  brandUrl: string;
+  previewUrl: string; // signed /draft/:id?token=… reviewer link
+  title: string | null;
+  date: Date;
+}
+
 export interface Rendered {
   subject: string;
   html: string;
@@ -126,6 +133,57 @@ ${ctx.issueHtml}
     `Preferences: ${ctx.manageUrl}`,
     `Unsubscribe: ${ctx.unsubscribeUrl}`,
     "",
+  ]
+    .filter((s) => s !== null && s !== undefined)
+    .join("\n");
+  return { subject, html, text };
+}
+
+// Sent to reviewers when compose persists a new draft — before it
+// ships. Deliberately light: no issue body, just a nudge to the
+// private preview page where they can read it and leave notes. The
+// published brief (renderBriefEmail) arrives later, once it goes out.
+export function renderDraftReviewEmail(ctx: DraftReviewEmailCtx): Rendered {
+  const dateStr = fmtDate(ctx.date);
+  const subject =
+    ctx.title !== null
+      ? `Draft for review: ${ctx.title}`
+      : `A Blurpadurp draft is ready for review`;
+  const titleHtml =
+    ctx.title !== null ? `<h1 class="title">${esc(ctx.title)}</h1>` : "";
+  const body = `
+<p class="brand">Blurpadurp</p>
+<p class="meta">Draft · ${esc(dateStr)}</p>
+${titleHtml}
+<p>
+  A new issue is drafted and waiting for your read before it goes out.
+  Open the private preview to read it and leave notes on anything —
+  any heading or paragraph is clickable to attach a comment.
+</p>
+<p><a class="cta-btn" href="${esc(ctx.previewUrl)}">Read the draft &amp; leave notes</a></p>
+<p style="font-size: 13px; color: #6b6b6b;">
+  Or paste this into your browser:<br>
+  <a href="${esc(ctx.previewUrl)}">${esc(ctx.previewUrl)}</a>
+</p>
+<div class="footer">
+  <p>This is a draft preview — the published version may differ. You're
+  getting it because you're a reviewer. The published brief still
+  arrives separately once the issue ships.</p>
+  <p>Private link, expires in 14 days.</p>
+</div>`;
+  const html = docShell(subject, body);
+  const text = [
+    "BLURPADURP",
+    `Draft · ${dateStr}`,
+    ctx.title !== null ? `\n${ctx.title}` : "",
+    "",
+    "A new issue is drafted and waiting for your read before it goes out.",
+    "Open the private preview to read it and leave notes:",
+    "",
+    ctx.previewUrl,
+    "",
+    "This is a draft preview — the published version may differ.",
+    "Private link, expires in 14 days.",
   ]
     .filter((s) => s !== null && s !== undefined)
     .join("\n");
