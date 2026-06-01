@@ -89,6 +89,40 @@ SELECT (now() AT TIME ZONE e.timezone)::time AS local_now,
 DST crossings are handled by Postgres. Subscribers that pick a timezone
 we don't recognize get silently dropped to UTC — logged, not blocked.
 
+## Draft-review dispatch
+
+Before an issue ships, a small set of **reviewers** read it as a draft
+and leave notes. A reviewer is just an `email_subscription` with
+`is_reviewer = true` (migration 051) — no separate table, no separate
+identity. The flag is toggled from `/admin/reviewers` (promote an
+existing subscriber, or add one by email; added reviewers are inserted
+pre-confirmed so sends start on the next sweep).
+
+The dispatch sweep runs a draft pass *before* the published pass:
+
+```
+for each (draft issue, confirmed reviewer) with no prior 'draft' send:
+  try send a signed draft-preview link (kind=draft-preview token)
+```
+
+- The link points at `/draft/<id>?token=…` — the read-only reviewer
+  preview with the click-to-comment feedback form (writes
+  `issue_annotation` with `reviewer_name`). No admin auth.
+- At-most-once uses the same `dispatch_log` insert-then-send trick,
+  with `subscription_kind = 'draft'`. Because the UNIQUE key is
+  `(issue_id, subscription_kind, subscription_id)`, the `'draft'` send
+  and the eventual `'email'` (published) send for the same
+  issue × reviewer are distinct rows — the reviewer gets the preview
+  once and the published brief once, never a duplicate of either.
+- Reviewers are also normal confirmed subscribers, so the published
+  pass emails them the brief when the issue ships. "Read the draft" and
+  "notified when a new issue arrives" both fall out of the one flag.
+- The reviewer's display name (preview banner + annotation attribution)
+  is derived from the email local part — subscriptions carry no name.
+
+Silence still holds: no draft → no draft email; an empty week never
+produces a draft to review.
+
 ## Event-driven issues
 
 When `issue.is_event_driven = true` (triggered by `cli urgent`):
@@ -207,3 +241,5 @@ Before turning dispatch on:
 - [ ] `/manage/<token>` page implemented.
 - [ ] Manual send test against the operator's own email passes.
 - [ ] Stage-2 deploy has at least one published issue to dispatch.
+- [ ] At least one reviewer (`is_reviewer = true`) exists if draft
+      review is wanted — set via `/admin/reviewers`.

@@ -45,7 +45,11 @@ ingest → score → editor → compose → (dispatch)
   that flags arc candidates structurally.
 - **compose** partitions picks into four fixed sections server-side,
   then runs Sonnet to write prose (`docs/composer-prompt.md`).
-- **dispatch** is stubbed. Design in `docs/dispatch.md`.
+- **dispatch** emails the published brief to confirmed subscribers
+  and a draft-preview link to reviewers (`is_reviewer` subscriptions,
+  managed at `/admin/reviewers`) — both via the hourly sweep, both
+  at-most-once via `dispatch_log`. Push delivery is still stubbed.
+  Design in `docs/dispatch.md`.
 
 ## Invariants — do not regress
 

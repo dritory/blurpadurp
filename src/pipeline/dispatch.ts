@@ -18,12 +18,163 @@ import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { signToken } from "../shared/tokens.ts";
-import { renderBriefEmail } from "../views/email.ts";
+import { renderBriefEmail, renderDraftReviewEmail } from "../views/email.ts";
 
 const RECENCY_WINDOW_MS = 7 * 24 * 3600 * 1000;
 
 export async function dispatch(): Promise<void> {
-  await withLock("dispatch", 15 * 60_000, runDispatch);
+  await withLock("dispatch", 15 * 60_000, async () => {
+    // Draft-review pass first: reviewers should see the draft before
+    // (or as soon as) the published brief might go out. The two passes
+    // are independent — a draft send and a published send for the same
+    // issue×subscriber are distinct dispatch_log rows (subscription_kind
+    // 'draft' vs 'email'), so neither blocks the other.
+    await runDraftDispatch();
+    await runDispatch();
+  });
+}
+
+// A reviewer subscription has no display name, so derive a friendly one
+// from the email's local part for the preview banner + annotation
+// attribution. Falls back to the full address if there's nothing usable.
+function reviewerNameFromEmail(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  const cleaned = local.replace(/[._-]+/g, " ").trim();
+  if (cleaned.length === 0) return email;
+  return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Draft-review dispatch. For every open draft × confirmed reviewer with
+// no prior 'draft' dispatch_log row, email a signed draft-preview link.
+// At-most-once is the same insert-then-send trick as the published
+// sweep, keyed on subscription_kind='draft'.
+async function runDraftDispatch(): Promise<void> {
+  const brandUrl =
+    getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
+
+  const pairs = await db
+    .selectFrom("issue as i")
+    .innerJoin("email_subscription as e", (join) =>
+      join.on((eb) => eb.lit(true)),
+    )
+    .select([
+      "i.id as issue_id",
+      "i.title as issue_title",
+      "i.published_at as published_at",
+      "e.id as subscription_id",
+      "e.email as email",
+    ])
+    .where("i.is_draft", "=", true)
+    .where("e.is_reviewer", "=", true)
+    .where("e.confirmed_at", "is not", null)
+    .where("e.unsubscribed_at", "is", null)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("dispatch_log as d")
+            .select("d.id")
+            .whereRef("d.issue_id", "=", "i.id")
+            .where("d.subscription_kind", "=", "draft")
+            .whereRef("d.subscription_id", "=", "e.id"),
+        ),
+      ),
+    )
+    .orderBy("i.id", "desc")
+    .orderBy("e.id", "asc")
+    .execute();
+
+  if (pairs.length === 0) {
+    console.log("[dispatch:draft] no draft reviews to send");
+    return;
+  }
+
+  console.log(`[dispatch:draft] ${pairs.length} (draft × reviewer) pairs`);
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const p of pairs) {
+    const issueId = Number(p.issue_id);
+    const subId = Number(p.subscription_id);
+    const tag = `draft i${issueId}→sub${subId}`;
+
+    const claim = await db
+      .insertInto("dispatch_log")
+      .values({
+        issue_id: issueId,
+        subscription_kind: "draft",
+        subscription_id: subId,
+        status: "sending",
+      })
+      .onConflict((oc) =>
+        oc
+          .columns(["issue_id", "subscription_kind", "subscription_id"])
+          .doNothing(),
+      )
+      .returning("id")
+      .executeTakeFirst();
+
+    if (claim === undefined) {
+      skipped++;
+      continue;
+    }
+
+    const reviewerName = reviewerNameFromEmail(p.email);
+    const token = signToken({
+      kind: "draft-preview",
+      subscriptionId: issueId,
+      reviewerName,
+    });
+    const previewUrl = `${brandUrl}/draft/${issueId}?token=${encodeURIComponent(token)}`;
+
+    const mail = renderDraftReviewEmail({
+      brandUrl,
+      previewUrl,
+      title: p.issue_title,
+      date: new Date(p.published_at),
+    });
+
+    const res = await sendMail({
+      to: p.email,
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+    });
+
+    if (res.ok) {
+      await db
+        .updateTable("dispatch_log")
+        .set({
+          status: res.noop === true ? "noop" : "sent",
+          error: null,
+          provider_message_id: res.id,
+        })
+        .where("id", "=", claim.id)
+        .execute();
+      sent++;
+      console.log(
+        `[dispatch:draft] ${tag} ${res.noop === true ? "noop" : "sent"} ${res.id ?? ""}`,
+      );
+    } else {
+      const isTransient = res.bounceKind === "transient";
+      await db
+        .updateTable("dispatch_log")
+        .set({
+          status: isTransient ? "error_transient" : "error_permanent",
+          error: res.error,
+        })
+        .where("id", "=", claim.id)
+        .execute();
+      failed++;
+      console.error(
+        `[dispatch:draft] ${tag} failed (${res.bounceKind}): ${res.error}`,
+      );
+    }
+  }
+
+  console.log(
+    `[dispatch:draft] done · sent=${sent} skipped=${skipped} failed=${failed}`,
+  );
 }
 
 async function runDispatch(): Promise<void> {
