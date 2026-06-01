@@ -399,6 +399,16 @@ export const AdminReview: FC<{
             display: flex; flex-direction: column; gap: 6px;
           }
           .share-result strong { color: #4a3800; }
+          .resend-form {
+            margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--rule);
+            display: flex; flex-direction: column; gap: 6px;
+          }
+          .resend-form button {
+            padding: 6px 12px; background: #2b4f2b; color: #fff;
+            border: 1px solid #2b4f2b; font: inherit; font-family: var(--sans);
+            font-size: 13px; font-weight: 600; cursor: pointer; align-self: flex-start;
+          }
+          .resend-form button:hover { background: #1e3b1e; }
         `,
       }}
     />
@@ -545,6 +555,20 @@ export const AdminReview: FC<{
               </p>
             </div>
           ) : null}
+          <form
+            method="post"
+            action={`/admin/review/${data.issue.id}/resend-draft`}
+            class="resend-form"
+            data-confirm="Email the draft-preview link to every reviewer who hasn't already received this draft?"
+          >
+            <button type="submit">Send draft to reviewers</button>
+            <p class="share-hint">
+              Emails the preview link to reviewers (managed on the{" "}
+              <a href="/admin/reviewers">Reviewers</a> page) who haven't
+              gotten this draft yet — newly-added reviewers and any prior
+              send that failed. Reviewers who already have it are skipped.
+            </p>
+          </form>
         </div>
       </details>
     ) : null}

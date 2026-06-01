@@ -18,6 +18,7 @@ import {
   reeditDraft,
   replayReplaceIssue,
 } from "../pipeline/draft.ts";
+import { resendDraftToReviewers } from "../pipeline/dispatch.ts";
 import type {
   CapturedRow,
   ReplayRow,
@@ -498,6 +499,35 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
       shared: "1",
       share_token: token,
       share_name: reviewerName,
+    });
+    return c.redirect(`/admin/review/${id}?${params.toString()}#share`, 303);
+  });
+
+  // Manual re-send of the draft-preview email to reviewers who haven't
+  // already received this draft (new reviewers + prior failed sends).
+  // The hourly sweep sends each draft once; this is the operator's
+  // override for "I added a reviewer" / "a send bounced" / "I just
+  // re-composed and want it back out now".
+  app.post("/admin/review/:id/resend-draft", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    let res: Awaited<ReturnType<typeof resendDraftToReviewers>>;
+    try {
+      res = await resendDraftToReviewers(id);
+    } catch (err) {
+      console.error("[resend-draft]", err);
+      return c.redirect(`/admin/review/${id}?error=resend_failed#share`, 303);
+    }
+    if (!res.ok) {
+      const code = res.reason === "not_draft" ? "not_draft_share" : "not_found";
+      return c.redirect(`/admin/review/${id}?error=${code}#share`, 303);
+    }
+    const params = new URLSearchParams({
+      resent: "1",
+      resent_total: String(res.totalReviewers),
+      resent_n: String(res.sent),
+      resent_failed: String(res.failed),
+      resent_targeted: String(res.targeted),
     });
     return c.redirect(`/admin/review/${id}?${params.toString()}#share`, 303);
   });
@@ -4380,7 +4410,41 @@ function parseReviewFlash(
     return { kind: "err", msg: "Reviewer name can't be empty." };
   if (q.error === "not_draft_share")
     return { kind: "err", msg: "Preview links are only for drafts." };
+  if (q.resent === "1") return parseResentFlash(q);
+  if (q.error === "resend_failed")
+    return { kind: "err", msg: "Re-send failed — check server logs." };
   return null;
+}
+
+// Resolve the outcome of a manual draft re-send into a flash message.
+// Distinguishes "no reviewers configured", "everyone already had it",
+// "sent to N", and partial-failure.
+function parseResentFlash(
+  q: Record<string, string>,
+): { kind: "ok"; msg: string } | { kind: "err"; msg: string } {
+  const total = Number(q.resent_total ?? 0);
+  const sent = Number(q.resent_n ?? 0);
+  const failed = Number(q.resent_failed ?? 0);
+  const targeted = Number(q.resent_targeted ?? 0);
+  if (total === 0)
+    return {
+      kind: "err",
+      msg: "No reviewers configured — add one on the Reviewers page first.",
+    };
+  if (targeted === 0)
+    return {
+      kind: "ok",
+      msg: "All reviewers already have this draft — nothing to re-send.",
+    };
+  if (failed > 0)
+    return {
+      kind: "err",
+      msg: `Re-sent to ${sent} reviewer(s); ${failed} failed — check server logs.`,
+    };
+  return {
+    kind: "ok",
+    msg: `Re-sent the draft to ${sent} reviewer(s).`,
+  };
 }
 
 app.notFound((c) => c.html(<NotFoundPage />, 404));

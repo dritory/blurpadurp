@@ -15,7 +15,7 @@
 
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
-import { sendMail } from "../shared/mailer.ts";
+import { type MailResult, sendMail } from "../shared/mailer.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { signToken } from "../shared/tokens.ts";
 import { renderBriefEmail, renderDraftReviewEmail } from "../views/email.ts";
@@ -42,6 +42,170 @@ function reviewerNameFromEmail(email: string): string {
   const cleaned = local.replace(/[._-]+/g, " ").trim();
   if (cleaned.length === 0) return email;
   return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Mint a fresh draft-preview token and email the reviewer the link.
+// Shared by the sweep's draft pass and the admin manual re-send so the
+// link + template never diverge. Does not touch dispatch_log — the
+// caller owns the at-most-once bookkeeping.
+async function sendDraftPreviewEmail(
+  issueId: number,
+  title: string | null,
+  publishedAt: Date,
+  email: string,
+  brandUrl: string,
+): Promise<MailResult> {
+  const reviewerName = reviewerNameFromEmail(email);
+  const token = signToken({
+    kind: "draft-preview",
+    subscriptionId: issueId,
+    reviewerName,
+  });
+  const previewUrl = `${brandUrl}/draft/${issueId}?token=${encodeURIComponent(token)}`;
+  const mail = renderDraftReviewEmail({
+    brandUrl,
+    previewUrl,
+    title,
+    date: publishedAt,
+  });
+  return sendMail({
+    to: email,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text,
+  });
+}
+
+export type ResendDraftResult =
+  | { ok: false; reason: "not_found" | "not_draft" }
+  | {
+      ok: true;
+      totalReviewers: number;
+      targeted: number;
+      sent: number;
+      failed: number;
+    };
+
+// Manual re-send, triggered from the admin review page. Targets only
+// reviewers who have NOT already received this draft successfully — i.e.
+// reviewers added after the last sweep, plus reviewers whose prior send
+// errored (the hourly sweep can't retry those on its own, because a
+// dispatch_log row already exists and its NOT EXISTS filter only checks
+// for presence, not status). Already-notified reviewers are left alone.
+export async function resendDraftToReviewers(
+  issueId: number,
+): Promise<ResendDraftResult> {
+  const brandUrl =
+    getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
+
+  const iss = await db
+    .selectFrom("issue")
+    .select(["id", "title", "published_at", "is_draft"])
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (iss === undefined) return { ok: false, reason: "not_found" };
+  if (!iss.is_draft) return { ok: false, reason: "not_draft" };
+
+  const totalRow = await db
+    .selectFrom("email_subscription")
+    .select(({ fn }) => fn.countAll<string>().as("n"))
+    .where("is_reviewer", "=", true)
+    .where("confirmed_at", "is not", null)
+    .where("unsubscribed_at", "is", null)
+    .executeTakeFirst();
+  const totalReviewers = Number(totalRow?.n ?? 0);
+
+  const reviewers = await db
+    .selectFrom("email_subscription as e")
+    .select(["e.id as subscription_id", "e.email as email"])
+    .where("e.is_reviewer", "=", true)
+    .where("e.confirmed_at", "is not", null)
+    .where("e.unsubscribed_at", "is", null)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("dispatch_log as d")
+            .select("d.id")
+            .where("d.issue_id", "=", issueId)
+            .where("d.subscription_kind", "=", "draft")
+            .whereRef("d.subscription_id", "=", "e.id")
+            .where("d.status", "in", ["sent", "noop"]),
+        ),
+      ),
+    )
+    .orderBy("e.id", "asc")
+    .execute();
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const r of reviewers) {
+    const subId = Number(r.subscription_id);
+    // Upsert the intent row: a prior errored send leaves a row we must
+    // reuse (the UNIQUE key collides), so on conflict we reset it to
+    // 'sending'. A fresh reviewer inserts cleanly.
+    const claim = await db
+      .insertInto("dispatch_log")
+      .values({
+        issue_id: issueId,
+        subscription_kind: "draft",
+        subscription_id: subId,
+        status: "sending",
+      })
+      .onConflict((oc) =>
+        oc
+          .columns(["issue_id", "subscription_kind", "subscription_id"])
+          .doUpdateSet({ status: "sending", error: null }),
+      )
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    const res = await sendDraftPreviewEmail(
+      issueId,
+      iss.title,
+      new Date(iss.published_at),
+      r.email,
+      brandUrl,
+    );
+
+    if (res.ok) {
+      await db
+        .updateTable("dispatch_log")
+        .set({
+          status: res.noop === true ? "noop" : "sent",
+          error: null,
+          provider_message_id: res.id,
+        })
+        .where("id", "=", claim.id)
+        .execute();
+      sent++;
+      console.log(
+        `[dispatch:draft] resend i${issueId}→sub${subId} ${res.noop === true ? "noop" : "sent"}`,
+      );
+    } else {
+      const isTransient = res.bounceKind === "transient";
+      await db
+        .updateTable("dispatch_log")
+        .set({
+          status: isTransient ? "error_transient" : "error_permanent",
+          error: res.error,
+        })
+        .where("id", "=", claim.id)
+        .execute();
+      failed++;
+      console.error(
+        `[dispatch:draft] resend i${issueId}→sub${subId} failed (${res.bounceKind}): ${res.error}`,
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    totalReviewers,
+    targeted: reviewers.length,
+    sent,
+    failed,
+  };
 }
 
 // Draft-review dispatch. For every open draft × confirmed reviewer with
@@ -119,27 +283,13 @@ async function runDraftDispatch(): Promise<void> {
       continue;
     }
 
-    const reviewerName = reviewerNameFromEmail(p.email);
-    const token = signToken({
-      kind: "draft-preview",
-      subscriptionId: issueId,
-      reviewerName,
-    });
-    const previewUrl = `${brandUrl}/draft/${issueId}?token=${encodeURIComponent(token)}`;
-
-    const mail = renderDraftReviewEmail({
+    const res = await sendDraftPreviewEmail(
+      issueId,
+      p.issue_title,
+      new Date(p.published_at),
+      p.email,
       brandUrl,
-      previewUrl,
-      title: p.issue_title,
-      date: new Date(p.published_at),
-    });
-
-    const res = await sendMail({
-      to: p.email,
-      subject: mail.subject,
-      html: mail.html,
-      text: mail.text,
-    });
+    );
 
     if (res.ok) {
       await db

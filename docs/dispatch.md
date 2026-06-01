@@ -123,6 +123,16 @@ for each (draft issue, confirmed reviewer) with no prior 'draft' send:
 Silence still holds: no draft → no draft email; an empty week never
 produces a draft to review.
 
+**Manual re-send.** The sweep sends each draft to each reviewer once and
+then never again (the `dispatch_log` row is the receipt). The review
+page (`/admin/review/:id`) has a **Send draft to reviewers** button for
+the override cases: a reviewer added after the sweep ran, a send that
+errored (the sweep can't retry those — a row already exists), or wanting
+a freshly re-composed draft back out immediately. It targets only
+reviewers without a successful `'draft'` send for that issue, so it never
+re-mails someone who already has it; already-notified reviewers are left
+alone. `resendDraftToReviewers()` in `src/pipeline/dispatch.ts`.
+
 ## Event-driven issues
 
 When `issue.is_event_driven = true` (triggered by `cli urgent`):
