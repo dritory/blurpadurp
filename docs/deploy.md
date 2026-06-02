@@ -163,7 +163,7 @@ public.
 | `ingest` | every 6h | Weekly compose → no need for hourly freshness. Reduces Neon CU and GDELT/BigQuery cost. Breaking news routes through urgent.ts. |
 | `score` | daily | Catchup pass on every unscored story |
 | `compose` | weekly | Product cadence — one brief a week |
-| `dispatch` | hourly | New confirmations + newly-published issues land near subscriber's delivery window |
+| `dispatch` | every 6h | v0 dispatch doesn't honor the ±30 min window, so cadence directly controls latency. Bump back to hourly once real subscribers + delivery-window logic land. |
 | `retention` | daily | GDPR storage-limitation policy: prune unconfirmed subs + anonymize long-unsubscribed rows + trim old dispatch_log entries |
 
 Cadences live in the `pipeline_schedule` table (mig 039) and can be
