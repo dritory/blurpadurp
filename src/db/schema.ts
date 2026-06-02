@@ -54,6 +54,10 @@ export interface Database {
     scorer_prompt_version: string | null;
     raw_input: Jsonb | null;
     raw_output: Jsonb | null;
+    // Denormalized scorer one-line summary (mig 055). Lifted out of
+    // raw_output so the hot scoring path reads a small column instead
+    // of the full jsonb, and so raw_output can move to cold storage.
+    scorer_summary: string | null;
     zeitgeist_score: number | null;
     half_life: number | null;
     reach: number | null;

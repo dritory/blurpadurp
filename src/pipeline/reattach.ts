@@ -369,11 +369,11 @@ async function findBestNeighbor(
       "name",
       "description",
       "category_id",
-      sql<number>`1 - (centroid_embedding <=> ${embed}::vector)`.as("sim"),
+      sql<number>`1 - (centroid_embedding <=> ${embed}::halfvec)`.as("sim"),
     ])
     .where("centroid_embedding", "is not", null)
     .where("id", "!=", s.theme_id)
-    .orderBy(sql`centroid_embedding <=> ${embed}::vector`)
+    .orderBy(sql`centroid_embedding <=> ${embed}::halfvec`)
     .limit(1)
     .executeTakeFirst();
   if (!row) return null;
@@ -421,11 +421,11 @@ async function findThemeNeighborsAbove(
     .selectFrom("theme")
     .select([
       "id",
-      sql<number>`1 - (centroid_embedding <=> ${centroid}::vector)`.as("sim"),
+      sql<number>`1 - (centroid_embedding <=> ${centroid}::halfvec)`.as("sim"),
     ])
     .where("centroid_embedding", "is not", null)
     .where("id", "!=", themeId)
-    .orderBy(sql`centroid_embedding <=> ${centroid}::vector`)
+    .orderBy(sql`centroid_embedding <=> ${centroid}::halfvec`)
     .limit(limit)
     .execute();
   return rows

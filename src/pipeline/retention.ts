@@ -12,9 +12,23 @@
 // 3. dispatch_log rows with status = 'noop' or 'delivered' older than
 //    180 days → delete. Hard bounce / complaint rows we keep forever
 //    (they're the reason we won't resend).
+// 4. story.embedding nulled for stories scored more than
+//    retention.embedding_hot_days ago whose theme is dormant. See
+//    "age-out" note below.
 //
 // Ai_call_log is left untouched — it's training-data substrate per
 // CLAUDE.md's invariant ("Don't delete ai_call_log rows").
+//
+// Age-out rationale (docs/storage.md): an individual story's embedding
+// does real work only inside the dedup window
+// (scorer.dedup_lookback_days = 3 days) and, after that, only while its
+// theme keeps gaining members. Beyond that it is dead weight in the
+// story_embedding_idx ivfflat index. Embeddings are DERIVED data —
+// reembed.ts regenerates any of them from title + scorer_summary — so
+// nulling them is not a "persist forever" violation (that invariant
+// covers raw_input/raw_output). We only null stories whose theme is
+// dormant (no member scored within the same window), so an active
+// theme's centroid recompute is never starved of members.
 
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
@@ -23,6 +37,7 @@ import { withLock } from "../shared/pipeline-lock.ts";
 const UNCONFIRMED_TTL_MS = 30 * 24 * 3600 * 1000;
 const UNSUBSCRIBED_ANON_TTL_MS = 90 * 24 * 3600 * 1000;
 const DISPATCH_LOG_TTL_MS = 180 * 24 * 3600 * 1000;
+const DEFAULT_EMBEDDING_HOT_DAYS = 90;
 
 export async function retention(): Promise<void> {
   await withLock("retention", 5 * 60_000, runRetention);
@@ -67,7 +82,50 @@ async function runRetention(): Promise<void> {
     .executeTakeFirst();
   const dispatchDeleted = Number(dispatchPrune.numDeletedRows ?? 0);
 
+  // 4. Age out cold individual story embeddings (see header note).
+  const embeddingsAged = await ageOutEmbeddings(now);
+
   console.log(
-    `[retention] unconfirmed_deleted=${unconfirmedDeleted} unsub_anonymized=${unsubAnonymized} dispatch_pruned=${dispatchDeleted}`,
+    `[retention] unconfirmed_deleted=${unconfirmedDeleted} unsub_anonymized=${unsubAnonymized} dispatch_pruned=${dispatchDeleted} embeddings_aged=${embeddingsAged}`,
   );
+}
+
+async function ageOutEmbeddings(now: number): Promise<number> {
+  const hotDays = await loadEmbeddingHotDays();
+  const cutoff = new Date(now - hotDays * 24 * 3600 * 1000);
+
+  // A theme is "dormant" when none of its members were scored within
+  // the hot window — so it is not actively gaining members and its
+  // centroid will not be recomputed from a fresh arrival. We null
+  // embeddings for old stories that are either unthemed or attached to
+  // a dormant theme. reembed.ts can regenerate any of them on demand.
+  const result = await sql`
+    WITH dormant_theme AS (
+      SELECT theme_id
+      FROM story
+      WHERE theme_id IS NOT NULL
+      GROUP BY theme_id
+      HAVING max(scored_at) < ${cutoff}
+    )
+    UPDATE story s
+    SET embedding = NULL
+    WHERE s.embedding IS NOT NULL
+      AND s.scored_at IS NOT NULL
+      AND s.scored_at < ${cutoff}
+      AND (
+        s.theme_id IS NULL
+        OR s.theme_id IN (SELECT theme_id FROM dormant_theme)
+      )
+  `.execute(db);
+  return Number(result.numAffectedRows ?? 0);
+}
+
+async function loadEmbeddingHotDays(): Promise<number> {
+  const row = await db
+    .selectFrom("config")
+    .select("value")
+    .where("key", "=", "retention.embedding_hot_days")
+    .executeTakeFirst();
+  const v = typeof row?.value === "number" ? row.value : Number(row?.value);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_EMBEDDING_HOT_DAYS;
 }

@@ -205,6 +205,13 @@ See `docs/tuning.md`. Short version:
   (lower-frequency external monitors) and `/admin/status` (HTML).
   Don't add an unbounded scan to any frequently-hit path without
   an index.
+- Storage budget (free tier ~500 MB) is tiered, not flat. Embeddings
+  are `halfvec` and derived (reembed.ts rebuilds them) — they are NOT
+  persist-forever; old individual `story.embedding` rows are aged out
+  daily by retention. The persist-forever invariant covers
+  `raw_input`/`raw_output` (and `ai_call_log`) only. The hot scoring
+  path reads `story.scorer_summary`, not `raw_output`, so the bulky
+  payloads are cold-storage-eligible. See `docs/storage.md`.
 
 ## File map (navigation)
 
@@ -214,6 +221,7 @@ See `docs/tuning.md`. Short version:
 - Editor curation rules + prompt: `docs/editor-prompt.md`
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
 - Dispatch design + live behavior: `docs/dispatch.md`
+- Storage tiering + cold-storage plan: `docs/storage.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`
