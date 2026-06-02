@@ -160,11 +160,14 @@ public.
 
 | Stage | Cadence | Why |
 |---|---|---|
-| `ingest` | hourly | RSS/GDELT refresh faster than daily; no LLM cost |
+| `ingest` | every 6h | Weekly compose → no need for hourly freshness. Reduces Neon CU and GDELT/BigQuery cost. Breaking news routes through urgent.ts. |
 | `score` | daily | Catchup pass on every unscored story |
 | `compose` | weekly | Product cadence — one brief a week |
 | `dispatch` | hourly | New confirmations + newly-published issues land near subscriber's delivery window |
 | `retention` | daily | GDPR storage-limitation policy: prune unconfirmed subs + anonymize long-unsubscribed rows + trim old dispatch_log entries |
+
+Cadences live in the `pipeline_schedule` table (mig 039) and can be
+retuned at runtime via `/admin/scheduler` without a redeploy.
 
 **Race-safety.** Every pipeline stage acquires a DB mutex (the
 `pipeline_lock` table, migration 024) before running. A second
