@@ -161,7 +161,7 @@ medium**. This shapes partition choices:
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |
 | Runaway scorer cost | `checkBudget()` at top of each Anthropic stage | `src/ai/budget.ts` |
 | Pipeline pool drains on re-compose | Composer-replay harness (doesn't touch DB) | `bun run cli composer-replay …` |
-| Neon CU climbing from `/health` probe storm | In-memory 60s cache on `/health` + 60s Fly probe interval + freshness-query indexes (mig 051) | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
+| Neon CU climbing from `/health` probe storm | `/health` is DB-less (process-alive only). DB-backed freshness payload lives at `/status` for external monitors; `/admin/status` for the operator. Freshness-query indexes from mig 051. | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
 
 ## Tuning loop
 
@@ -198,11 +198,13 @@ See `docs/tuning.md`. Short version:
   eventual surrogate classifier and the drift-detection substrate.
 - Silence is the correct response to a weak week. Don't lower the
   gate to fill column inches.
-- Production runs on Neon. CU is the cost driver — anything hit by
-  Fly's `/health` probe or a public route needs to be cheap enough
-  that the DB can scale-to-zero between bursts of real traffic.
-  Don't add DB calls to `/health` without caching; don't add an
-  unbounded scan without an index.
+- Production runs on Neon's free tier. CU is the cost driver and
+  the DB needs to actually scale-to-zero (~5 min idle timeout) to
+  stay within budget. `/health` is DB-less by design — don't add
+  DB calls to it. DB-backed freshness lives at `/status`
+  (lower-frequency external monitors) and `/admin/status` (HTML).
+  Don't add an unbounded scan to any frequently-hit path without
+  an index.
 
 ## File map (navigation)
 

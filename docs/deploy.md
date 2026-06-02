@@ -60,7 +60,7 @@ primary_region = "ams"
     handlers = ["tls", "http"]
 
 [[services.http_checks]]
-  interval = "30s"
+  interval = "60s"
   grace_period = "5s"
   method = "get"
   path = "/health"
@@ -68,7 +68,12 @@ primary_region = "ams"
   timeout = "5s"
 ```
 
-`/health` returns 503 when the DB is down — the HTTP check catches that.
+`/health` is a process-alive probe — it always returns 200 if the
+HTTP server is responding, and intentionally does not touch the
+database. That's load-bearing for fitting inside Neon's free tier:
+the DB needs to scale-to-zero between pipeline runs. For DB-backed
+freshness (last ingest age, unscored backlog, daily spend), use
+`/status` instead, at a lower poll frequency.
 
 ## 3. Secrets
 
@@ -261,8 +266,13 @@ are live and readable.
 - **Fly logs**: `fly logs -a blurpadurp` (live tail)
 - **Health**: automatic via http_checks; any 503 triggers a restart
 - **Costs**: `/admin/costs` — operator visits over basic-auth
-- **Status**: `/admin/status` for freshness at a glance; `/health` JSON
-  for anything scriptable (Uptime Kuma, healthchecks.io, etc.)
+- **Status**: `/admin/status` for freshness at a glance (HTML, basic-auth);
+  `/status` JSON for anything scriptable (Uptime Kuma, healthchecks.io,
+  etc.). Poll `/status` at a low frequency — every minute will keep
+  Neon warm and burn the free tier; 5–10 min is plenty.
+- **Liveness**: `/health` is a process-alive probe and does NOT touch
+  the DB. Fly's http_service check uses it. Don't repurpose it for
+  freshness checks — that's what `/status` is for.
 
 ## Rollback
 
