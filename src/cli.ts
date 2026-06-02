@@ -21,6 +21,7 @@ const SUBCOMMANDS = [
   "editor-replay",
   "reset-publish",
   "retention",
+  "cold-migrate",
   "eval",
   "scheduler-tick",
   "status",
@@ -115,6 +116,19 @@ async function run(sub: Sub, args: string[]): Promise<void> {
     case "retention":
       await (await import("./pipeline/retention.ts")).retention();
       return;
+    case "cold-migrate": {
+      const batchSize = args[0] !== undefined ? Number(args[0]) : 500;
+      const maxBatches = args[1] !== undefined ? Number(args[1]) : 0;
+      if (!Number.isFinite(batchSize) || batchSize <= 0) {
+        throw new Error("cold-migrate: batchSize must be a positive number");
+      }
+      if (!Number.isFinite(maxBatches) || maxBatches < 0) {
+        throw new Error("cold-migrate: maxBatches must be >= 0");
+      }
+      const { coldMigrate } = await import("./pipeline/cold-migrate.ts");
+      await coldMigrate(batchSize, maxBatches);
+      return;
+    }
     case "eval":
       await (await import("./pipeline/eval.ts")).evalSummary();
       return;

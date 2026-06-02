@@ -75,23 +75,77 @@ Steps 2–3 are in-Postgres and reversible, and target the largest
 They should clear the immediate crunch, leaving the R2 build (4) as a
 considered project rather than a fire drill.
 
-## Cold tier design (not yet built)
+## Cold tier — R2 is the archive
 
-When `ai_call_log` growth becomes the binding constraint again:
+Decision (operator): "persist forever" means **persist forever in R2**,
+not in Neon. Postgres holds a bounded working set + an object key; R2
+holds the durable payloads. This is the only design that stays under
+500 MB *indefinitely* — anything monotonic in Postgres crosses a fixed
+cap eventually.
 
-- **Object key:** `sha256(input)` (already computed as
-  `ai_call_log.input_hash`) → `ai/{stage}/{hash}.json`. Identical
-  inputs (the scorer dedup case) collapse to one object.
-- **Postgres keeps:** the scalar columns + the R2 key. `findCachedOutput`
-  becomes an R2 GET on the rare idempotent-retry path (acceptable —
-  it runs seconds after the write, within a single pipeline run).
-- **`story.raw_input`/`raw_output`:** replace the jsonb with the same
-  R2 key. `fixture-capture` fetches from R2; everything else already
-  reads `scorer_summary`.
-- **Do not** put an R2 GET on any per-story scoring path — only on
-  offline tuning (`fixture-capture`) and rare idempotent retries.
-- Egress: reads are infrequent and operator-initiated; R2 has no
-  egress fees regardless.
+The object store (`src/shared/object-store.ts`) is one interface with
+three backends — `r2` (Bun's built-in S3 client, no dep), `fs` (dev +
+tests), `memory` (tests). Backend is chosen by
+`BLURPADURP_STORAGE_BACKEND` (default: `r2` when R2 creds are present,
+else `fs` under `./.cold-storage`). R2 creds via env: `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`
+(`https://<accountid>.r2.cloudflarestorage.com`).
+
+### Phase 1 — `ai_call_log` payloads (shipped, flag-gated)
+
+`ai_call_log` is the fastest grower and its payloads are purely cold
+(read only by within-run idempotency + admin). Implemented in
+`src/ai/log.ts` (the single choke point all AI stages funnel through):
+
+- **Key:** `ai/{stage}/{yyyy}/{mm}/{uuid}.json` holding
+  `{"input":..,"output":..}`. Not content-addressed — scorer inputs are
+  near-unique, so dedup buys little; the month prefix enables cheap R2
+  lifecycle rules / browsing.
+- **Write:** when `storage.cold_tier` config is `true`, `logAICall`
+  writes the payload to the store and inserts the row with
+  `payload_key` set and `*_jsonb` NULL. A store failure falls back to
+  inline jsonb — a record is never lost over a storage hiccup.
+- **Read:** `findCachedOutput` fetches by `payload_key` when set, else
+  the inline `output_jsonb`. A store miss returns null = "no cache" =
+  re-run the model (safe degradation).
+- **Backfill:** `bun run cli cold-migrate [batchSize] [maxBatches]`
+  relocates existing inline payloads in bounded, resumable batches.
+  Order is write-object-then-null-row, so a crash orphans an object at
+  worst, never dangles a row.
+
+**Rollout:** (1) provision R2 + set env; (2) `bun run migrate`
+(mig 057 adds `payload_key` + the `storage.cold_tier=false` flag);
+(3) flip `storage.cold_tier` to `true` so *new* calls offload; (4) run
+`cold-migrate` to move the backlog; (5) `VACUUM (FULL) ai_call_log` to
+hand the freed pages back to Neon. The column + plumbing are inert
+until step 3, so 057 is safe to ship ahead of R2 setup.
+
+### Phase 2 — `story.raw_input`/`raw_output` (designed, not built)
+
+Same store, same pattern. The hot path already reads
+`story.scorer_summary` (mig 055), so `raw_*` are cold. Add
+`story.payload_key`, offload at `persistScorerResult`, and have
+`fixture-capture` + the admin drilldown read through the store.
+
+### Phase 3 — rolling-window row eviction (for true indefinite bound)
+
+Even with payloads in R2, the *scalar* rows (`story`, `ai_call_log`)
+grow linearly. For a hard bound, retention evicts rows past a long
+window once their payload is safely in R2 — keeping a bounded hot set
+while R2 stays the complete archive. Size the window from the
+growth-rate query in this doc once measured. Watch references before
+deleting `story` rows: `story_factor`/`eval_label`/`ground_truth`/
+`issue_pick` cascade; `issue.story_ids` is a bare array (dangling ids
+in historical issues are cosmetic — the prose is already in
+`composed_markdown`).
+
+### Non-invariant lever: prune unscored noise rows
+
+The biggest row population is stories that never scored (ingest/filter
+noise). They carry no persist-forever obligation (the invariant covers
+*scored* `raw_*` only), so retention can prune unscored, unreferenced
+stories past a short TTL — pure win, no R2, no invariant impact. Sized
+from the story-population query above.
 
 ## Invariant check
 

@@ -183,6 +183,10 @@ export interface Database {
     input_hash: string | null;
     input_jsonb: Jsonb | null;
     output_jsonb: Jsonb | null;
+    // Cold-storage key (mig 057). When set, the input/output payloads
+    // live in the object store (R2) at this key and the *_jsonb columns
+    // are NULL. NULL key = payload is still inline in the jsonb columns.
+    payload_key: string | null;
     tokens_in: number | null;
     tokens_out: number | null;
     cost_estimate_usd: string | null;
