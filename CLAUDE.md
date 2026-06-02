@@ -24,28 +24,51 @@ unless a feature genuinely needs it). Architecture in
 ## Pipeline shape
 
 ```
-ingest → score → editor → compose → (dispatch)
+ingest → score → editor → compose → dispatch → retention
 ```
 
+Five scheduled stages, run hourly by `scheduler.ts` against the
+`pipeline_schedule` table (mig 039). Each acquires a DB mutex
+(`pipeline_lock`, mig 024) so manual + cron triggers can't collide.
+
 - **ingest** pulls from connectors (`src/connectors/*.ts`). RSS (16
-  newsroom feeds), Reddit r/OutOfTheLoop, and GDELT are live. GDELT
-  brings the regional + multi-language signal the curated feeds miss
-  but also drags in tabloid/wire noise — `source_blocklist`
-  (migration 035) is the trim mechanism: hosts get blocked at the
-  ingest boundary and never spend embedding/scoring credits. Manage
-  via `/admin/sources` or the "Block source" button on the story
-  drilldown.
-- **score** runs Haiku on each unscored story via a rubric prompt
-  (`docs/scoring-prompt.md`). Gate is mechanical, not AI.
-  Progressive scoring (cheap prefilter → expensive final) is
-  disabled by default — flip `scorer.prefilter_model_id` in config
-  to turn on.
-- **editor** runs Sonnet to curate 10–15 picks from the gated pool
-  (`docs/editor-prompt.md`). Sees a pre-computed `themes` digest
-  that flags arc candidates structurally.
+  newsroom feeds), Reddit r/OutOfTheLoop, GDELT, and Wikipedia (ITN +
+  Current Events Portal) are live; see `connectors/registry.ts` for
+  the canonical list. GDELT brings regional + multi-language signal
+  the curated feeds miss but drags in tabloid/wire noise —
+  `source_blocklist` (mig 035) trims at the ingest boundary so
+  blocked hosts never spend embedding/scoring credits. Title-regex
+  (mig 045) and URL-path (mig 044) filters layer on top. Manage via
+  `/admin/sources`, `/admin/title-filters`, `/admin/path-filters`,
+  or the "Block source" button on the story drilldown.
+- **score** runs the configured LLM on each unscored story via the
+  rubric prompt (`docs/scoring-prompt.md`). Currently on DeepSeek
+  (mig 049) — cost is no longer the binding constraint. Progressive
+  scoring (cheap prefilter → expensive final) is disabled by default
+  — flip `scorer.prefilter_model_id` in config to turn on.
+- **editor** runs the editor model to curate 10–15 picks from the
+  gated pool (`docs/editor-prompt.md`). Sees a pre-computed `themes`
+  digest that flags arc candidates structurally.
 - **compose** partitions picks into four fixed sections server-side,
-  then runs Sonnet to write prose (`docs/composer-prompt.md`).
-- **dispatch** is stubbed. Design in `docs/dispatch.md`.
+  then runs the composer model to write prose
+  (`docs/composer-prompt.md`).
+- **dispatch** is live (`src/pipeline/dispatch.ts`). Email send via
+  Resend; per-(issue, subscription) at-most-once enforced by the
+  `dispatch_log` unique constraint. Web-push is stubbed. The Resend
+  webhook (`/webhooks/resend`) handles bounces/complaints and
+  auto-unsubscribes hard failures. Design + send-window logic in
+  `docs/dispatch.md`.
+- **retention** runs daily — prunes unconfirmed subs, anonymizes
+  long-unsubscribed rows, trims old `dispatch_log` entries
+  (`src/pipeline/retention.ts`). GDPR storage-limitation policy.
+
+Beyond the five scheduled stages, `src/pipeline/` also holds:
+`urgent.ts` (event-driven mid-cycle publish), `eval.ts` (human-label
+calibration set surfaced at `/admin/eval`), `draft.ts` (admin draft
+publish/discard/recompose plumbing), `fixture.ts` (capture/replay
+harness), `reattach.ts` / `retag.ts` (theme assignment rebuilds),
+`reembed.ts` (embedding-model swap), `reset-publish.ts` (the
+"republish this issue" cheat hatch).
 
 ## Invariants — do not regress
 
@@ -138,6 +161,7 @@ medium**. This shapes partition choices:
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |
 | Runaway scorer cost | `checkBudget()` at top of each Anthropic stage | `src/ai/budget.ts` |
 | Pipeline pool drains on re-compose | Composer-replay harness (doesn't touch DB) | `bun run cli composer-replay …` |
+| Neon CU climbing from `/health` probe storm | In-memory 60s cache on `/health` + 60s Fly probe interval + freshness-query indexes (mig 051) | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
 
 ## Tuning loop
 
@@ -174,6 +198,11 @@ See `docs/tuning.md`. Short version:
   eventual surrogate classifier and the drift-detection substrate.
 - Silence is the correct response to a weak week. Don't lower the
   gate to fill column inches.
+- Production runs on Neon. CU is the cost driver — anything hit by
+  Fly's `/health` probe or a public route needs to be cheap enough
+  that the DB can scale-to-zero between bursts of real traffic.
+  Don't add DB calls to `/health` without caching; don't add an
+  unbounded scan without an index.
 
 ## File map (navigation)
 
@@ -182,7 +211,7 @@ See `docs/tuning.md`. Short version:
 - Scorer rubric + prompt: `docs/scoring.md`, `docs/scoring-prompt.md`
 - Editor curation rules + prompt: `docs/editor-prompt.md`
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
-- Dispatch design (not yet implemented): `docs/dispatch.md`
+- Dispatch design + live behavior: `docs/dispatch.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`

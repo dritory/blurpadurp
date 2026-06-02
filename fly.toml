@@ -31,9 +31,14 @@ primary_region = "ams"
   min_machines_running = 0
   processes = ["app"]
 
+  # 60s interval rather than 30s — combined with /health's in-memory
+  # cache (HEALTH_CACHE_MS in src/api/index.tsx), this caps DB probe
+  # frequency at ~1/min so Neon can actually scale-to-zero between
+  # real traffic. Restart-on-failure latency goes from ~30s to ~60s,
+  # which is fine for a single-operator weekly product.
   [[http_service.checks]]
     grace_period = "10s"
-    interval = "30s"
+    interval = "60s"
     method = "GET"
     path = "/health"
     protocol = "http"

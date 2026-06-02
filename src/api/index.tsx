@@ -203,25 +203,41 @@ app.use(
   }),
 );
 
+// /health is hit by Fly's http_service check on a tight interval, so it
+// must be cheap enough not to keep Neon perpetually warm. We cache the
+// full PipelineStatus payload in-memory for HEALTH_CACHE_MS; only one
+// probe per window touches the DB. /admin/status calls loadPipelineStatus
+// directly — it should always reflect live state, not the cached view.
+const HEALTH_CACHE_MS = 60_000;
+let healthCache: { at: number; body: ReturnType<typeof healthBody>; status: number } | null = null;
+
+function healthBody(s: Awaited<ReturnType<typeof loadPipelineStatus>>) {
+  return {
+    ok: s.db_ok,
+    last_ingest_at: s.last_ingest_at?.toISOString() ?? null,
+    last_ingest_age_sec: s.last_ingest_age_sec,
+    last_score_at: s.last_score_at?.toISOString() ?? null,
+    last_score_age_sec: s.last_score_age_sec,
+    last_issue_at: s.last_issue_at?.toISOString() ?? null,
+    last_issue_age_sec: s.last_issue_age_sec,
+    unscored_backlog: s.unscored_backlog,
+    today_spend_usd: s.today_spend_usd,
+    daily_cap_usd: s.daily_cap_usd,
+    budget_remaining_usd: s.budget_remaining_usd,
+  };
+}
+
 app.get("/health", async (c) => {
+  if (healthCache !== null && Date.now() - healthCache.at < HEALTH_CACHE_MS) {
+    return c.json(healthCache.body, healthCache.status as 200 | 503);
+  }
   const s = await loadPipelineStatus();
   const status = s.db_ok ? 200 : 503;
-  return c.json(
-    {
-      ok: s.db_ok,
-      last_ingest_at: s.last_ingest_at?.toISOString() ?? null,
-      last_ingest_age_sec: s.last_ingest_age_sec,
-      last_score_at: s.last_score_at?.toISOString() ?? null,
-      last_score_age_sec: s.last_score_age_sec,
-      last_issue_at: s.last_issue_at?.toISOString() ?? null,
-      last_issue_age_sec: s.last_issue_age_sec,
-      unscored_backlog: s.unscored_backlog,
-      today_spend_usd: s.today_spend_usd,
-      daily_cap_usd: s.daily_cap_usd,
-      budget_remaining_usd: s.budget_remaining_usd,
-    },
-    status,
-  );
+  const body = healthBody(s);
+  // Only cache OK responses. A failing probe should re-check next call,
+  // not stay sticky for the cache window.
+  if (s.db_ok) healthCache = { at: Date.now(), body, status };
+  return c.json(body, status);
 });
 
 app.get("/", async (c) => {
