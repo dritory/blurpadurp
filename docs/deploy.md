@@ -100,6 +100,34 @@ And add to the Dockerfile / startup: write `$GCP_SA_KEY` to
 before the app boots. (Fly's `processes` feature or a small entrypoint
 script.)
 
+### Cold storage (R2)
+
+The persist-forever payloads (`ai_call_log` input/output, `story`
+raw_input/raw_output) live in Cloudflare R2 to keep Neon under the
+500 MB free-tier cap. See `docs/storage.md`. Set up:
+
+1. Cloudflare dashboard → R2 → **Create bucket** (e.g.
+   `blurpadurp-cold`). No public access needed.
+2. R2 → **Manage API Tokens** → create a token scoped to that bucket
+   with **Object Read & Write**. Note the Access Key ID, Secret Access
+   Key, and your account's S3 endpoint
+   (`https://<accountid>.r2.cloudflarestorage.com`).
+3. Set the secrets:
+
+   ```bash
+   fly secrets set \
+     R2_ACCESS_KEY_ID='…' \
+     R2_SECRET_ACCESS_KEY='…' \
+     R2_BUCKET='blurpadurp-cold' \
+     R2_ENDPOINT='https://<accountid>.r2.cloudflarestorage.com'
+   ```
+
+   With all four present, `BLURPADURP_STORAGE_BACKEND` defaults to `r2`;
+   unset it locally to fall back to the `fs` backend under
+   `./.cold-storage`. The cold tier stays **off** until you flip the
+   `storage.cold_tier` config flag — see the rollout in
+   `docs/storage.md`.
+
 ## 4. Dockerfile
 
 Minimal Bun image:

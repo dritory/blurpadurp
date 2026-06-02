@@ -389,7 +389,7 @@ async function findBestNeighbor(
 async function loadRecentSummaries(themeId: number): Promise<string[]> {
   const rows = await db
     .selectFrom("story")
-    .select(["raw_output"])
+    .select(["scorer_summary"])
     .where("theme_id", "=", themeId)
     .where("scored_at", "is not", null)
     .orderBy("scored_at", "desc")
@@ -397,10 +397,7 @@ async function loadRecentSummaries(themeId: number): Promise<string[]> {
     .execute();
   const out: string[] = [];
   for (const r of rows) {
-    const raw = r.raw_output as
-      | { summary?: string; one_line_summary?: string }
-      | null;
-    const s = raw?.summary ?? raw?.one_line_summary ?? "";
+    const s = r.scorer_summary ?? "";
     if (s.trim().length > 0) out.push(s);
   }
   return out;
@@ -444,7 +441,7 @@ async function loadRepresentativeStory(themeId: number): Promise<{
 } | null> {
   const row = await db
     .selectFrom("story")
-    .select(["title", "summary", "raw_output"])
+    .select(["title", "summary", "scorer_summary"])
     .where("theme_id", "=", themeId)
     .orderBy(sql`composite DESC NULLS LAST, ingested_at DESC`)
     .limit(1)
@@ -452,11 +449,10 @@ async function loadRepresentativeStory(themeId: number): Promise<{
   if (!row) return null;
   // Prefer the scorer's summary text over raw RSS description for
   // the LLM's view — same reason as the embedding upgrade.
-  const raw = row.raw_output as
-    | { summary?: string; one_line_summary?: string }
-    | null;
   const scorerSummary =
-    raw?.summary ?? raw?.one_line_summary ?? null;
+    row.scorer_summary && row.scorer_summary.trim() !== ""
+      ? row.scorer_summary
+      : null;
   return {
     title: row.title,
     summary: scorerSummary ?? row.summary,

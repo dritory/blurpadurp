@@ -25,6 +25,7 @@ import type {
 import { replayComposer, summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
+import { getPayload } from "../shared/cold-tier.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
@@ -2585,6 +2586,18 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     (factors as Record<string, string[]>)[r.kind]?.push(r.factor);
   }
 
+  // Resolve cold-stored raw_input/raw_output (mig 058) from the object
+  // store when the payload was offloaded.
+  let rawInput = row.raw_input;
+  let rawOutput = row.raw_output;
+  if (row.payload_key !== null) {
+    const env = await getPayload(row.payload_key);
+    if (env !== null) {
+      rawInput = env.input as typeof rawInput;
+      rawOutput = env.output as typeof rawOutput;
+    }
+  }
+
   return {
     id: Number(row.id),
     title: row.title,
@@ -2622,8 +2635,8 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     scorerModel: row.scorer_model_id,
     scorerPromptVersion: row.scorer_prompt_version,
     factors,
-    rawInput: row.raw_input,
-    rawOutput: row.raw_output,
+    rawInput,
+    rawOutput,
   };
 }
 
@@ -3080,6 +3093,7 @@ async function loadNextEvalCandidate(): Promise<EvalCandidate | null> {
       "story.composite",
       "story.point_in_time_confidence",
       "story.raw_output",
+      "story.payload_key",
       "story.ingested_at",
     ])
     .where("story.scored_at", "is not", null)
@@ -3089,7 +3103,14 @@ async function loadNextEvalCandidate(): Promise<EvalCandidate | null> {
     .limit(1)
     .executeTakeFirst();
   if (!row) return null;
-  const r = row.raw_output as
+  // raw_output carries retrodiction_12mo, which is not denormalized —
+  // resolve it from the object store when cold-stored (mig 058).
+  let rawOutput = row.raw_output;
+  if (row.payload_key !== null) {
+    const env = await getPayload(row.payload_key);
+    if (env !== null) rawOutput = env.output as typeof rawOutput;
+  }
+  const r = rawOutput as
     | { summary?: string; reasoning?: { retrodiction_12mo?: string } }
     | null;
   return {
@@ -3917,7 +3938,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
       "published_at",
       "published_to_reader",
       "source_url",
-      "raw_output",
+      "scorer_summary",
     ])
     .where("theme_id", "=", id)
     .where((eb) =>
@@ -3960,7 +3981,6 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
     firstSeenAt: theme.first_seen_at,
     nStoriesPublished: theme.n_stories_published,
     stories: stories.map((s) => {
-      const r = s.raw_output as { summary?: string; one_line_summary?: string } | null;
       const issue = issueOf.get(Number(s.id));
       return {
         id: Number(s.id),
@@ -3968,7 +3988,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
         publishedAt: s.published_at,
         publishedToReader: s.published_to_reader,
         sourceUrl: s.source_url,
-        oneLiner: r?.summary ?? r?.one_line_summary ?? "",
+        oneLiner: s.scorer_summary ?? "",
         issueId: issue?.id ?? null,
         issueSeq: issue?.seq ?? null,
       };

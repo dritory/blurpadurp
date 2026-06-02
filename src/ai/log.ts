@@ -1,5 +1,6 @@
 import { db } from "../db/index.ts";
-import { aiPayloadKey, getObjectStore } from "../shared/object-store.ts";
+import { coldTierEnabled, getPayload, putPayload } from "../shared/cold-tier.ts";
+import { aiPayloadKey } from "../shared/object-store.ts";
 import type { AICallRecord } from "./types.ts";
 
 // Look up a prior successful LLM call with this exact input hash.
@@ -36,13 +37,8 @@ export async function findCachedOutput(params: {
     // Cold-stored payload. A miss here (object absent / transport
     // error returns null) just means "no cache" — the caller re-runs
     // the model, which is the safe degradation.
-    const blob = await getObjectStore().get(row.payload_key);
-    if (blob === null) return null;
-    try {
-      return (JSON.parse(blob) as { output?: unknown }).output ?? null;
-    } catch {
-      return null;
-    }
+    const env = await getPayload(row.payload_key);
+    return env?.output ?? null;
   }
   return row.output_jsonb ?? null;
 }
@@ -64,10 +60,10 @@ export async function logAICall(rec: AICallRecord): Promise<void> {
   if (await coldTierEnabled()) {
     const key = aiPayloadKey(rec.stage_name);
     try {
-      await getObjectStore().put(
-        key,
-        JSON.stringify({ input: rec.input_jsonb, output: rec.output_jsonb }),
-      );
+      await putPayload(key, {
+        input: rec.input_jsonb,
+        output: rec.output_jsonb,
+      });
       await db
         .insertInto("ai_call_log")
         .values({
@@ -96,25 +92,4 @@ export async function logAICall(rec: AICallRecord): Promise<void> {
       payload_key: null,
     })
     .execute();
-}
-
-// Cached read of the `storage.cold_tier` master switch (mig 057). Same
-// 60s TTL pattern as budget.ts — config is rarely flipped and this is
-// on the hot AI path.
-let coldCache: { value: boolean; at: number } | null = null;
-const COLD_CACHE_MS = 60_000;
-
-async function coldTierEnabled(): Promise<boolean> {
-  const now = Date.now();
-  if (coldCache !== null && now - coldCache.at < COLD_CACHE_MS) {
-    return coldCache.value;
-  }
-  const row = await db
-    .selectFrom("config")
-    .select("value")
-    .where("key", "=", "storage.cold_tier")
-    .executeTakeFirst();
-  const value = row?.value === true;
-  coldCache = { value, at: now };
-  return value;
 }

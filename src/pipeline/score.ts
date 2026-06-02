@@ -16,6 +16,8 @@ import { recomputeThemeCentroid } from "../shared/embedding-utils.ts";
 import { makeScorer } from "../ai/scorer.ts";
 import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
+import { coldTierEnabled, putPayload } from "../shared/cold-tier.ts";
+import { storyPayloadKey } from "../shared/object-store.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
 import {
@@ -536,6 +538,7 @@ async function tryInheritFromNeighbor(
     .select([
       "id",
       "raw_output",
+      "payload_key",
       "scorer_summary",
       "theme_id",
       "category_id",
@@ -570,7 +573,12 @@ async function tryInheritFromNeighbor(
       scored_via_story_id: Number(row.id),
       scorer_model_id: row.scorer_model_id,
       scorer_prompt_version: row.scorer_prompt_version,
-      raw_output: row.raw_output as never,
+      // Inherit the donor's raw_output. If the donor's payload is
+      // cold-stored, share its object key (identical content); else
+      // copy the inline jsonb. raw_input stays NULL — the "we skipped
+      // the scorer" marker (see function header).
+      raw_output: row.payload_key !== null ? null : (row.raw_output as never),
+      payload_key: row.payload_key,
       scorer_summary: row.scorer_summary,
       zeitgeist_score: row.zeitgeist_score,
       half_life: row.half_life,
@@ -804,14 +812,31 @@ async function persistScorerResult(
 ): Promise<void> {
   const categoryId = await lookupCategoryId(output.classification.category);
 
+  // Cold tier: offload raw_input/raw_output to the object store before
+  // the transaction. A store failure falls back to inline columns — a
+  // scored item's replay substrate is never lost over a storage hiccup.
+  let payloadKey: string | null = null;
+  if (await coldTierEnabled()) {
+    const key = storyPayloadKey();
+    try {
+      await putPayload(key, { input, output });
+      payloadKey = key;
+    } catch (e) {
+      console.warn(
+        `[score] cold-store write failed for story ${storyId}, storing inline: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+  }
+
   await db.transaction().execute(async (tx) => {
     await tx
       .updateTable("story")
       .set({
         scorer_model_id: modelId,
         scorer_prompt_version: promptVersion,
-        raw_input: input as never,
-        raw_output: output as never,
+        raw_input: payloadKey !== null ? null : (input as never),
+        raw_output: payloadKey !== null ? null : (output as never),
+        payload_key: payloadKey,
         scorer_summary:
           output.summary && output.summary.trim() !== ""
             ? output.summary.trim()

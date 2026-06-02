@@ -120,12 +120,25 @@ else `fs` under `./.cold-storage`). R2 creds via env: `R2_ACCESS_KEY_ID`,
 hand the freed pages back to Neon. The column + plumbing are inert
 until step 3, so 057 is safe to ship ahead of R2 setup.
 
-### Phase 2 — `story.raw_input`/`raw_output` (designed, not built)
+### Phase 2 — `story.raw_input`/`raw_output` (shipped, flag-gated)
 
-Same store, same pattern. The hot path already reads
-`story.scorer_summary` (mig 055), so `raw_*` are cold. Add
-`story.payload_key`, offload at `persistScorerResult`, and have
-`fixture-capture` + the admin drilldown read through the store.
+Same store, same flag (`storage.cold_tier`), same fallback-to-inline
+safety. mig 058 adds `story.payload_key`.
+
+- **Write:** `persistScorerResult` (`score.ts`) offloads
+  `{input:raw_input, output:raw_output}` and nulls the columns.
+- **Dedup-inherit:** an inherited row shares the donor's `payload_key`
+  (identical content) instead of re-storing — so eviction (phase 3)
+  must be reference-aware before deleting any story object.
+- **Reads:** `raw_output` is *warm*, not fully cold — the compose
+  stage reads it weekly for the bounded editor/shrug/timeline pools.
+  Those call sites `hydrateRawOutput()` (one store fetch per offloaded
+  row in the bounded set) so every downstream read works unchanged.
+  `fixture-capture`, the admin story drilldown, and the `/admin/eval`
+  picker resolve via the key too. Summary-only readers (`reattach`,
+  the theme-stories list) switched to the `scorer_summary` column and
+  need no fetch. `raw_input` is fully cold (fixture-capture only).
+- **Backfill:** `cold-migrate` moves `ai_call_log` then `story`.
 
 ### Phase 3 — rolling-window row eviction (for true indefinite bound)
 

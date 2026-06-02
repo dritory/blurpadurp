@@ -54,6 +54,10 @@ export interface Database {
     scorer_prompt_version: string | null;
     raw_input: Jsonb | null;
     raw_output: Jsonb | null;
+    // Cold-storage key (mig 058). When set, raw_input/raw_output live in
+    // the object store (R2) at this key as {"input":..,"output":..} and
+    // the columns are NULL. NULL key = payloads still inline.
+    payload_key: string | null;
     // Denormalized scorer one-line summary (mig 055). Lifted out of
     // raw_output so the hot scoring path reads a small column instead
     // of the full jsonb, and so raw_output can move to cold storage.

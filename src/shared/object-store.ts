@@ -169,3 +169,11 @@ export function aiPayloadKey(stageName: string, when: Date = new Date()): string
   const mm = String(when.getUTCMonth() + 1).padStart(2, "0");
   return join("ai", safeStage, `${yyyy}`, mm, `${crypto.randomUUID()}.json`);
 }
+
+// Key for a story's raw_input/raw_output envelope. Grouped by month for
+// the same lifecycle/browsing reasons as ai payloads.
+export function storyPayloadKey(when: Date = new Date()): string {
+  const yyyy = when.getUTCFullYear();
+  const mm = String(when.getUTCMonth() + 1).padStart(2, "0");
+  return join("story", `${yyyy}`, mm, `${crypto.randomUUID()}.json`);
+}
