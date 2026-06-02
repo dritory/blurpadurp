@@ -140,6 +140,10 @@ export interface Database {
     urgent_override: Generated<boolean>;
     category_mutes: Generated<string[]>;
     created_at: Created;
+    // Reviewers get the draft-preview link the moment a draft is
+    // composed (subscription_kind='draft' in dispatch_log), in addition
+    // to the published brief every confirmed subscriber receives.
+    is_reviewer: Generated<boolean>;
   };
 
   push_subscription: {
@@ -159,7 +163,7 @@ export interface Database {
   dispatch_log: {
     id: Id;
     issue_id: number;
-    subscription_kind: "email" | "push";
+    subscription_kind: "email" | "push" | "draft";
     subscription_id: number;
     dispatched_at: Created;
     status: string;
