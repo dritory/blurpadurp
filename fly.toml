@@ -31,9 +31,14 @@ primary_region = "ams"
   min_machines_running = 0
   processes = ["app"]
 
+  # /health is a process-alive probe — it does NOT touch the DB.
+  # That's load-bearing for fitting inside Neon's free tier: the
+  # database can scale-to-zero between actual pipeline runs and real
+  # user traffic. The DB-backed freshness payload lives at /status
+  # for external monitors. Don't add DB calls to this path.
   [[http_service.checks]]
     grace_period = "10s"
-    interval = "30s"
+    interval = "60s"
     method = "GET"
     path = "/health"
     protocol = "http"

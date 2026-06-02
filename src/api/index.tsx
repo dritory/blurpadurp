@@ -207,7 +207,15 @@ app.use(
   }),
 );
 
-app.get("/health", async (c) => {
+// /health is the process-alive probe for Fly's http_service check. It
+// MUST NOT touch the database — Fly hits it every minute, and any DB
+// call would keep Neon warm continuously and blow the free tier. The
+// DB-backed freshness payload lives at /status (for external monitors
+// like Uptime Kuma or healthchecks.io) and at /admin/status (HTML for
+// the operator).
+app.get("/health", (c) => c.json({ ok: true }));
+
+app.get("/status", async (c) => {
   const s = await loadPipelineStatus();
   const status = s.db_ok ? 200 : 503;
   return c.json(

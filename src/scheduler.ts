@@ -52,50 +52,99 @@ export function listStages(): readonly StageJob[] {
 
 export type TriggerSource = "cron" | "manual" | "deploy";
 
+interface StageState {
+  stage: string;
+  interval_sec: number;
+  enabled: boolean;
+  forced: boolean;
+  last_success_at: Date | null;
+}
+
+// One combined query for the full scheduler state — schedule rows,
+// force-run flags, and most-recent success timestamp per stage. Cuts
+// the per-tick query count from ~7 (loadSchedule + loadForceRun + one
+// loadLastSuccess per stage) down to 1, so an empty tick wakes Neon
+// for a single index lookup. The correlated subquery uses
+// pipeline_run_stage_success_idx (mig 039); cost scales with the
+// number of stages, not the size of pipeline_run.
+async function loadState(): Promise<StageState[]> {
+  const result = await sql<{
+    stage: string;
+    interval_sec: number;
+    enabled: boolean;
+    forced: boolean;
+    last_success_at: Date | null;
+  }>`
+    SELECT
+      s.stage,
+      s.interval_sec,
+      s.enabled,
+      EXISTS (
+        SELECT 1 FROM pipeline_force_run f WHERE f.stage = s.stage
+      ) AS forced,
+      (
+        SELECT pr.completed_at
+        FROM pipeline_run pr
+        WHERE pr.stage = s.stage AND pr.status = 'success'
+        ORDER BY pr.completed_at DESC
+        LIMIT 1
+      ) AS last_success_at
+    FROM pipeline_schedule s
+  `.execute(db);
+  return result.rows;
+}
+
 export async function runTick(): Promise<void> {
-  const schedule = await loadSchedule();
-  const forced = await loadForceRun();
-  console.log(
-    `[scheduler] tick @ ${new Date().toISOString()} — ${schedule.size} configured, ${forced.size} forced`,
-  );
+  const state = await loadState();
+  const byStage = new Map(state.map((r) => [r.stage, r]));
+
+  // Decide everything from the single state snapshot before touching
+  // the DB again. If nothing is due and nothing is forced, exit
+  // without further queries — the DB then idle-suspends on Neon
+  // within the timeout window.
+  const ready: Array<{ job: StageJob; forced: boolean }> = [];
   for (const job of STAGES) {
-    const cfg = schedule.get(job.stage);
-    if (cfg === undefined) {
-      console.log(`[scheduler] ${job.stage}: no schedule row, skipping`);
+    const s = byStage.get(job.stage);
+    if (s === undefined) continue;
+    if (!s.enabled) continue;
+    if (s.forced) {
+      ready.push({ job, forced: true });
       continue;
     }
-    if (!cfg.enabled) {
-      console.log(`[scheduler] ${job.stage}: disabled, skipping`);
+    if (s.last_success_at === null) {
+      ready.push({ job, forced: false });
       continue;
     }
-    const isForced = forced.has(job.stage);
-    if (!isForced) {
-      const lastSuccess = await loadLastSuccess(job.stage);
-      if (lastSuccess !== null) {
-        const dueAt = lastSuccess.getTime() + cfg.interval_sec * 1000;
-        // Fire if due before the next scheduled tick. Without this
-        // rounding, a stage whose dueAt falls a few minutes after this
-        // tick would skip and wait ~one full tick interval to fire.
-        if (dueAt > Date.now() + TICK_INTERVAL_MS) {
-          const minsUntil = Math.ceil((dueAt - Date.now()) / 60_000);
-          console.log(
-            `[scheduler] ${job.stage}: not due (next in ~${minsUntil}m)`,
-          );
-          continue;
-        }
-      }
+    const dueAt = s.last_success_at.getTime() + s.interval_sec * 1000;
+    if (dueAt <= Date.now() + TICK_INTERVAL_MS) {
+      ready.push({ job, forced: false });
     }
+  }
+
+  if (ready.length === 0) {
+    console.log(
+      `[scheduler] tick @ ${new Date().toISOString()} — nothing due`,
+    );
+    return;
+  }
+
+  console.log(
+    `[scheduler] tick @ ${new Date().toISOString()} — ${ready.length} stage(s) firing`,
+  );
+  for (const { job, forced } of ready) {
     // Delete the force-run row before firing so a crash mid-run does
     // not auto-retry on the next tick. Operator re-queues by clicking
     // "Run now" again. Cron path is unaffected.
-    if (isForced) {
+    if (forced) {
       await db
         .deleteFrom("pipeline_force_run")
         .where("stage", "=", job.stage)
         .execute();
     }
-    console.log(`[scheduler] ${job.stage}: firing (${isForced ? "manual" : "cron"})`);
-    await runWithBookkeeping(job, isForced ? "manual" : "cron");
+    console.log(
+      `[scheduler] ${job.stage}: firing (${forced ? "manual" : "cron"})`,
+    );
+    await runWithBookkeeping(job, forced ? "manual" : "cron");
   }
   console.log(`[scheduler] tick done`);
 }
@@ -146,40 +195,3 @@ export async function runWithBookkeeping(
   }
 }
 
-interface ScheduleRow {
-  interval_sec: number;
-  enabled: boolean;
-}
-
-async function loadSchedule(): Promise<Map<string, ScheduleRow>> {
-  const rows = await db
-    .selectFrom("pipeline_schedule")
-    .select(["stage", "interval_sec", "enabled"])
-    .execute();
-  return new Map(
-    rows.map((r) => [
-      r.stage,
-      { interval_sec: r.interval_sec, enabled: r.enabled },
-    ]),
-  );
-}
-
-async function loadForceRun(): Promise<Set<string>> {
-  const rows = await db
-    .selectFrom("pipeline_force_run")
-    .select("stage")
-    .execute();
-  return new Set(rows.map((r) => r.stage));
-}
-
-async function loadLastSuccess(stage: string): Promise<Date | null> {
-  const row = await db
-    .selectFrom("pipeline_run")
-    .select("completed_at")
-    .where("stage", "=", stage)
-    .where("status", "=", "success")
-    .orderBy("completed_at", "desc")
-    .limit(1)
-    .executeTakeFirst();
-  return row?.completed_at ?? null;
-}
