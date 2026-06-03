@@ -275,52 +275,6 @@ CREATE INDEX story_embedding_idx ON story
 
 **Root cause:** Not a bug — an operational knob. Revisit ~50k rows.
 
-### 13. Site down / 5xx on a cold start
-
-**Symptom:** The public site is unreachable for a minute or two.
-`fly logs -a blurpadurp` shows a burst of:
-```
-[PM07] failed to change machine state: machine still active, refusing to start
-[PR03] could not find a good candidate within 1 attempts at load balancing
-[PM01] machines API returned an error: "rate limit exceeded"
-```
-followed eventually by a fresh boot, a transient `[PC01] instance
-refused connection ... listening on 0.0.0.0:3000?`, and a delayed
-`Health check ... is now passing`.
-
-**Quick diagnosis:** This is the single autostopping machine racing its
-own stop. With `min_machines_running = 0` there is exactly one machine;
-if a request arrives while it is mid-stop, Fly refuses to start a machine
-it still considers "active," the proxy retries hard, and the retries trip
-the Machines API rate limit — which *lengthens* the stall. The
-connection-refused line is a separate, benign listen race (proxy beat the
-app to the socket by a few ms). Confirm it's not an app crash: there
-should be no panic/exit in the logs, and `Machine started in N.Ns`
-appears.
-
-**Immediate:**
-- Usually self-heals once the stop completes and the next request boots a
-  fresh machine. If it's wedged, force it: `fly machine restart <id> -a blurpadurp`.
-- Verify it's serving: `curl -fsS https://blurpadurp.fly.dev/health`
-  (DB-less probe — a 200 means the process is up regardless of Neon).
-
-**Root cause:** Inherent to one scale-to-zero machine. We deliberately
-stay at `min = 0` to track Neon's idle (the R2 page cache means an
-always-warm machine wouldn't even save Neon CU — it'd just cost Fly
-compute). Mitigations in place: `auto_stop_machines = "suspend"` (resume
-from RAM, shorter cold-start/listen-race window) and a 15s health-check
-interval (so a failed post-boot check re-probes in 15s, not 60s). To
-eliminate the race entirely you'd need `min_machines_running = 1` or 2
-machines — a cost call, intentionally not taken.
-
-**Adjacent noise — pg SSL deprecation warning:** A cold home-page request
-that misses the R2 cache falls through to Neon and may print a
-`SECURITY WARNING: The SSL modes 'prefer', 'require' ...` stack trace
-through `loadLatestIssue`. That is a `process.emitWarning`, **not** a
-crash — the request succeeds. `src/db/index.ts` pins the URL's sslmode to
-`verify-full` to silence it and freeze today's TLS behavior across the
-pg v9 upgrade.
-
 ---
 
 ## General triage rules
