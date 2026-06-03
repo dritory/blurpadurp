@@ -53,9 +53,16 @@ export async function recomputeThemeCentroid(themeId: number): Promise<void> {
 export function embeddingTextForStory(story: {
   title: string;
   summary: string | null;
-  raw_output: unknown;
+  scorer_summary?: string | null;
+  raw_output?: unknown;
 }): string {
-  const scorerSummary = readScorerSummary(story.raw_output);
+  // Prefer the denormalized scorer_summary column (mig 055); fall back
+  // to plucking it from raw_output for rows that predate the backfill,
+  // then to the raw summary, then title alone.
+  const scorerSummary =
+    (story.scorer_summary && story.scorer_summary.trim() !== ""
+      ? story.scorer_summary.trim()
+      : null) ?? readScorerSummary(story.raw_output);
   const body = scorerSummary ?? story.summary ?? "";
   return `${story.title}\n\n${body}`.trim();
 }

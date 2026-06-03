@@ -9,6 +9,7 @@ import { sql } from "kysely";
 import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
 import { db } from "../db/index.ts";
+import { hydrateRawOutput } from "../shared/cold-tier.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { loadSystemPromptText, type PromptMode } from "../shared/prompts.ts";
@@ -248,6 +249,7 @@ export async function produceDraft(
       "story.composite",
       "story.point_in_time_confidence",
       "story.raw_output",
+      "story.payload_key",
     ])
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
@@ -270,6 +272,10 @@ export async function produceDraft(
     console.log("[compose] no passing, unpublished stories — skipping");
     return null;
   }
+
+  // Resolve any cold-stored raw_output (mig 058) before the pool is
+  // built; downstream readers see inline jsonb either way.
+  await hydrateRawOutput(rows);
 
   // Theme-first pool selection (see src/shared/editor-pool.ts). Picks
   // top themes by max-composite + tier1, includes every gate-passing
@@ -798,6 +804,7 @@ async function rowsForEditor() {
       "story.composite",
       "story.point_in_time_confidence",
       "story.raw_output",
+      "story.payload_key",
     ])
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
@@ -832,6 +839,7 @@ async function loadShrugCandidates(
       "story.additional_source_urls",
       "category.slug as category_slug",
       "story.raw_output",
+      "story.payload_key",
       "story_factor.factor as penalty_factor",
       "story.passed_gate",
       "story.scored_at",
@@ -849,6 +857,8 @@ async function loadShrugCandidates(
     .where("story.passed_gate", "=", false)
     .where("story.published_to_reader", "=", false)
     .execute();
+
+  await hydrateRawOutput(rows);
 
   type Agg = {
     title: string;
@@ -938,12 +948,16 @@ async function loadThemeTimelines(
   if (themeIds.length === 0) return [];
 
   const since = new Date(Date.now() - TIMELINE_LOOKBACK_DAYS * 24 * 3600_000);
+  // This 90-day window reaches well past the cold-tier offload age, so
+  // read the denormalized scorer_summary column (always inline) rather
+  // than raw_output — keeps compose from ever fetching a payload from
+  // R2 for old published stories.
   const priorRows = await db
     .selectFrom("story")
     .select([
       "theme_id",
       "published_to_reader_at",
-      "raw_output",
+      "scorer_summary",
     ])
     .where("theme_id", "in", themeIds)
     .where("published_to_reader", "=", true)
@@ -959,10 +973,9 @@ async function loadThemeTimelines(
     if (r.theme_id === null) continue;
     const tid = Number(r.theme_id);
     const list = priorByTheme.get(tid) ?? [];
-    const scored = readScorerOutput(r.raw_output);
     list.push({
       date: r.published_to_reader_at?.toISOString().slice(0, 10) ?? "",
-      one_liner: scored.summary,
+      one_liner: r.scorer_summary ?? "",
     });
     priorByTheme.set(tid, list);
   }

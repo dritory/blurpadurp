@@ -54,6 +54,14 @@ export interface Database {
     scorer_prompt_version: string | null;
     raw_input: Jsonb | null;
     raw_output: Jsonb | null;
+    // Cold-storage key (mig 058). When set, raw_input/raw_output live in
+    // the object store (R2) at this key as {"input":..,"output":..} and
+    // the columns are NULL. NULL key = payloads still inline.
+    payload_key: string | null;
+    // Denormalized scorer one-line summary (mig 055). Lifted out of
+    // raw_output so the hot scoring path reads a small column instead
+    // of the full jsonb, and so raw_output can move to cold storage.
+    scorer_summary: string | null;
     zeitgeist_score: number | null;
     half_life: number | null;
     reach: number | null;
@@ -179,6 +187,10 @@ export interface Database {
     input_hash: string | null;
     input_jsonb: Jsonb | null;
     output_jsonb: Jsonb | null;
+    // Cold-storage key (mig 057). When set, the input/output payloads
+    // live in the object store (R2) at this key and the *_jsonb columns
+    // are NULL. NULL key = payload is still inline in the jsonb columns.
+    payload_key: string | null;
     tokens_in: number | null;
     tokens_out: number | null;
     cost_estimate_usd: string | null;

@@ -26,6 +26,7 @@ import { makeEditor } from "../ai/editor.ts";
 import { callOpenAICompat } from "../ai/openai-client.ts";
 import type { ScorerClientKind } from "../ai/scorer.ts";
 import { db } from "../db/index.ts";
+import { getPayload } from "../shared/cold-tier.ts";
 import {
   ComposerInputSchema,
   type ComposerInput,
@@ -125,11 +126,20 @@ export async function captureScorerFixture(limit = 50): Promise<void> {
       "source_name",
       "raw_input",
       "raw_output",
+      "payload_key",
       "scorer_model_id",
       "scorer_prompt_version",
     ])
-    .where("raw_input", "is not", null)
-    .where("raw_output", "is not", null)
+    // Capture only directly-scored rows (skip dedup-inherited ones,
+    // which share a donor's payload). A directly-scored row has its
+    // payload either inline (raw_input) or cold-stored (payload_key).
+    .where("scored_via_story_id", "is", null)
+    .where((eb) =>
+      eb.or([
+        eb("raw_input", "is not", null),
+        eb("payload_key", "is not", null),
+      ]),
+    )
     .orderBy("scored_at", "desc")
     .limit(limit)
     .execute();
@@ -143,18 +153,34 @@ export async function captureScorerFixture(limit = 50): Promise<void> {
   const stamp = isoStamp();
   const path = resolve(FIXTURES_DIR, `capture-${stamp}.jsonl`);
   const out: string[] = [];
+  let skipped = 0;
   for (const r of rows) {
+    // Resolve cold-stored payloads from the object store.
+    let rawInput = r.raw_input;
+    let rawOutput = r.raw_output;
+    if (r.payload_key !== null) {
+      const env = await getPayload(r.payload_key);
+      if (env === null) {
+        skipped++;
+        continue; // object missing — skip rather than emit a broken row
+      }
+      rawInput = env.input as typeof rawInput;
+      rawOutput = env.output as typeof rawOutput;
+    }
     const row: CapturedRow = {
       story_id: Number(r.id),
       title: r.title,
       source_name: r.source_name,
-      raw_input: r.raw_input as ScorerInput,
-      raw_output: r.raw_output as ScorerOutput,
+      raw_input: rawInput as ScorerInput,
+      raw_output: rawOutput as ScorerOutput,
       scorer_model_id: r.scorer_model_id,
       scorer_prompt_version: r.scorer_prompt_version,
       captured_at: new Date().toISOString(),
     };
     out.push(JSON.stringify(row));
+  }
+  if (skipped > 0) {
+    console.log(`[fixture] skipped ${skipped} rows with missing cold payloads`);
   }
   await writeFile(path, out.join("\n") + "\n", "utf8");
   console.log(`[fixture] captured ${rows.length} rows → ${path}`);

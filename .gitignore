@@ -41,3 +41,6 @@ _site/
 .sass-cache/
 .jekyll-cache/
 .jekyll-metadata
+
+# local cold-storage fs backend (dev)
+.cold-storage/

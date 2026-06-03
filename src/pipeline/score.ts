@@ -536,6 +536,8 @@ async function tryInheritFromNeighbor(
     .select([
       "id",
       "raw_output",
+      "payload_key",
+      "scorer_summary",
       "theme_id",
       "category_id",
       "zeitgeist_score",
@@ -550,13 +552,13 @@ async function tryInheritFromNeighbor(
       "early_reject",
       "scorer_model_id",
       "scorer_prompt_version",
-      sql<number>`1 - (embedding <=> ${embeddingVec}::vector)`.as("sim"),
+      sql<number>`1 - (embedding <=> ${embeddingVec}::halfvec)`.as("sim"),
     ])
     .where("scored_at", ">=", cutoff)
     .where("scored_via_story_id", "is", null)
     .where("id", "!=", story.id)
     .where("embedding", "is not", null)
-    .orderBy(sql`embedding <=> ${embeddingVec}::vector`)
+    .orderBy(sql`embedding <=> ${embeddingVec}::halfvec`)
     .limit(1)
     .executeTakeFirst();
 
@@ -569,7 +571,13 @@ async function tryInheritFromNeighbor(
       scored_via_story_id: Number(row.id),
       scorer_model_id: row.scorer_model_id,
       scorer_prompt_version: row.scorer_prompt_version,
-      raw_output: row.raw_output as never,
+      // Inherit the donor's raw_output. If the donor's payload is
+      // cold-stored, share its object key (identical content); else
+      // copy the inline jsonb. raw_input stays NULL — the "we skipped
+      // the scorer" marker (see function header).
+      raw_output: row.payload_key !== null ? null : (row.raw_output as never),
+      payload_key: row.payload_key,
+      scorer_summary: row.scorer_summary,
       zeitgeist_score: row.zeitgeist_score,
       half_life: row.half_life,
       reach: row.reach,
@@ -696,12 +704,12 @@ async function tryAttachToExistingTheme(
       "name",
       "description",
       "category_id",
-      sql<number>`1 - (centroid_embedding <=> ${embeddingVec}::vector)`.as(
+      sql<number>`1 - (centroid_embedding <=> ${embeddingVec}::halfvec)`.as(
         "sim",
       ),
     ])
     .where("centroid_embedding", "is not", null)
-    .orderBy(sql`centroid_embedding <=> ${embeddingVec}::vector`)
+    .orderBy(sql`centroid_embedding <=> ${embeddingVec}::halfvec`)
     .limit(1)
     .executeTakeFirst();
 
@@ -709,7 +717,7 @@ async function tryAttachToExistingTheme(
 
   const recent = await db
     .selectFrom("story")
-    .select(["raw_output"])
+    .select(["scorer_summary"])
     .where("theme_id", "=", row.id)
     .where("scored_at", "is not", null)
     .orderBy("scored_at", "desc")
@@ -717,7 +725,7 @@ async function tryAttachToExistingTheme(
     .execute();
 
   const recentSummaries = recent
-    .map((r) => readSummary(r.raw_output))
+    .map((r) => r.scorer_summary ?? "")
     .filter((s) => s.length > 0);
 
   const confirm = await confirmThemeContinuation({
@@ -754,7 +762,7 @@ async function loadThemeContext(
     .select([
       "scored_at",
       "zeitgeist_score",
-      "raw_output",
+      "scorer_summary",
     ])
     .where("theme_id", "=", themeId)
     .where("scored_at", "is not", null)
@@ -772,7 +780,7 @@ async function loadThemeContext(
     recent_stories: recent.map((r) => ({
       date: r.scored_at ? r.scored_at.toISOString().slice(0, 10) : "",
       zeitgeist: r.zeitgeist_score ?? undefined,
-      one_line_summary: readSummary(r.raw_output),
+      one_line_summary: r.scorer_summary ?? "",
     })),
   };
 }
@@ -802,6 +810,9 @@ async function persistScorerResult(
 ): Promise<void> {
   const categoryId = await lookupCategoryId(output.classification.category);
 
+  // Payloads are written inline; the cold tier offloads them to R2 from
+  // the retention stage once aged past storage.cold_tier_age_days, so
+  // the scheduled pipeline never round-trips to R2. See docs/storage.md.
   await db.transaction().execute(async (tx) => {
     await tx
       .updateTable("story")
@@ -810,6 +821,11 @@ async function persistScorerResult(
         scorer_prompt_version: promptVersion,
         raw_input: input as never,
         raw_output: output as never,
+        payload_key: null,
+        scorer_summary:
+          output.summary && output.summary.trim() !== ""
+            ? output.summary.trim()
+            : null,
         category_id: categoryId,
         zeitgeist_score: output.scores.zeitgeist,
         half_life: output.scores.half_life,
@@ -998,26 +1014,16 @@ async function findMatchingThemeCheap(
     .select([
       "id",
       "category_id",
-      sql<number>`1 - (centroid_embedding <=> ${embeddingVec}::vector)`.as(
+      sql<number>`1 - (centroid_embedding <=> ${embeddingVec}::halfvec)`.as(
         "sim",
       ),
     ])
     .where("centroid_embedding", "is not", null)
-    .orderBy(sql`centroid_embedding <=> ${embeddingVec}::vector`)
+    .orderBy(sql`centroid_embedding <=> ${embeddingVec}::halfvec`)
     .limit(1)
     .executeTakeFirst();
   if (!row || row.sim < threshold) return null;
   return { id: row.id, category_id: row.category_id };
-}
-
-// Read a story's one-line summary from its raw_output jsonb. Old rows
-// (v0.1 prompt) stored `one_line_summary`; newer rows store `summary`.
-function readSummary(rawOutput: unknown): string {
-  const r = rawOutput as {
-    summary?: string;
-    one_line_summary?: string;
-  } | null;
-  return r?.summary ?? r?.one_line_summary ?? "";
 }
 
 function confidenceAtLeast(

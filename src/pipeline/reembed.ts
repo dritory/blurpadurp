@@ -17,7 +17,7 @@ const EMBED_BATCH = 128;
 export async function reembed(): Promise<void> {
   const stories = await db
     .selectFrom("story")
-    .select(["id", "title", "summary", "raw_output"])
+    .select(["id", "title", "summary", "scorer_summary", "raw_output"])
     .execute();
   console.log(`[reembed] re-embedding ${stories.length} stories...`);
 

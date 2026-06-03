@@ -24,7 +24,10 @@ import type {
 } from "../pipeline/fixture.ts";
 import { replayComposer, summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
+import { loadStorageStatus } from "./storage-status.ts";
+import { servePage } from "../shared/page-cache.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
+import { getPayload } from "../shared/cold-tier.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
@@ -236,9 +239,23 @@ app.get("/status", async (c) => {
   );
 });
 
+// Render a server JSX node to an HTML string. Handles both sync and
+// (defensively) async component trees so cached bodies are plain
+// strings.
+function renderHtml(node: unknown): Promise<string> {
+  return Promise.resolve(
+    (node as { toString(): string | Promise<string> }).toString(),
+  ).then(String);
+}
+
 app.get("/", async (c) => {
-  const home = await loadHome();
-  return c.html(<Home home={home} flash={null} />);
+  // Served from the R2 page cache (busted on publish) so crawler/reader
+  // traffic doesn't wake Neon between weekly issues. See page-cache.ts.
+  const body = await servePage("home", async () => {
+    const home = await loadHome();
+    return renderHtml(<Home home={home} flash={null} />);
+  });
+  return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
 });
 
 app.get("/subscribe", (c) => {
@@ -251,16 +268,28 @@ app.get("/subscribe", (c) => {
 });
 
 app.get("/archive", async (c) => {
-  const issues = await loadArchive();
-  return c.html(<Archive issues={issues} />);
+  const body = await servePage("archive", async () => {
+    const issues = await loadArchive();
+    return renderHtml(<Archive issues={issues} />);
+  });
+  return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
 });
 
 app.get("/issue/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id) || id <= 0) return c.notFound();
-  const issue = await loadIssue(id);
-  if (issue === null) return c.notFound();
-  return c.html(<IssuePage issue={issue} />);
+  // Published issues are immutable, so a longer TTL is safe; recompose
+  // is rare and admin-driven.
+  const body = await servePage(
+    `issue-${id}`,
+    async () => {
+      const issue = await loadIssue(id);
+      return issue === null ? null : renderHtml(<IssuePage issue={issue} />);
+    },
+    6 * 3600,
+  );
+  if (body === null) return c.notFound();
+  return c.html(body, 200, { "Cache-Control": "public, max-age=3600" });
 });
 
 // Draft preview for non-admin reviewers. Authorized via a signed
@@ -635,8 +664,11 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   });
 
   app.get("/admin/status", async (c) => {
-    const s = await loadPipelineStatus();
-    return c.html(<AdminStatus s={s} />);
+    const [s, storage] = await Promise.all([
+      loadPipelineStatus(),
+      loadStorageStatus(),
+    ]);
+    return c.html(<AdminStatus s={s} storage={storage} />);
   });
 
   app.get("/admin/scheduler", async (c) => {
@@ -1277,56 +1309,67 @@ app.get("/robots.txt", (c) => {
 });
 
 app.get("/sitemap.xml", async (c) => {
-  const issues = await db
-    .selectFrom("issue")
-    .select(["id", "published_at"])
-    .where("is_draft", "=", false)
-    .orderBy("published_at", "desc")
-    .limit(1000)
-    .execute();
-  const urls: Array<{ loc: string; lastmod?: string }> = [
-    { loc: `${PUBLIC_URL}/` },
-    { loc: `${PUBLIC_URL}/archive` },
-    { loc: `${PUBLIC_URL}/about` },
-  ];
-  for (const iss of issues) {
-    urls.push({
-      loc: `${PUBLIC_URL}/issue/${Number(iss.id)}`,
-      lastmod: iss.published_at.toISOString().slice(0, 10),
-    });
-  }
-  const xml =
-    `<?xml version="1.0" encoding="utf-8"?>\n` +
-    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
-    urls
-      .map(
-        (u) =>
-          `  <url><loc>${u.loc}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ""}</url>`,
-      )
-      .join("\n") +
-    `\n</urlset>\n`;
-  return c.body(xml, 200, { "Content-Type": "application/xml; charset=utf-8" });
+  const xml = await servePage("sitemap", async () => {
+    const issues = await db
+      .selectFrom("issue")
+      .select(["id", "published_at"])
+      .where("is_draft", "=", false)
+      .orderBy("published_at", "desc")
+      .limit(1000)
+      .execute();
+    const urls: Array<{ loc: string; lastmod?: string }> = [
+      { loc: `${PUBLIC_URL}/` },
+      { loc: `${PUBLIC_URL}/archive` },
+      { loc: `${PUBLIC_URL}/about` },
+    ];
+    for (const iss of issues) {
+      urls.push({
+        loc: `${PUBLIC_URL}/issue/${Number(iss.id)}`,
+        lastmod: iss.published_at.toISOString().slice(0, 10),
+      });
+    }
+    return (
+      `<?xml version="1.0" encoding="utf-8"?>\n` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      urls
+        .map(
+          (u) =>
+            `  <url><loc>${u.loc}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ""}</url>`,
+        )
+        .join("\n") +
+      `\n</urlset>\n`
+    );
+  });
+  return c.body(xml ?? "", 200, {
+    "Content-Type": "application/xml; charset=utf-8",
+    "Cache-Control": "public, max-age=600",
+  });
 });
 
 app.get("/feed.xml", async (c) => {
-  const rows = await db
-    .selectFrom("issue")
-    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
-    .where("is_draft", "=", false)
-    .orderBy("published_at", "desc")
-    .limit(FEED_MAX_ENTRIES)
-    .execute();
-  const entries = rows.map((r) => ({
-    id: Number(r.id),
-    publishedSeq: r.published_seq,
-    publishedAt: r.published_at,
-    html: r.composed_html,
-    isEventDriven: r.is_event_driven,
-    title: r.title,
-  }));
-  const updated = entries[0]?.publishedAt ?? new Date();
-  const xml = renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
-  return c.body(xml, 200, { "Content-Type": "application/atom+xml; charset=utf-8" });
+  const xml = await servePage("feed", async () => {
+    const rows = await db
+      .selectFrom("issue")
+      .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
+      .where("is_draft", "=", false)
+      .orderBy("published_at", "desc")
+      .limit(FEED_MAX_ENTRIES)
+      .execute();
+    const entries = rows.map((r) => ({
+      id: Number(r.id),
+      publishedSeq: r.published_seq,
+      publishedAt: r.published_at,
+      html: r.composed_html,
+      isEventDriven: r.is_event_driven,
+      title: r.title,
+    }));
+    const updated = entries[0]?.publishedAt ?? new Date();
+    return renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
+  });
+  return c.body(xml ?? "", 200, {
+    "Content-Type": "application/atom+xml; charset=utf-8",
+    "Cache-Control": "public, max-age=600",
+  });
 });
 
 const SubscribeSchema = z.object({
@@ -2585,6 +2628,18 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     (factors as Record<string, string[]>)[r.kind]?.push(r.factor);
   }
 
+  // Resolve cold-stored raw_input/raw_output (mig 058) from the object
+  // store when the payload was offloaded.
+  let rawInput = row.raw_input;
+  let rawOutput = row.raw_output;
+  if (row.payload_key !== null) {
+    const env = await getPayload(row.payload_key);
+    if (env !== null) {
+      rawInput = env.input as typeof rawInput;
+      rawOutput = env.output as typeof rawOutput;
+    }
+  }
+
   return {
     id: Number(row.id),
     title: row.title,
@@ -2622,8 +2677,8 @@ async function loadStoryDrilldown(id: number): Promise<StoryDrilldown | null> {
     scorerModel: row.scorer_model_id,
     scorerPromptVersion: row.scorer_prompt_version,
     factors,
-    rawInput: row.raw_input,
-    rawOutput: row.raw_output,
+    rawInput,
+    rawOutput,
   };
 }
 
@@ -3080,6 +3135,7 @@ async function loadNextEvalCandidate(): Promise<EvalCandidate | null> {
       "story.composite",
       "story.point_in_time_confidence",
       "story.raw_output",
+      "story.payload_key",
       "story.ingested_at",
     ])
     .where("story.scored_at", "is not", null)
@@ -3089,7 +3145,14 @@ async function loadNextEvalCandidate(): Promise<EvalCandidate | null> {
     .limit(1)
     .executeTakeFirst();
   if (!row) return null;
-  const r = row.raw_output as
+  // raw_output carries retrodiction_12mo, which is not denormalized —
+  // resolve it from the object store when cold-stored (mig 058).
+  let rawOutput = row.raw_output;
+  if (row.payload_key !== null) {
+    const env = await getPayload(row.payload_key);
+    if (env !== null) rawOutput = env.output as typeof rawOutput;
+  }
+  const r = rawOutput as
     | { summary?: string; reasoning?: { retrodiction_12mo?: string } }
     | null;
   return {
@@ -3917,7 +3980,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
       "published_at",
       "published_to_reader",
       "source_url",
-      "raw_output",
+      "scorer_summary",
     ])
     .where("theme_id", "=", id)
     .where((eb) =>
@@ -3960,7 +4023,6 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
     firstSeenAt: theme.first_seen_at,
     nStoriesPublished: theme.n_stories_published,
     stories: stories.map((s) => {
-      const r = s.raw_output as { summary?: string; one_line_summary?: string } | null;
       const issue = issueOf.get(Number(s.id));
       return {
         id: Number(s.id),
@@ -3968,7 +4030,7 @@ async function loadTheme(id: number): Promise<ThemeViewData | null> {
         publishedAt: s.published_at,
         publishedToReader: s.published_to_reader,
         sourceUrl: s.source_url,
-        oneLiner: r?.summary ?? r?.one_line_summary ?? "",
+        oneLiner: s.scorer_summary ?? "",
         issueId: issue?.id ?? null,
         issueSeq: issue?.seq ?? null,
       };
