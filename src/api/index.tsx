@@ -24,6 +24,7 @@ import type {
 } from "../pipeline/fixture.ts";
 import { replayComposer, summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
+import { loadStorageStatus } from "./storage-status.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
 import { getPayload } from "../shared/cold-tier.ts";
 import { getEnvOptional } from "../shared/env.ts";
@@ -636,8 +637,11 @@ if (adminPassword !== undefined && adminPassword.length > 0) {
   });
 
   app.get("/admin/status", async (c) => {
-    const s = await loadPipelineStatus();
-    return c.html(<AdminStatus s={s} />);
+    const [s, storage] = await Promise.all([
+      loadPipelineStatus(),
+      loadStorageStatus(),
+    ]);
+    return c.html(<AdminStatus s={s} storage={storage} />);
   });
 
   app.get("/admin/scheduler", async (c) => {

@@ -163,6 +163,12 @@ cascade; `issue.story_ids` is a bare array; themes and 30/90-day
 rolling stats read recent scored rows). Not built; revisit with the
 growth-rate numbers.
 
+The live trajectory — database size vs. the 500 MB cap, per-table
+footprint, story population (scored/unscored/cold/inline), 30-day
+intake, and a rough months-to-cap — is on **`/admin/status`**
+(`src/api/storage-status.ts`). Admin-only; never added to `/health` or
+`/status`, which stay cheap.
+
 ### Non-invariant lever: prune unscored noise rows
 
 
