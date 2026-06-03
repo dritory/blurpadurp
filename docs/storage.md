@@ -169,8 +169,24 @@ intake, and a rough months-to-cap — is on **`/admin/status`**
 (`src/api/storage-status.ts`). Admin-only; never added to `/health` or
 `/status`, which stay cheap.
 
-### Non-invariant lever: prune unscored noise rows
+## Public page cache (keeping Neon asleep)
 
+A separate use of the same object store, for CU rather than storage:
+the public read pages (`/`, `/archive`, `/feed.xml`, `/sitemap.xml`,
+`/issue/:id`) are DB-backed, and crawlers/readers hitting them wake
+Neon. Because the Fly app machine autostops every few minutes, an
+in-process cache would be wiped on every cold start — so the cache
+lives in R2 (`src/shared/page-cache.ts`, `cache/` prefix).
+
+`servePage(key, render, ttl)` serves from R2 when fresh, else renders
+from the DB and stores. TTL 1h (issue permalinks 6h, immutable);
+`publishDraft` calls `bustPublicPages()` so a new issue shows
+immediately instead of waiting out the TTL. All store access is
+best-effort — any error falls back to rendering from the DB, so pages
+work with or without R2 configured (without R2 the `fs` backend is
+per-machine and wiped on restart, i.e. no cross-restart benefit until
+R2 creds are set). Steady state: Neon is woken for public traffic at
+most ~once/hour/route instead of on every crawl.
 
 ### Non-invariant lever: prune unscored noise rows
 

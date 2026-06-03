@@ -162,6 +162,7 @@ medium**. This shapes partition choices:
 | Runaway scorer cost | `checkBudget()` at top of each Anthropic stage | `src/ai/budget.ts` |
 | Pipeline pool drains on re-compose | Composer-replay harness (doesn't touch DB) | `bun run cli composer-replay …` |
 | Neon CU climbing from `/health` probe storm | `/health` is DB-less (process-alive only). DB-backed freshness payload lives at `/status` for external monitors; `/admin/status` for the operator. Freshness-query indexes from mig 051. | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
+| Neon woken by crawler/reader traffic on public pages | Public read pages (`/`, `/archive`, `/feed.xml`, `/sitemap.xml`, `/issue/:id`) served from the R2 page cache (TTL + bust on publish), not the DB. App machine autostops, so the cache must be out-of-process (R2). | `src/shared/page-cache.ts`, `src/pipeline/draft.ts` |
 
 ## Tuning loop
 

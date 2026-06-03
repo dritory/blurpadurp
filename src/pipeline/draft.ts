@@ -25,12 +25,13 @@ import { sql } from "kysely";
 
 import { makeComposer } from "../ai/composer.ts";
 import { db } from "../db/index.ts";
+import { bustPublicPages } from "../shared/page-cache.ts";
 import type { ComposerInput } from "../shared/composer-schema.ts";
 import { loadSystemPromptText } from "../shared/prompts.ts";
 import { buildPickRows, produceDraft } from "./compose.ts";
 
 export async function publishDraft(issueId: number): Promise<boolean> {
-  return db.transaction().execute(async (tx) => {
+  const published = await db.transaction().execute(async (tx) => {
     // Allocate the public issue number from max+1 inside the same
     // transaction. Doing this in SQL (not as a JS read-then-write) keeps
     // it race-safe under the unique partial index on published_seq:
@@ -90,6 +91,13 @@ export async function publishDraft(issueId: number): Promise<boolean> {
     }
     return true;
   });
+
+  // A new issue is now live → invalidate the cached public pages
+  // (home/archive/feed/sitemap) so it shows immediately instead of
+  // waiting out the TTL. Best-effort; runs on the publishing machine,
+  // and the shared R2 cache means the web machines pick it up.
+  if (published) await bustPublicPages();
+  return published;
 }
 
 export async function discardDraft(issueId: number): Promise<boolean> {

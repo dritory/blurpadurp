@@ -25,6 +25,7 @@ import type {
 import { replayComposer, summarizeReplay } from "../pipeline/fixture.ts";
 import { loadPipelineStatus } from "./status.ts";
 import { loadStorageStatus } from "./storage-status.ts";
+import { servePage } from "../shared/page-cache.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
 import { getPayload } from "../shared/cold-tier.ts";
 import { getEnvOptional } from "../shared/env.ts";
@@ -238,9 +239,23 @@ app.get("/status", async (c) => {
   );
 });
 
+// Render a server JSX node to an HTML string. Handles both sync and
+// (defensively) async component trees so cached bodies are plain
+// strings.
+function renderHtml(node: unknown): Promise<string> {
+  return Promise.resolve(
+    (node as { toString(): string | Promise<string> }).toString(),
+  ).then(String);
+}
+
 app.get("/", async (c) => {
-  const home = await loadHome();
-  return c.html(<Home home={home} flash={null} />);
+  // Served from the R2 page cache (busted on publish) so crawler/reader
+  // traffic doesn't wake Neon between weekly issues. See page-cache.ts.
+  const body = await servePage("home", async () => {
+    const home = await loadHome();
+    return renderHtml(<Home home={home} flash={null} />);
+  });
+  return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
 });
 
 app.get("/subscribe", (c) => {
@@ -253,16 +268,28 @@ app.get("/subscribe", (c) => {
 });
 
 app.get("/archive", async (c) => {
-  const issues = await loadArchive();
-  return c.html(<Archive issues={issues} />);
+  const body = await servePage("archive", async () => {
+    const issues = await loadArchive();
+    return renderHtml(<Archive issues={issues} />);
+  });
+  return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
 });
 
 app.get("/issue/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id) || id <= 0) return c.notFound();
-  const issue = await loadIssue(id);
-  if (issue === null) return c.notFound();
-  return c.html(<IssuePage issue={issue} />);
+  // Published issues are immutable, so a longer TTL is safe; recompose
+  // is rare and admin-driven.
+  const body = await servePage(
+    `issue-${id}`,
+    async () => {
+      const issue = await loadIssue(id);
+      return issue === null ? null : renderHtml(<IssuePage issue={issue} />);
+    },
+    6 * 3600,
+  );
+  if (body === null) return c.notFound();
+  return c.html(body, 200, { "Cache-Control": "public, max-age=3600" });
 });
 
 // Draft preview for non-admin reviewers. Authorized via a signed
@@ -1282,56 +1309,67 @@ app.get("/robots.txt", (c) => {
 });
 
 app.get("/sitemap.xml", async (c) => {
-  const issues = await db
-    .selectFrom("issue")
-    .select(["id", "published_at"])
-    .where("is_draft", "=", false)
-    .orderBy("published_at", "desc")
-    .limit(1000)
-    .execute();
-  const urls: Array<{ loc: string; lastmod?: string }> = [
-    { loc: `${PUBLIC_URL}/` },
-    { loc: `${PUBLIC_URL}/archive` },
-    { loc: `${PUBLIC_URL}/about` },
-  ];
-  for (const iss of issues) {
-    urls.push({
-      loc: `${PUBLIC_URL}/issue/${Number(iss.id)}`,
-      lastmod: iss.published_at.toISOString().slice(0, 10),
-    });
-  }
-  const xml =
-    `<?xml version="1.0" encoding="utf-8"?>\n` +
-    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
-    urls
-      .map(
-        (u) =>
-          `  <url><loc>${u.loc}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ""}</url>`,
-      )
-      .join("\n") +
-    `\n</urlset>\n`;
-  return c.body(xml, 200, { "Content-Type": "application/xml; charset=utf-8" });
+  const xml = await servePage("sitemap", async () => {
+    const issues = await db
+      .selectFrom("issue")
+      .select(["id", "published_at"])
+      .where("is_draft", "=", false)
+      .orderBy("published_at", "desc")
+      .limit(1000)
+      .execute();
+    const urls: Array<{ loc: string; lastmod?: string }> = [
+      { loc: `${PUBLIC_URL}/` },
+      { loc: `${PUBLIC_URL}/archive` },
+      { loc: `${PUBLIC_URL}/about` },
+    ];
+    for (const iss of issues) {
+      urls.push({
+        loc: `${PUBLIC_URL}/issue/${Number(iss.id)}`,
+        lastmod: iss.published_at.toISOString().slice(0, 10),
+      });
+    }
+    return (
+      `<?xml version="1.0" encoding="utf-8"?>\n` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      urls
+        .map(
+          (u) =>
+            `  <url><loc>${u.loc}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ""}</url>`,
+        )
+        .join("\n") +
+      `\n</urlset>\n`
+    );
+  });
+  return c.body(xml ?? "", 200, {
+    "Content-Type": "application/xml; charset=utf-8",
+    "Cache-Control": "public, max-age=600",
+  });
 });
 
 app.get("/feed.xml", async (c) => {
-  const rows = await db
-    .selectFrom("issue")
-    .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
-    .where("is_draft", "=", false)
-    .orderBy("published_at", "desc")
-    .limit(FEED_MAX_ENTRIES)
-    .execute();
-  const entries = rows.map((r) => ({
-    id: Number(r.id),
-    publishedSeq: r.published_seq,
-    publishedAt: r.published_at,
-    html: r.composed_html,
-    isEventDriven: r.is_event_driven,
-    title: r.title,
-  }));
-  const updated = entries[0]?.publishedAt ?? new Date();
-  const xml = renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
-  return c.body(xml, 200, { "Content-Type": "application/atom+xml; charset=utf-8" });
+  const xml = await servePage("feed", async () => {
+    const rows = await db
+      .selectFrom("issue")
+      .select(["id", "published_seq", "published_at", "is_event_driven", "title", "composed_html"])
+      .where("is_draft", "=", false)
+      .orderBy("published_at", "desc")
+      .limit(FEED_MAX_ENTRIES)
+      .execute();
+    const entries = rows.map((r) => ({
+      id: Number(r.id),
+      publishedSeq: r.published_seq,
+      publishedAt: r.published_at,
+      html: r.composed_html,
+      isEventDriven: r.is_event_driven,
+      title: r.title,
+    }));
+    const updated = entries[0]?.publishedAt ?? new Date();
+    return renderAtomFeed({ baseUrl: PUBLIC_URL, entries, updated });
+  });
+  return c.body(xml ?? "", 200, {
+    "Content-Type": "application/atom+xml; charset=utf-8",
+    "Cache-Control": "public, max-age=600",
+  });
 });
 
 const SubscribeSchema = z.object({
