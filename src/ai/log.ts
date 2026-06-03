@@ -1,6 +1,5 @@
 import { db } from "../db/index.ts";
-import { coldTierEnabled, getPayload, putPayload } from "../shared/cold-tier.ts";
-import { aiPayloadKey } from "../shared/object-store.ts";
+import { getPayload } from "../shared/cold-tier.ts";
 import type { AICallRecord } from "./types.ts";
 
 // Look up a prior successful LLM call with this exact input hash.
@@ -34,62 +33,37 @@ export async function findCachedOutput(params: {
 
   if (!row) return null;
   if (row.payload_key !== null) {
-    // Cold-stored payload. A miss here (object absent / transport
-    // error returns null) just means "no cache" — the caller re-runs
-    // the model, which is the safe degradation.
+    // Cold-stored payload (offloaded by retention once aged past the
+    // window). In practice an idempotent retry hits a row written
+    // seconds ago, still inline — this path is the rare exact-input
+    // recurrence. A miss returns null = "no cache" = re-run the model.
     const env = await getPayload(row.payload_key);
     return env?.output ?? null;
   }
   return row.output_jsonb ?? null;
 }
 
+// Always writes the payload inline. The cold tier is retention-driven:
+// payloads age out to R2 after storage.cold_tier_age_days, not at write
+// time — so the scheduled pipeline never round-trips to R2. See
+// docs/storage.md.
 export async function logAICall(rec: AICallRecord): Promise<void> {
-  const base = {
-    stage_name: rec.stage_name,
-    stage_version: rec.stage_version,
-    model_id: rec.model_id,
-    input_hash: rec.input_hash,
-    tokens_in: rec.tokens_in,
-    tokens_out: rec.tokens_out,
-    cost_estimate_usd:
-      rec.cost_estimate_usd == null ? null : String(rec.cost_estimate_usd),
-    latency_ms: rec.latency_ms,
-    error: rec.error,
-  };
-
-  if (await coldTierEnabled()) {
-    const key = aiPayloadKey(rec.stage_name);
-    try {
-      await putPayload(key, {
-        input: rec.input_jsonb,
-        output: rec.output_jsonb,
-      });
-      await db
-        .insertInto("ai_call_log")
-        .values({
-          ...base,
-          input_jsonb: null,
-          output_jsonb: null,
-          payload_key: key,
-        })
-        .execute();
-      return;
-    } catch (e) {
-      // Never lose the record over a storage hiccup — fall back to
-      // writing the payload inline this once.
-      console.warn(
-        `[ai-log] cold-store write failed, storing inline: ${e instanceof Error ? e.message : e}`,
-      );
-    }
-  }
-
   await db
     .insertInto("ai_call_log")
     .values({
-      ...base,
+      stage_name: rec.stage_name,
+      stage_version: rec.stage_version,
+      model_id: rec.model_id,
+      input_hash: rec.input_hash,
       input_jsonb: rec.input_jsonb as never,
       output_jsonb: rec.output_jsonb as never,
       payload_key: null,
+      tokens_in: rec.tokens_in,
+      tokens_out: rec.tokens_out,
+      cost_estimate_usd:
+        rec.cost_estimate_usd == null ? null : String(rec.cost_estimate_usd),
+      latency_ms: rec.latency_ms,
+      error: rec.error,
     })
     .execute();
 }

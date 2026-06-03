@@ -32,12 +32,15 @@
 
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
+import { coldTierEnabled } from "../shared/cold-tier.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
+import { offloadPayloads } from "./cold-migrate.ts";
 
 const UNCONFIRMED_TTL_MS = 30 * 24 * 3600 * 1000;
 const UNSUBSCRIBED_ANON_TTL_MS = 90 * 24 * 3600 * 1000;
 const DISPATCH_LOG_TTL_MS = 180 * 24 * 3600 * 1000;
 const DEFAULT_EMBEDDING_HOT_DAYS = 90;
+const DEFAULT_COLD_TIER_AGE_DAYS = 14;
 
 export async function retention(): Promise<void> {
   await withLock("retention", 5 * 60_000, runRetention);
@@ -85,9 +88,23 @@ async function runRetention(): Promise<void> {
   // 4. Age out cold individual story embeddings (see header note).
   const embeddingsAged = await ageOutEmbeddings(now);
 
+  // 5. Offload payloads older than the cold-tier window to R2 (rows
+  // stay; only the bulky jsonb moves). Inert unless storage.cold_tier
+  // is on. See docs/storage.md.
+  const offloaded = await offloadColdPayloads();
+
   console.log(
-    `[retention] unconfirmed_deleted=${unconfirmedDeleted} unsub_anonymized=${unsubAnonymized} dispatch_pruned=${dispatchDeleted} embeddings_aged=${embeddingsAged}`,
+    `[retention] unconfirmed_deleted=${unconfirmedDeleted} unsub_anonymized=${unsubAnonymized} dispatch_pruned=${dispatchDeleted} embeddings_aged=${embeddingsAged} offloaded_ai=${offloaded.ai} offloaded_story=${offloaded.story}`,
   );
+}
+
+async function offloadColdPayloads(): Promise<{ ai: number; story: number }> {
+  if (!(await coldTierEnabled())) return { ai: 0, story: 0 };
+  const days = await loadConfigNumber(
+    "storage.cold_tier_age_days",
+    DEFAULT_COLD_TIER_AGE_DAYS,
+  );
+  return offloadPayloads({ olderThanDays: days });
 }
 
 async function ageOutEmbeddings(now: number): Promise<number> {
@@ -121,11 +138,18 @@ async function ageOutEmbeddings(now: number): Promise<number> {
 }
 
 async function loadEmbeddingHotDays(): Promise<number> {
+  return loadConfigNumber(
+    "retention.embedding_hot_days",
+    DEFAULT_EMBEDDING_HOT_DAYS,
+  );
+}
+
+async function loadConfigNumber(key: string, fallback: number): Promise<number> {
   const row = await db
     .selectFrom("config")
     .select("value")
-    .where("key", "=", "retention.embedding_hot_days")
+    .where("key", "=", key)
     .executeTakeFirst();
   const v = typeof row?.value === "number" ? row.value : Number(row?.value);
-  return Number.isFinite(v) && v > 0 ? v : DEFAULT_EMBEDDING_HOT_DAYS;
+  return Number.isFinite(v) && v > 0 ? v : fallback;
 }

@@ -1,16 +1,23 @@
-// Backfill mover for the cold-storage tier (docs/storage.md).
+// Cold-storage offload engine (docs/storage.md).
 //
-// Relocates existing inline payloads — ai_call_log (input/output) and
-// story (raw_input/raw_output) — into the object store in bounded
-// batches, then nulls the inline columns. Idempotent and resumable:
-// each row is moved only if it still has a payload and no key. Safe to
-// run while the pipeline is live — the read paths fall back to inline
-// columns for any not-yet-moved row, and newly-written rows already go
-// straight to the store once `storage.cold_tier` is on.
+// Relocates inline payloads — ai_call_log (input/output) and story
+// (raw_input/raw_output) — older than a cutoff into the object store,
+// in bounded batches, then nulls the inline columns. The story/
+// ai_call_log ROWS stay; only the bulky payload moves. Rows newer than
+// the cutoff keep their payloads inline so the scheduled pipeline
+// (compose's ≤7-day editor pool) never has to read from R2.
 //
-// Run: bun run cli cold-migrate [batchSize] [maxBatches]
-//   batchSize  rows per batch        (default 500)
-//   maxBatches cap on batches/table; 0 = until done (default 0)
+// Idempotent and resumable: each row is moved only if it still has a
+// payload and no key. Order is write-object-then-null-row, so a crash
+// orphans an object at worst, never dangles a row at a missing key.
+// Safe to run live — read paths fall back to inline for un-moved rows.
+//
+// Driven two ways:
+//   - retention stage, daily, with olderThanDays = the configured
+//     window (storage.cold_tier_age_days, default 14).
+//   - `bun run cli cold-migrate [batchSize] [maxBatches] [olderThanDays]`
+//     for the one-time historical backfill (olderThanDays defaults to 0
+//     = everything).
 
 import { db } from "../db/index.ts";
 import { putPayload } from "../shared/cold-tier.ts";
@@ -20,19 +27,43 @@ import {
   storyPayloadKey,
 } from "../shared/object-store.ts";
 
+export interface OffloadOptions {
+  olderThanDays: number;
+  batchSize?: number;
+  maxBatches?: number;
+}
+
+export async function offloadPayloads(
+  opts: OffloadOptions,
+): Promise<{ ai: number; story: number }> {
+  const batchSize = opts.batchSize ?? 500;
+  const maxBatches = opts.maxBatches ?? 0;
+  const cutoff = new Date(Date.now() - opts.olderThanDays * 24 * 3600_000);
+  const ai = await offloadAiCallLog(cutoff, batchSize, maxBatches);
+  const story = await offloadStory(cutoff, batchSize, maxBatches);
+  return { ai, story };
+}
+
+// CLI entry: one-time historical backfill. olderThanDays defaults to 0
+// (move everything regardless of age).
 export async function coldMigrate(
   batchSize = 500,
   maxBatches = 0,
+  olderThanDays = 0,
 ): Promise<void> {
   console.log(
-    `[cold-migrate] backend=${getObjectStore().backend} batch=${batchSize} maxBatches=${maxBatches || "∞"}`,
+    `[cold-migrate] backend=${getObjectStore().backend} batch=${batchSize} maxBatches=${maxBatches || "∞"} olderThanDays=${olderThanDays}`,
   );
-  const ai = await migrateAiCallLog(batchSize, maxBatches);
-  const story = await migrateStory(batchSize, maxBatches);
+  const { ai, story } = await offloadPayloads({
+    olderThanDays,
+    batchSize,
+    maxBatches,
+  });
   console.log(`[cold-migrate] done — ai_call_log=${ai} story=${story}`);
 }
 
-async function migrateAiCallLog(
+async function offloadAiCallLog(
+  cutoff: Date,
   batchSize: number,
   maxBatches: number,
 ): Promise<number> {
@@ -44,6 +75,7 @@ async function migrateAiCallLog(
       .selectFrom("ai_call_log")
       .select(["id", "stage_name", "started_at", "input_jsonb", "output_jsonb"])
       .where("payload_key", "is", null)
+      .where("started_at", "<", cutoff)
       .where((eb) =>
         eb.or([
           eb("input_jsonb", "is not", null),
@@ -60,8 +92,6 @@ async function migrateAiCallLog(
         row.stage_name,
         row.started_at instanceof Date ? row.started_at : new Date(),
       );
-      // Write the object before nulling the row, so a crash orphans an
-      // object at worst, never dangles a row at a missing key.
       await putPayload(key, { input: row.input_jsonb, output: row.output_jsonb });
       await db
         .updateTable("ai_call_log")
@@ -70,12 +100,12 @@ async function migrateAiCallLog(
         .execute();
       moved++;
     }
-    console.log(`[cold-migrate] ai_call_log batch ${batches}: +${rows.length} (total ${moved})`);
   }
   return moved;
 }
 
-async function migrateStory(
+async function offloadStory(
+  cutoff: Date,
   batchSize: number,
   maxBatches: number,
 ): Promise<number> {
@@ -87,6 +117,7 @@ async function migrateStory(
       .selectFrom("story")
       .select(["id", "scored_at", "raw_input", "raw_output"])
       .where("payload_key", "is", null)
+      .where("scored_at", "<", cutoff)
       .where((eb) =>
         eb.or([
           eb("raw_input", "is not", null),
@@ -110,7 +141,6 @@ async function migrateStory(
         .execute();
       moved++;
     }
-    console.log(`[cold-migrate] story batch ${batches}: +${rows.length} (total ${moved})`);
   }
   return moved;
 }

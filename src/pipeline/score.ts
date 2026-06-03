@@ -16,8 +16,6 @@ import { recomputeThemeCentroid } from "../shared/embedding-utils.ts";
 import { makeScorer } from "../ai/scorer.ts";
 import { confirmThemeContinuation } from "../ai/theme-confirm.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
-import { coldTierEnabled, putPayload } from "../shared/cold-tier.ts";
-import { storyPayloadKey } from "../shared/object-store.ts";
 import { db } from "../db/index.ts";
 import type { Database } from "../db/schema.ts";
 import {
@@ -812,31 +810,18 @@ async function persistScorerResult(
 ): Promise<void> {
   const categoryId = await lookupCategoryId(output.classification.category);
 
-  // Cold tier: offload raw_input/raw_output to the object store before
-  // the transaction. A store failure falls back to inline columns — a
-  // scored item's replay substrate is never lost over a storage hiccup.
-  let payloadKey: string | null = null;
-  if (await coldTierEnabled()) {
-    const key = storyPayloadKey();
-    try {
-      await putPayload(key, { input, output });
-      payloadKey = key;
-    } catch (e) {
-      console.warn(
-        `[score] cold-store write failed for story ${storyId}, storing inline: ${e instanceof Error ? e.message : e}`,
-      );
-    }
-  }
-
+  // Payloads are written inline; the cold tier offloads them to R2 from
+  // the retention stage once aged past storage.cold_tier_age_days, so
+  // the scheduled pipeline never round-trips to R2. See docs/storage.md.
   await db.transaction().execute(async (tx) => {
     await tx
       .updateTable("story")
       .set({
         scorer_model_id: modelId,
         scorer_prompt_version: promptVersion,
-        raw_input: payloadKey !== null ? null : (input as never),
-        raw_output: payloadKey !== null ? null : (output as never),
-        payload_key: payloadKey,
+        raw_input: input as never,
+        raw_output: output as never,
+        payload_key: null,
         scorer_summary:
           output.summary && output.summary.trim() !== ""
             ? output.summary.trim()

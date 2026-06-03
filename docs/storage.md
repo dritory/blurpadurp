@@ -62,18 +62,15 @@ silent archive.
    dead entries. `reembed.ts` regenerates any vector if ever needed.
    **(retention stage, done — `retention.embedding_hot_days`,
    default 90, ≫ the 3-day dedup window.)**
-4. **Cold tier (R2) — future:** move `raw_input`/`raw_output` bulk and
-   `ai_call_log` payloads to object storage, keyed by `input_hash`,
-   stored once and referenced by both `story` and `ai_call_log`.
-   Persist-forever satisfied — just not in Neon. Prereq landed: the
-   hot path no longer touches `raw_output` (it reads
-   `story.scorer_summary`), so `raw_output` can move without affecting
-   scoring. See "Cold tier design" below before building.
+4. **Cold tier (R2) — done, flag-gated:** payloads
+   (`raw_input`/`raw_output`, `ai_call_log` jsonb) stay inline for a
+   14-day window, then retention offloads them to R2 and nulls the
+   columns. Rows stay; persist-forever satisfied in R2. See "Cold tier"
+   below.
 
 Steps 2–3 are in-Postgres and reversible, and target the largest
 (vectors) and fastest-growing (old embeddings + `ai_call_log`) lines.
-They should clear the immediate crunch, leaving the R2 build (4) as a
-considered project rather than a fire drill.
+Step 4 takes the payload mass out of Neon for good.
 
 ## Cold tier — R2 is the archive
 
@@ -91,66 +88,83 @@ else `fs` under `./.cold-storage`). R2 creds via env: `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`
 (`https://<accountid>.r2.cloudflarestorage.com`).
 
-### Phase 1 — `ai_call_log` payloads (shipped, flag-gated)
+**Rows stay; only payloads move.** We never delete `story` /
+`ai_call_log` rows — the scalar columns (scores, theme links, cost,
+flags) are small and load-bearing (themes, 30/90-day rolling stats,
+`/admin/eval`, issue integrity all depend on them). Only the bulky
+jsonb relocates to R2. This bounds the *payload* footprint; the scalar
+rows grow slowly (see "True indefinite bound" below).
 
-`ai_call_log` is the fastest grower and its payloads are purely cold
-(read only by within-run idempotency + admin). Implemented in
-`src/ai/log.ts` (the single choke point all AI stages funnel through):
+### Windowed offload (not at write time)
 
-- **Key:** `ai/{stage}/{yyyy}/{mm}/{uuid}.json` holding
-  `{"input":..,"output":..}`. Not content-addressed — scorer inputs are
-  near-unique, so dedup buys little; the month prefix enables cheap R2
-  lifecycle rules / browsing.
-- **Write:** when `storage.cold_tier` config is `true`, `logAICall`
-  writes the payload to the store and inserts the row with
-  `payload_key` set and `*_jsonb` NULL. A store failure falls back to
-  inline jsonb — a record is never lost over a storage hiccup.
-- **Read:** `findCachedOutput` fetches by `payload_key` when set, else
-  the inline `output_jsonb`. A store miss returns null = "no cache" =
-  re-run the model (safe degradation).
-- **Backfill:** `bun run cli cold-migrate [batchSize] [maxBatches]`
-  relocates existing inline payloads in bounded, resumable batches.
-  Order is write-object-then-null-row, so a crash orphans an object at
-  worst, never dangles a row.
+The key design choice: payloads stay **inline in Postgres for
+`storage.cold_tier_age_days` (default 14, mig 059)**, then the daily
+retention stage offloads anything older to R2 and nulls the columns.
 
-**Rollout:** (1) provision R2 + set env; (2) `bun run migrate`
-(mig 057 adds `payload_key` + the `storage.cold_tier=false` flag);
-(3) flip `storage.cold_tier` to `true` so *new* calls offload; (4) run
-`cold-migrate` to move the backlog; (5) `VACUUM (FULL) ai_call_log` to
-hand the freed pages back to Neon. The column + plumbing are inert
-until step 3, so 057 is safe to ship ahead of R2 setup.
+Why a window instead of offloading on write: the only *scheduled*
+payload reader is compose's editor/shrug pool, gated to 7-day
+freshness (`COMPOSE_STORY_MAX_AGE_MS`). A 14-day inline window means
+**no scheduled path ever fetches a payload from R2** — recent rows are
+always inline. R2 is touched only by the offload writer (retention),
+`fixture-capture` of old data, and admin drilldowns of old items.
+(compose's 90-day prior-timeline reads the `scorer_summary` column, not
+the payload, precisely so it stays R2-free.)
 
-### Phase 2 — `story.raw_input`/`raw_output` (shipped, flag-gated)
+Steady state needs no repeated `VACUUM FULL`: new inline payloads reuse
+the heap/TOAST pages freed when old ones are nulled, so the inline
+payload mass stabilizes at ~one window's worth. A one-time
+`VACUUM (FULL)` is only for reclaiming the historical backlog after the
+first big `cold-migrate`.
 
-Same store, same flag (`storage.cold_tier`), same fallback-to-inline
-safety. mig 058 adds `story.payload_key`.
+### Mechanics
 
-- **Write:** `persistScorerResult` (`score.ts`) offloads
-  `{input:raw_input, output:raw_output}` and nulls the columns.
-- **Dedup-inherit:** an inherited row shares the donor's `payload_key`
-  (identical content) instead of re-storing — so eviction (phase 3)
-  must be reference-aware before deleting any story object.
-- **Reads:** `raw_output` is *warm*, not fully cold — the compose
-  stage reads it weekly for the bounded editor/shrug/timeline pools.
-  Those call sites `hydrateRawOutput()` (one store fetch per offloaded
-  row in the bounded set) so every downstream read works unchanged.
-  `fixture-capture`, the admin story drilldown, and the `/admin/eval`
-  picker resolve via the key too. Summary-only readers (`reattach`,
-  the theme-stories list) switched to the `scorer_summary` column and
-  need no fetch. `raw_input` is fully cold (fixture-capture only).
-- **Backfill:** `cold-migrate` moves `ai_call_log` then `story`.
+- **Keys:** `ai/{stage}/{yyyy}/{mm}/{uuid}.json` and
+  `story/{yyyy}/{mm}/{uuid}.json`, each holding `{"input":..,"output":..}`.
+  Month prefix enables cheap R2 lifecycle rules / browsing.
+- **Offload engine:** `src/pipeline/cold-migrate.ts` `offloadPayloads({
+  olderThanDays })` — bounded, resumable batches, write-object-then-
+  null-row (a crash orphans an object at worst, never dangles a row).
+  Called by retention (`olderThanDays` = the window) and by
+  `bun run cli cold-migrate [batchSize] [maxBatches] [olderThanDays]`
+  (`olderThanDays` defaults to 0 = the full historical backfill).
+- **Columns:** `ai_call_log.payload_key` (mig 057),
+  `story.payload_key` (mig 058). When set, the `*_jsonb` /
+  `raw_*` columns are NULL.
+- **Reads** fall back to inline whenever `payload_key` is NULL, so
+  everything works before/independent of any offload:
+  - `findCachedOutput` resolves `output` via the key (rare — idempotent
+    retries hit a seconds-old, still-inline row).
+  - compose's editor/shrug pools call `hydrateRawOutput()` — a no-op in
+    practice (rows ≤7d are inline) but a correct safety net.
+  - `fixture-capture`, the admin story drilldown, and `/admin/eval`
+    resolve via the key for genuinely old rows.
+  - summary-only readers (`reattach`, theme-stories list, compose
+    prior-timeline) use the `scorer_summary` column — never a payload.
+- **Dedup-inherit:** copies the donor's `payload_key` when set; in
+  practice the donor is ≤3 days old (the dedup lookback) so it's always
+  inline — the copy carries the inline `raw_output`.
 
-### Phase 3 — rolling-window row eviction (for true indefinite bound)
+**Rollout:** (1) provision R2 + set env (`docs/deploy.md`);
+(2) `bun run migrate` (057/058 add the columns, 059 the window — all
+inert while the flag is off); (3) flip `storage.cold_tier=true`;
+(4) retention now offloads aged payloads daily; (5) one-time
+`bun run cli cold-migrate` to move the historical backlog, then
+`VACUUM (FULL) ai_call_log; VACUUM (FULL) story;` to return the freed
+pages to Neon.
 
-Even with payloads in R2, the *scalar* rows (`story`, `ai_call_log`)
-grow linearly. For a hard bound, retention evicts rows past a long
-window once their payload is safely in R2 — keeping a bounded hot set
-while R2 stays the complete archive. Size the window from the
-growth-rate query in this doc once measured. Watch references before
-deleting `story` rows: `story_factor`/`eval_label`/`ground_truth`/
-`issue_pick` cascade; `issue.story_ids` is a bare array (dangling ids
-in historical issues are cosmetic — the prose is already in
-`composed_markdown`).
+### True indefinite bound (scalar rows)
+
+Even with payloads in R2, the scalar rows grow linearly (~1.5 KB/story
++ ~0.2 KB/ai-call). At observed volume that's years of headroom, not a
+fire. If it ever binds, the next lever is **archiving whole rows** to
+R2 past a long window and deleting them from PG — but that must be
+reference-aware (`story_factor`/`eval_label`/`ground_truth`/`issue_pick`
+cascade; `issue.story_ids` is a bare array; themes and 30/90-day
+rolling stats read recent scored rows). Not built; revisit with the
+growth-rate numbers.
+
+### Non-invariant lever: prune unscored noise rows
+
 
 ### Non-invariant lever: prune unscored noise rows
 
