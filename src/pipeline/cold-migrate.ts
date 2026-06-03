@@ -36,6 +36,19 @@ export interface OffloadOptions {
 export async function offloadPayloads(
   opts: OffloadOptions,
 ): Promise<{ ai: number; story: number }> {
+  // Safety: offloading nulls the inline payload columns, so the object
+  // store MUST be durable. The `fs`/`memory` backends are
+  // process-local — on Fly that's the machine's ephemeral disk, and a
+  // restart would permanently lose the persist-forever substrate.
+  // Refuse unless we're on a durable backend (r2), or the operator has
+  // explicitly opted in (e.g. a self-hosted box with a real volume).
+  const backend = getObjectStore().backend;
+  if (backend !== "r2" && process.env.BLURPADURP_ALLOW_EPHEMERAL_COLD !== "1") {
+    console.warn(
+      `[cold-migrate] refusing to offload on non-durable backend "${backend}" — set R2 creds (or BLURPADURP_ALLOW_EPHEMERAL_COLD=1 if this disk is durable). Skipping.`,
+    );
+    return { ai: 0, story: 0 };
+  }
   const batchSize = opts.batchSize ?? 500;
   const maxBatches = opts.maxBatches ?? 0;
   const cutoff = new Date(Date.now() - opts.olderThanDays * 24 * 3600_000);
