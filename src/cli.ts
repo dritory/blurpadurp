@@ -25,6 +25,7 @@ const SUBCOMMANDS = [
   "eval",
   "scheduler-tick",
   "status",
+  "static-export",
 ] as const;
 
 type Sub = (typeof SUBCOMMANDS)[number];
@@ -157,6 +158,16 @@ async function run(sub: Sub, args: string[]): Promise<void> {
         console.log(formatStageStatus(s));
         console.log("");
       }
+      return;
+    }
+    case "static-export": {
+      const { exportStaticPages } = await import(
+        "./pipeline/static-export.tsx"
+      );
+      const res = await exportStaticPages();
+      console.log(
+        `static-export: wrote ${res.count} objects (${res.issues} issues) to the public store`,
+      );
       return;
     }
   }

@@ -193,6 +193,12 @@ See `docs/tuning.md`. Short version:
 
 ## When in doubt
 
+- Reads can be served entirely from the edge: a Cloudflare Worker
+  serves the pre-rendered pages from a public R2 bucket and proxies
+  the dynamic/write trickle to Fly. Publish-time export +
+  path→key map live in `src/pipeline/static-export.tsx` /
+  `infra/worker/`; keep the two key maps in sync. Opt-in via
+  `R2_PUBLIC_BUCKET` — no-op until set. See `docs/scaling.md`.
 - Don't add a new AI stage. Prefer hard structure in TypeScript.
 - Don't hot-patch prompts in production. Capture → replay → bump
   version → commit.
@@ -224,6 +230,7 @@ See `docs/tuning.md`. Short version:
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
 - Dispatch design + live behavior: `docs/dispatch.md`
 - Storage tiering + cold-storage plan: `docs/storage.md`
+- Scaling reads (edge Worker + static export to R2): `docs/scaling.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`

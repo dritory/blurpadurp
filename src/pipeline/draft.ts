@@ -26,6 +26,7 @@ import { sql } from "kysely";
 import { makeComposer } from "../ai/composer.ts";
 import { db } from "../db/index.ts";
 import { bustPublicPages } from "../shared/page-cache.ts";
+import { refreshStaticSurface } from "./static-export.tsx";
 import type { ComposerInput } from "../shared/composer-schema.ts";
 import { loadSystemPromptText } from "../shared/prompts.ts";
 import { buildPickRows, produceDraft } from "./compose.ts";
@@ -96,7 +97,13 @@ export async function publishDraft(issueId: number): Promise<boolean> {
   // (home/archive/feed/sitemap) so it shows immediately instead of
   // waiting out the TTL. Best-effort; runs on the publishing machine,
   // and the shared R2 cache means the web machines pick it up.
-  if (published) await bustPublicPages();
+  if (published) {
+    await bustPublicPages();
+    // Push the freshly-rendered pages to the public static surface +
+    // purge the edge (no-op until R2_PUBLIC_BUCKET is wired). See
+    // docs/scaling.md. Best-effort — never throws into publish.
+    await refreshStaticSurface();
+  }
   return published;
 }
 
@@ -148,7 +155,12 @@ export async function replayReplaceIssue(
   if (iss === undefined) return { ok: false, reason: "not_found" };
   if (iss.composer_input_jsonb === null)
     return { ok: false, reason: "missing_input" };
-  return runRecompose(issueId, iss.composer_input_jsonb);
+  const res = await runRecompose(issueId, iss.composer_input_jsonb);
+  // This rewrote a PUBLISHED issue's html in place, so the static
+  // surface (the issue permalink + home/archive/feed) is now stale.
+  await bustPublicPages();
+  await refreshStaticSurface();
+  return res;
 }
 
 async function runRecompose(

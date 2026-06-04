@@ -82,6 +82,10 @@ class R2ObjectStore implements ObjectStore {
   // Lazily constructed so importing this module never requires R2 creds
   // (e.g. when the cold tier is off, or in tests).
   private client: import("bun").S3Client | null = null;
+  // Which env var names the bucket. The cold-storage store uses
+  // R2_BUCKET; the public static-export store uses R2_PUBLIC_BUCKET.
+  // Same account creds + endpoint, different bucket.
+  constructor(private readonly bucketEnvKey: string = "R2_BUCKET") {}
   private getClient(): import("bun").S3Client {
     if (this.client === null) {
       // Bun.S3Client is S3-compatible; R2's endpoint is
@@ -90,7 +94,7 @@ class R2ObjectStore implements ObjectStore {
       this.client = new S3Client({
         accessKeyId: getEnv("R2_ACCESS_KEY_ID"),
         secretAccessKey: getEnv("R2_SECRET_ACCESS_KEY"),
-        bucket: getEnv("R2_BUCKET"),
+        bucket: getEnv(this.bucketEnvKey),
         endpoint: getEnv("R2_ENDPOINT"),
         region: "auto",
       });
@@ -126,6 +130,58 @@ export function getObjectStore(): ObjectStore {
 // Test seam: swap in a memory/fs store without env juggling.
 export function setObjectStoreForTesting(store: ObjectStore | null): void {
   singleton = store;
+}
+
+// --- public static-export store -------------------------------------
+//
+// Separate, PUBLIC bucket holding the pre-rendered reader pages (home,
+// archive, issue permalinks, feed, sitemap, robots) that the Cloudflare
+// Worker serves directly — so the Fly app leaves the read path entirely
+// (docs/scaling.md). Kept distinct from the cold-storage store above
+// because that one holds persist-forever payloads that must stay
+// private; this one is read by the edge. Same R2 account, different
+// bucket (R2_PUBLIC_BUCKET).
+
+let publicSingleton: ObjectStore | null = null;
+
+export function getPublicObjectStore(): ObjectStore {
+  if (publicSingleton !== null) return publicSingleton;
+  publicSingleton = buildPublicObjectStore();
+  return publicSingleton;
+}
+
+export function setPublicObjectStoreForTesting(store: ObjectStore | null): void {
+  publicSingleton = store;
+}
+
+// Whether the publish pipeline should push the static surface. Gated on
+// R2_PUBLIC_BUCKET so production is a strict no-op until the bucket is
+// wired — exactly like the cold tier stays off until its flag flips.
+export function isStaticExportConfigured(): boolean {
+  return !!process.env.R2_PUBLIC_BUCKET;
+}
+
+function buildPublicObjectStore(): ObjectStore {
+  const explicit = process.env.BLURPADURP_STORAGE_BACKEND;
+  const hasR2Creds =
+    !!process.env.R2_ACCESS_KEY_ID &&
+    !!process.env.R2_SECRET_ACCESS_KEY &&
+    !!process.env.R2_PUBLIC_BUCKET &&
+    !!process.env.R2_ENDPOINT;
+
+  const backend = explicit ?? (hasR2Creds ? "r2" : "fs");
+  switch (backend) {
+    case "r2":
+      return new R2ObjectStore("R2_PUBLIC_BUCKET");
+    case "memory":
+      return new MemoryObjectStore();
+    case "fs":
+      return new FsObjectStore(
+        resolve(process.env.BLURPADURP_STATIC_FS_DIR ?? ".static-export"),
+      );
+    default:
+      throw new Error(`object-store: unknown backend "${backend}"`);
+  }
 }
 
 export function makeMemoryObjectStore(): ObjectStore {
