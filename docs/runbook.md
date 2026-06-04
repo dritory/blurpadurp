@@ -328,6 +328,33 @@ must go, pin/upgrade `pg-connection-string` and pass an explicit `ssl`
 object that matches today's behavior (`rejectUnauthorized: false`),
 verified against the real endpoint first — not a stricter mode.
 
+### 14. Public pages stale / not served from the edge
+
+**Symptom:** A new issue published but the site still shows the old one
+for longer than expected, or you want to confirm reads are coming from
+R2 (not waking Fly/Neon).
+
+**Quick diagnosis:**
+```bash
+curl -sI https://blurpadurp.com/ | grep -iE 'x-blurp-source|cf-cache-status'
+```
+`x-blurp-source: r2` = served from the public bucket via the Worker
+(good). Absent = the Worker fell through to the Fly origin — the page
+still works, but it's Tier 0, not Tier 1.
+
+**Immediate:**
+- Re-export: `fly ssh console -C "bun run cli static-export"` (idempotent;
+  overwrites every public object).
+- Force a fresh edge copy: purge in the Cloudflare dashboard (Caching →
+  Configuration → Purge) or re-publish, which triggers `cdnPurge`.
+
+**Root cause:** see the troubleshooting list in `docs/scaling.md`
+(bucket empty, `R2_PUBLIC_BUCKET` unset on Fly, DNS record not proxied so
+the Worker route never attached, or a `keyFor`↔`static-export` key
+drift). The export/purge is best-effort and post-commit, so a failed one
+never blocks a publish — check the app log for
+`static-export: …` / `cdn purge failed`.
+
 ---
 
 ## General triage rules
