@@ -1,0 +1,29 @@
+# Cloudflare Worker that fronts blurpadurp: serves the pre-rendered
+# reader pages from R2 and proxies everything else to the Fly app.
+# Deploy with `wrangler deploy` from this directory. See README.md.
+
+name = "blurpadurp-edge"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Fill in from `wrangler whoami` (or the Cloudflare dashboard URL).
+# account_id = "<your-account-id>"
+
+# Put the Worker on the whole zone so it intercepts all traffic for the
+# domain. The DNS records for the apex + www must be proxied (orange
+# cloud) for these routes to attach.
+routes = [
+  { pattern = "blurpadurp.com/*", zone_name = "blurpadurp.com" },
+  { pattern = "www.blurpadurp.com/*", zone_name = "blurpadurp.com" },
+]
+
+[vars]
+# The Fly app the Worker proxies dynamic/dynamic-miss requests to.
+ORIGIN = "https://blurpadurp.fly.dev"
+
+# The private R2 bucket the publish pipeline writes the static pages to
+# (R2_PUBLIC_BUCKET on the Fly side). The Worker reads it via this
+# binding — the bucket does NOT need public access.
+[[r2_buckets]]
+binding = "STATIC"
+bucket_name = "blurpadurp-pub"

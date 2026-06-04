@@ -163,6 +163,7 @@ medium**. This shapes partition choices:
 | Pipeline pool drains on re-compose | Composer-replay harness (doesn't touch DB) | `bun run cli composer-replay …` |
 | Neon CU climbing from `/health` probe storm | `/health` is DB-less (process-alive only). DB-backed freshness payload lives at `/status` for external monitors; `/admin/status` for the operator. Freshness-query indexes from mig 051. | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
 | Neon woken by crawler/reader traffic on public pages | Public read pages (`/`, `/archive`, `/feed.xml`, `/sitemap.xml`, `/issue/:id`) served from the R2 page cache (TTL + bust on publish), not the DB. App machine autostops, so the cache must be out-of-process (R2). | `src/shared/page-cache.ts`, `src/pipeline/draft.ts` |
+| Site 5xx + monitor alert during cold start (single autostopping machine races its own stop: "machine still active, refusing to start") | Stay scale-to-zero (min = 0) but soften: `auto_stop_machines = "suspend"` (resume from RAM) + 15s health-check interval so a failed post-boot check re-probes fast. Self-heals; runbook #13. Do NOT "fix" the adjacent pg sslmode warning by pinning verify-full — it breaks the Neon handshake (runbook #13). | `fly.toml`, `docs/runbook.md` |
 
 ## Tuning loop
 
@@ -192,6 +193,12 @@ See `docs/tuning.md`. Short version:
 
 ## When in doubt
 
+- Reads can be served entirely from the edge: a Cloudflare Worker
+  serves the pre-rendered pages from a public R2 bucket and proxies
+  the dynamic/write trickle to Fly. Publish-time export +
+  path→key map live in `src/pipeline/static-export.tsx` /
+  `infra/worker/`; keep the two key maps in sync. Opt-in via
+  `R2_PUBLIC_BUCKET` — no-op until set. See `docs/scaling.md`.
 - Don't add a new AI stage. Prefer hard structure in TypeScript.
 - Don't hot-patch prompts in production. Capture → replay → bump
   version → commit.
@@ -223,6 +230,7 @@ See `docs/tuning.md`. Short version:
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
 - Dispatch design + live behavior: `docs/dispatch.md`
 - Storage tiering + cold-storage plan: `docs/storage.md`
+- Scaling reads (edge Worker + static export to R2): `docs/scaling.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`
