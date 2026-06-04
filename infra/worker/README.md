@@ -21,22 +21,35 @@ the keys written by `src/pipeline/static-export.tsx`.
 
 ## Deploy
 
+**Normally you don't deploy by hand** — `.github/workflows/worker-deploy.yml`
+runs `wrangler deploy` on every push to `main` that touches
+`infra/worker/**` (and `deploy --dry-run` on PRs to validate the
+bundle). It needs two GitHub Actions secrets:
+
+- `CLOUDFLARE_API_TOKEN` — Workers Scripts:Edit + Workers R2 Storage:Edit.
+  This is the **deploy** token; it is *not* the cache-purge token the
+  app uses (`CLOUDFLARE_PURGE_TOKEN`, scoped to Zone → Cache Purge).
+- `CLOUDFLARE_ACCOUNT_ID` — your account id.
+
+One-time prerequisites (do these once, by hand):
+
 ```bash
-npm i -g wrangler           # or: bunx wrangler ...
-cd infra/worker
+# 1. Create the bucket. Private — the Worker reads via binding.
+wrangler r2 bucket create blurpadurp-pub        # or via the R2 dashboard
 
-# 1. Create the bucket (once). Private — the Worker reads via binding.
-wrangler r2 bucket create blurpadurp-pub
-
-# 2. Edit wrangler.toml: uncomment + set account_id and the routes
-#    for your domain.
-
-# 3. Deploy.
-wrangler deploy
+# 2. Edit wrangler.toml: uncomment + set the routes for your domain.
+#    (account_id comes from the CI secret; set it here too if you also
+#    deploy locally.)
 ```
 
-After deploy, the apex/www DNS records for the domain must be **proxied
-(orange cloud)** so the zone routes attach to the Worker.
+Then pushing to `main` deploys it. The apex/www DNS records for the
+domain must be **proxied (orange cloud)** so the zone routes attach.
+
+### Manual deploy (local, optional)
+
+```bash
+bunx wrangler deploy        # from infra/worker, after `wrangler login`
+```
 
 ## Verify
 

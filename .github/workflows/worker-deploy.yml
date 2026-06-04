@@ -1,0 +1,44 @@
+# Deploys the Cloudflare edge Worker (infra/worker) that fronts the
+# site — serving the pre-rendered reader pages from R2 and proxying
+# the rest to Fly. See docs/scaling.md.
+#
+# Mirrors fly-deploy.yml: deploy on push to main, but scoped to changes
+# under infra/worker so unrelated app deploys don't redeploy the Worker.
+# On pull requests it runs `deploy --dry-run` to validate the bundle
+# without shipping.
+#
+# Required GitHub Actions secrets:
+#   CLOUDFLARE_API_TOKEN   — token with Workers Scripts:Edit + Workers
+#                            R2 Storage:Edit (for the bucket binding).
+#                            NOT the cache-purge token the app uses.
+#   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id.
+#
+# The target route/domain lives in infra/worker/wrangler.toml.
+
+name: Worker Deploy
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/worker/**"
+      - ".github/workflows/worker-deploy.yml"
+  pull_request:
+    paths:
+      - "infra/worker/**"
+      - ".github/workflows/worker-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  worker:
+    name: Deploy edge Worker
+    runs-on: ubuntu-latest
+    concurrency: worker-deploy-group
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy (main) / dry-run (PR)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: infra/worker
+          command: ${{ github.event_name == 'pull_request' && 'deploy --dry-run' || 'deploy' }}

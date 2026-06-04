@@ -78,10 +78,17 @@ Everything else (`/subscribe`, `/confirm/*`, `/unsubscribe/*`,
    ```bash
    fly secrets set CLOUDFLARE_ZONE_ID='…' CLOUDFLARE_PURGE_TOKEN='…'
    ```
-4. **Worker.** Edit `infra/worker/wrangler.toml` (account_id, routes for
-   your domain), then `cd infra/worker && wrangler deploy`. Make sure
-   the apex/www DNS records are **proxied (orange cloud)** so the zone
-   route attaches.
+4. **Worker.** Create the bucket once
+   (`wrangler r2 bucket create blurpadurp-pub`) and set the `routes` for
+   your domain in `infra/worker/wrangler.toml`. Deploy is then
+   automated: `.github/workflows/worker-deploy.yml` runs `wrangler
+   deploy` on every push to `main` touching `infra/worker/**` (and a
+   dry-run on PRs). It needs two repo secrets — `CLOUDFLARE_API_TOKEN`
+   (Workers Scripts:Edit + Workers R2 Storage:Edit; **not** the
+   cache-purge token) and `CLOUDFLARE_ACCOUNT_ID`. Make sure the
+   apex/www DNS records are **proxied (orange cloud)** so the route
+   attaches. (`cd infra/worker && bunx wrangler deploy` still works for
+   a manual/local deploy.)
 5. **Backfill** the bucket once (so existing issues are served from R2
    without waiting for the next publish):
    ```bash
