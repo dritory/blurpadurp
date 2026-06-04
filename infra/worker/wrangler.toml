@@ -10,12 +10,12 @@ compatibility_date = "2025-01-01"
 # account_id = "<your-account-id>"
 
 # Put the Worker on the whole zone so it intercepts all traffic for the
-# domain. Replace with your domain. The DNS record for the apex must be
-# proxied (orange cloud) for the route to attach.
-# routes = [
-#   { pattern = "blurpadurp.com/*", zone_name = "blurpadurp.com" },
-#   { pattern = "www.blurpadurp.com/*", zone_name = "blurpadurp.com" },
-# ]
+# domain. The DNS records for the apex + www must be proxied (orange
+# cloud) for these routes to attach.
+routes = [
+  { pattern = "blurpadurp.com/*", zone_name = "blurpadurp.com" },
+  { pattern = "www.blurpadurp.com/*", zone_name = "blurpadurp.com" },
+]
 
 [vars]
 # The Fly app the Worker proxies dynamic/dynamic-miss requests to.

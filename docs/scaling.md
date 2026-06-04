@@ -113,8 +113,8 @@ Everything else (`/subscribe`, `/confirm/*`, `/unsubscribe/*`,
 ## Verifying
 
 ```bash
-curl -sI https://yourdomain.com/ | grep -i x-blurp-source   # → r2 once exported
-curl -sI https://yourdomain.com/subscribe                   # still hits Fly
+curl -sI https://blurpadurp.com/ | grep -i x-blurp-source   # → r2 once exported
+curl -sI https://blurpadurp.com/subscribe                   # still hits Fly
 ```
 
 The `X-Blurp-Source: r2` header means the edge served it from the bucket

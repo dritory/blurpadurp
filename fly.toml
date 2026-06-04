@@ -17,7 +17,13 @@ primary_region = "ams"
 [env]
   PORT = "3000"
   NODE_ENV = "production"
-  BLURPADURP_PUBLIC_URL = "https://blurpadurp.fly.dev"
+  # Canonical reader-facing origin. Drives generated links (magic
+  # links, feed/sitemap/issue URLs) and the static-export base URL.
+  # The Cloudflare Worker fronts this domain and proxies dynamic paths
+  # back to the Fly app at its .fly.dev hostname (the Worker's ORIGIN),
+  # so end users never hit *.fly.dev directly. Cut this over only once
+  # blurpadurp.com is live through Cloudflare.
+  BLURPADURP_PUBLIC_URL = "https://blurpadurp.com"
   ADMIN_EMAIL = "dritory@gmail.com"
 
 # Single HTTP service handling port 80 + 443 with auto-TLS. Fly's

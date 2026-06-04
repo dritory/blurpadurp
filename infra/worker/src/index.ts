@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 //
-// Blurpadurp edge Worker. Sits on the zone route (yourdomain.com/*) and
+// Blurpadurp edge Worker. Sits on the zone route (blurpadurp.com/*) and
 // splits traffic:
 //
 //   - Static reader pages (/, /archive, /issue/<n>, /feed.xml,
