@@ -26,7 +26,14 @@ primary_region = "ams"
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = true
+  # "suspend" (not "stop") snapshots the machine and resumes from RAM,
+  # which cuts the cold-start window — and the listen-race that goes
+  # with it (see runbook #13). We deliberately stay scale-to-zero
+  # (min = 0) so Fly compute tracks Neon's idle: a single autostopping
+  # machine can still occasionally race its own stop ("machine still
+  # active, refusing to start"), but suspend + tight health checks
+  # keep the recovery short rather than eliminating the window.
+  auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
   processes = ["app"]
@@ -36,9 +43,15 @@ primary_region = "ams"
   # database can scale-to-zero between actual pipeline runs and real
   # user traffic. The DB-backed freshness payload lives at /status
   # for external monitors. Don't add DB calls to this path.
+  #
+  # interval is 15s (not 60s): on a cold start the first post-boot
+  # check often fails on the listen race, and a 60s interval meant
+  # ports 80/443 stayed degraded for a full minute waiting on the
+  # re-check. Frequent probes are cheap precisely because /health is
+  # DB-less — keep it that way.
   [[http_service.checks]]
     grace_period = "10s"
-    interval = "60s"
+    interval = "15s"
     method = "GET"
     path = "/health"
     protocol = "http"
