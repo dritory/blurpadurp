@@ -3,10 +3,13 @@
 Fronts the site at the Cloudflare edge:
 
 - **Static reader pages** (`/`, `/archive`, `/issue/<n>`, `/feed.xml`,
-  `/sitemap.xml`, `/robots.txt`) are served directly from the R2 bucket
-  binding `STATIC`, which the publish pipeline fills
+  `/sitemap.xml`, `/robots.txt`) **and their sub-resources** (`/assets/*`
+  — the brand mark, `wave.js`, the SVG favicon) are served directly from
+  the R2 bucket binding `STATIC`, which the publish pipeline fills
   (`src/pipeline/static-export.tsx`). The Fly app and Neon are never
-  touched for reads.
+  touched for reads. (Serving `/assets/*` from the edge is load-bearing:
+  otherwise the browser fires them at the origin the instant it parses
+  the R2-served HTML, waking Fly on every reader visit.)
 - **Everything else** (`POST /subscribe`, magic links, `/webhooks/*`,
   `/admin/*`, `/about`, `/status`, …) is proxied to the Fly origin
   (`ORIGIN`).

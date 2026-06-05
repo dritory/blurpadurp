@@ -20,9 +20,18 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { getEnv } from "./env.ts";
 
+// Most callers store JSON/HTML text; the static-export asset push needs
+// to store binary (PNG/SVG/JS) with a real content-type, so the body
+// widens to bytes and an optional content-type rides along. Defaults
+// keep the existing text/json callers unchanged.
+export type ObjectBody = string | Uint8Array;
+export interface PutOptions {
+  contentType?: string;
+}
+
 export interface ObjectStore {
   readonly backend: string;
-  put(key: string, body: string): Promise<void>;
+  put(key: string, body: ObjectBody, opts?: PutOptions): Promise<void>;
   // Returns null when the key is absent (vs. throwing on transport
   // errors) so callers can fall back to an inline jsonb column.
   get(key: string): Promise<string | null>;
@@ -32,12 +41,14 @@ export interface ObjectStore {
 
 class MemoryObjectStore implements ObjectStore {
   readonly backend = "memory";
-  private readonly map = new Map<string, string>();
-  async put(key: string, body: string): Promise<void> {
+  private readonly map = new Map<string, ObjectBody>();
+  async put(key: string, body: ObjectBody): Promise<void> {
     this.map.set(key, body);
   }
   async get(key: string): Promise<string | null> {
-    return this.map.has(key) ? this.map.get(key)! : null;
+    if (!this.map.has(key)) return null;
+    const v = this.map.get(key)!;
+    return typeof v === "string" ? v : new TextDecoder().decode(v);
   }
   async exists(key: string): Promise<boolean> {
     return this.map.has(key);
@@ -59,7 +70,7 @@ class FsObjectStore implements ObjectStore {
     }
     return p;
   }
-  async put(key: string, body: string): Promise<void> {
+  async put(key: string, body: ObjectBody): Promise<void> {
     const p = this.path(key);
     await mkdir(dirname(p), { recursive: true });
     await Bun.write(p, body);
@@ -101,9 +112,9 @@ class R2ObjectStore implements ObjectStore {
     }
     return this.client;
   }
-  async put(key: string, body: string): Promise<void> {
+  async put(key: string, body: ObjectBody, opts?: PutOptions): Promise<void> {
     await this.getClient().write(key, body, {
-      type: "application/json",
+      type: opts?.contentType ?? "application/json",
     });
   }
   async get(key: string): Promise<string | null> {

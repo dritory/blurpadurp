@@ -10,7 +10,14 @@ import type { IssueRow, RenderedObject } from "./static-export.tsx";
 process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
 process.env.BLURPADURP_PUBLIC_URL ??= "https://example.test";
 
-const { renderStaticSurface } = await import("./static-export.tsx");
+import {
+  makeMemoryObjectStore,
+  setPublicObjectStoreForTesting,
+} from "../shared/object-store.ts";
+
+const { renderStaticSurface, exportPublicAssets } = await import(
+  "./static-export.tsx"
+);
 
 const UNIQUE = "UNIQUE_BODY_MARKER_4F2";
 
@@ -76,5 +83,23 @@ describe("renderStaticSurface", () => {
     expect(keys.has("home.html")).toBe(true);
     expect([...keys].some((k) => k.startsWith("issues/"))).toBe(false);
     expect(objs.length).toBe(5);
+  });
+});
+
+describe("exportPublicAssets", () => {
+  test("mirrors ./public to the store under assets/ keys", async () => {
+    const store = makeMemoryObjectStore();
+    setPublicObjectStoreForTesting(store);
+    try {
+      const n = await exportPublicAssets();
+      expect(n).toBeGreaterThan(0);
+      // The page sub-resources that were leaking to Fly:
+      expect(await store.exists("assets/blurp.svg")).toBe(true);
+      expect(await store.exists("assets/wave.js")).toBe(true);
+      // Nested dirs keep their path (slash-joined, not OS sep).
+      expect(await store.exists("assets/vendor/htmx-2.0.4.min.js")).toBe(true);
+    } finally {
+      setPublicObjectStoreForTesting(null);
+    }
   });
 });
