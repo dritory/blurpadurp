@@ -24,15 +24,7 @@ import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
 import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
-
-// Penalty factors that push an otherwise-picked story into the Worth
-// watching section rather than the main-body tiers. Mirrors the
-// scoring rubric vocabulary — keep in sync with scoring-schema.ts.
-const WATCH_PENALTY_FACTORS = new Set([
-  "unreplicated",
-  "preclinical_only",
-  "insufficient_evidence",
-]);
+import { routeSection } from "./compose-partition.ts";
 
 // Penalty factors that qualify a scored, failed-gate story for the Worth
 // a shrug section. These are the "hype" markers from the scorer rubric:
@@ -374,43 +366,31 @@ export async function produceDraft(
     return null;
   }
 
-  // Partition rules:
-  // - Arcs always route by rank (they're continuing threads, never
-  //   "still developing" placeholders).
-  // - Singles route by rank too: 1..CONVERSATION_TOP_N → conversation,
-  //   next ..WORTH_KNOWING_TOP_N → worth_knowing, 11+ → worth_watching.
-  // - Safety-net override: any item whose lead story has
-  //   confidence = "low" OR an evidence-weak penalty factor
-  //   (unreplicated, preclinical_only, insufficient_evidence) drops to
-  //   worth_watching regardless of rank.
+  // Partition into the four fixed sections (see compose-partition.ts for
+  // the routing invariant: rank-based with a low-confidence / weak-evidence
+  // safety override, NOT confidence-primary). The composer never moves items
+  // between sections — placement is decided here.
   const allRows = builtItems.flatMap((b) => b.constituentRows);
   const leadIds = builtItems.map((b) => b.item.lead_story_id);
   const allFactors = await loadFactorsByStory(
     [...new Set([...leadIds, ...allRows.map((r) => Number(r.story_id))])],
   );
 
-  const CONVERSATION_TOP_N = 5;
-  const WORTH_KNOWING_TOP_N = 10;
   const conversation: ComposerItem[] = [];
   const worth_knowing: ComposerItem[] = [];
   const worth_watching: ComposerItem[] = [];
 
   for (const b of builtItems) {
     const leadRow = byId.get(b.item.lead_story_id) ?? b.constituentRows[0]!;
-    const conf = leadRow.point_in_time_confidence;
-    const penalty = allFactors.get(b.item.lead_story_id)?.penalty ?? [];
-    const matchesWatch = penalty.some((f) => WATCH_PENALTY_FACTORS.has(f));
-    const uncertaintyOverride =
-      b.item.kind === "single" && (conf === "low" || matchesWatch);
-    if (uncertaintyOverride) {
-      worth_watching.push(b.item);
-    } else if (b.item.rank <= CONVERSATION_TOP_N) {
-      conversation.push(b.item);
-    } else if (b.item.rank <= WORTH_KNOWING_TOP_N) {
-      worth_knowing.push(b.item);
-    } else {
-      worth_watching.push(b.item);
-    }
+    const section = routeSection({
+      kind: b.item.kind,
+      rank: b.item.rank,
+      confidence: leadRow.point_in_time_confidence,
+      penaltyFactors: allFactors.get(b.item.lead_story_id)?.penalty ?? [],
+    });
+    if (section === "conversation") conversation.push(b.item);
+    else if (section === "worth_knowing") worth_knowing.push(b.item);
+    else worth_watching.push(b.item);
   }
 
   // Build per-theme metadata + cross-issue timelines. The metadata
