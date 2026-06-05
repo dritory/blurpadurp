@@ -1,0 +1,6 @@
+[test]
+# Load a tiny bootstrap before any test module. It provides a dummy
+# DATABASE_URL so modules that construct the (lazy) pg pool at import time
+# can be imported in unit tests — the pool never connects unless a query
+# runs, and these tests only exercise the pure functions in those modules.
+preload = ["./src/test-setup.ts"]
