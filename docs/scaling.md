@@ -42,6 +42,19 @@ the other.**
 | `/sitemap.xml` | `sitemap.xml` | 60s |
 | `/robots.txt` | `robots.txt` | 60s |
 | `/issue/<n>` | `issues/<n>.html` | 1 day (immutable) |
+| `/assets/<path>` | `assets/<path>` | 1 day |
+
+The `/assets/*` row is **load-bearing**: every reader page references
+same-origin sub-resources (the brand mark `/assets/blurp.svg`, `wave.js`,
+and the SVG favicon). If those aren't at the edge too, the browser fires
+them at the Fly origin the instant it parses the R2-served HTML — waking
+the machine on *every* reader visit even though the HTML itself came from
+R2. `exportPublicAssets` mirrors the whole `./public` tree to R2 under
+`assets/<path>`; the layout sets an explicit `<link rel="icon">` so the
+browser stops probing `/favicon.ico` against the origin. Assets are
+deploy-versioned (they change with code, not content), but re-uploading
+the tree on each weekly publish is cheap and keeps the bucket
+authoritative.
 
 Everything else (`/subscribe`, `/confirm/*`, `/unsubscribe/*`,
 `/manage/*`, `/draft/*`, `/theme/*`, `/about`, `/privacy`, `/status`,
@@ -113,9 +126,14 @@ Everything else (`/subscribe`, `/confirm/*`, `/unsubscribe/*`,
 ## Verifying
 
 ```bash
-curl -sI https://blurpadurp.com/ | grep -i x-blurp-source   # → r2 once exported
-curl -sI https://blurpadurp.com/subscribe                   # still hits Fly
+curl -sI https://blurpadurp.com/                 | grep -i x-blurp-source   # → r2 once exported
+curl -sI https://blurpadurp.com/assets/blurp.svg | grep -i x-blurp-source   # → r2 (no Fly wakeup)
+curl -sI https://blurpadurp.com/subscribe                                   # still hits Fly
 ```
 
 The `X-Blurp-Source: r2` header means the edge served it from the bucket
-with no origin round-trip. Absent → not exported yet (run the backfill).
+with no origin round-trip. Absent on `/` → not exported yet (run the
+backfill). Absent on `/assets/*` → the asset push hasn't run; publish or
+re-run `bun run cli static-export`. If the Fly machine still wakes on a
+plain reader visit, that's the tell that a sub-resource is leaking to the
+origin — confirm with `x-blurp-source` on each asset the page references.

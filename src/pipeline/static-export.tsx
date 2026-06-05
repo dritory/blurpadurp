@@ -18,6 +18,9 @@
 // would boot an HTTP listener). If you change a public loader there,
 // change it here too; the static-export test guards the shape.
 
+import { readdir } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
+
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import {
@@ -41,6 +44,37 @@ const KEY_ARCHIVE = "archive.html";
 const KEY_FEED = "feed.xml";
 const KEY_SITEMAP = "sitemap.xml";
 const KEY_ROBOTS = "robots.txt";
+
+// The static reader pages reference same-origin sub-resources
+// (/assets/blurp.svg, /assets/wave.js, the SVG favicon). If those aren't
+// at the edge too, the browser fires them straight at Fly the instant it
+// parses the R2-served HTML — waking the machine on every reader visit.
+// So we push the whole ./public tree to R2 under `assets/<path>`; the
+// Worker serves /assets/* from there (mirrored in infra/worker keyFor).
+const ASSET_SOURCE_DIR = "public";
+const ASSET_KEY_PREFIX = "assets/";
+
+const ASSET_CONTENT_TYPES: Record<string, string> = {
+  ".svg": "image/svg+xml",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".json": "application/json",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+function assetContentType(path: string): string {
+  const dot = path.lastIndexOf(".");
+  const ext = dot === -1 ? "" : path.slice(dot).toLowerCase();
+  return ASSET_CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
 
 // Render a server JSX node to an HTML string (sync or async tree).
 function renderNode(node: unknown): Promise<string> {
@@ -158,6 +192,7 @@ function buildRobots(): string {
 export interface StaticExportResult {
   count: number;
   issues: number;
+  assets: number;
 }
 
 export interface RenderedObject {
@@ -210,6 +245,45 @@ export async function renderStaticSurface(
   return pages;
 }
 
+// Recursively collect every file under a directory (absolute-ish paths
+// rooted at the given dir).
+async function listFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const out: string[] = [];
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) out.push(...(await listFiles(full)));
+    else if (e.isFile()) out.push(full);
+  }
+  return out;
+}
+
+// Push the ./public tree to the public store under `assets/<path>` so
+// the edge Worker can serve /assets/* without ever touching Fly. These
+// are deploy-versioned (they change with code, not content), but
+// re-uploading the ~2.5 MB tree on each weekly publish is cheap and
+// keeps the bucket authoritative. Returns the number of files written.
+export async function exportPublicAssets(): Promise<number> {
+  let files: string[];
+  try {
+    files = await listFiles(ASSET_SOURCE_DIR);
+  } catch {
+    // No ./public (shouldn't happen in prod) — nothing to push.
+    return 0;
+  }
+  const store = getPublicObjectStore();
+  await Promise.all(
+    files.map(async (file) => {
+      const rel = relative(ASSET_SOURCE_DIR, file).split(sep).join("/");
+      const bytes = new Uint8Array(await Bun.file(file).arrayBuffer());
+      await store.put(`${ASSET_KEY_PREFIX}${rel}`, bytes, {
+        contentType: assetContentType(file),
+      });
+    }),
+  );
+  return files.length;
+}
+
 // Render every public page and write it to the public object store.
 // Always runs against whatever getPublicObjectStore() resolves to (R2
 // in prod, fs/memory in dev/test) — the prod gate lives in the publish
@@ -220,7 +294,8 @@ export async function exportStaticPages(): Promise<StaticExportResult> {
   const objects = await renderStaticSurface(issues, thresholdDays);
   const store = getPublicObjectStore();
   await Promise.all(objects.map((o) => store.put(o.key, o.body)));
-  return { count: objects.length, issues: issues.length };
+  const assets = await exportPublicAssets();
+  return { count: objects.length, issues: issues.length, assets };
 }
 
 // Publish-hook entry point. No-op in production until R2_PUBLIC_BUCKET
@@ -232,7 +307,7 @@ export async function refreshStaticSurface(): Promise<void> {
   try {
     const res = await exportStaticPages();
     console.log(
-      `static-export: wrote ${res.count} objects (${res.issues} issues) to the public store`,
+      `static-export: wrote ${res.count} pages (${res.issues} issues) + ${res.assets} assets to the public store`,
     );
   } catch (err) {
     console.error("static-export: export failed (non-fatal)", err);

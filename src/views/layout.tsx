@@ -40,6 +40,10 @@ export const Layout: FC<{
         <meta name="twitter:card" content="summary" />
         <meta name="twitter:title" content={title} />
         <meta name="twitter:description" content={description} />
+        {/* Explicit icon → the browser uses this instead of probing
+            /favicon.ico against the origin, which the edge proxies to
+            Fly (waking the machine). The SVG is edge-served from R2. */}
+        <link rel="icon" type="image/svg+xml" href="/assets/blurp.svg" />
         <link rel="alternate" type="application/atom+xml" title="Blurpadurp" href="/feed.xml" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />

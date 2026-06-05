@@ -1,6 +1,7 @@
 # Cloudflare Worker that fronts blurpadurp: serves the pre-rendered
-# reader pages from R2 and proxies everything else to the Fly app.
-# Deploy with `wrangler deploy` from this directory. See README.md.
+# reader pages AND their /assets/* sub-resources from R2, and proxies
+# everything else to the Fly app. Deploy with `wrangler deploy` from this
+# directory. See README.md.
 
 name = "blurpadurp-edge"
 main = "src/index.ts"
