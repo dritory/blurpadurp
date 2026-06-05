@@ -33,6 +33,7 @@
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
 import { coldTierEnabled } from "../shared/cold-tier.ts";
+import { getConfigNumber } from "../shared/config-store.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { offloadPayloads } from "./cold-migrate.ts";
 
@@ -100,7 +101,7 @@ async function runRetention(): Promise<void> {
 
 async function offloadColdPayloads(): Promise<{ ai: number; story: number }> {
   if (!(await coldTierEnabled())) return { ai: 0, story: 0 };
-  const days = await loadConfigNumber(
+  const days = await getConfigNumber(
     "storage.cold_tier_age_days",
     DEFAULT_COLD_TIER_AGE_DAYS,
   );
@@ -138,18 +139,9 @@ async function ageOutEmbeddings(now: number): Promise<number> {
 }
 
 async function loadEmbeddingHotDays(): Promise<number> {
-  return loadConfigNumber(
+  return getConfigNumber(
     "retention.embedding_hot_days",
     DEFAULT_EMBEDDING_HOT_DAYS,
   );
 }
 
-async function loadConfigNumber(key: string, fallback: number): Promise<number> {
-  const row = await db
-    .selectFrom("config")
-    .select("value")
-    .where("key", "=", key)
-    .executeTakeFirst();
-  const v = typeof row?.value === "number" ? row.value : Number(row?.value);
-  return Number.isFinite(v) && v > 0 ? v : fallback;
-}

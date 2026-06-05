@@ -4,6 +4,7 @@
 
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
+import { getConfigNumberOrNull } from "../shared/config-store.ts";
 
 export interface PipelineStatus {
   db_ok: boolean;
@@ -85,13 +86,7 @@ export async function loadPipelineStatus(): Promise<PipelineStatus> {
     .executeTakeFirst();
   const todaySpend = Number(spendRow?.s ?? 0);
 
-  const capRow = await db
-    .selectFrom("config")
-    .select("value")
-    .where("key", "=", "budget.daily_usd_cap")
-    .executeTakeFirst();
-  const cap = capRow ? Number(capRow.value) : null;
-  const capFinite = cap !== null && Number.isFinite(cap) ? cap : null;
+  const capFinite = await getConfigNumberOrNull("budget.daily_usd_cap");
 
   return {
     db_ok,
