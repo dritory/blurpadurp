@@ -29,6 +29,11 @@ import { servePage } from "../shared/page-cache.ts";
 import { AdminStatus } from "../views/admin-status.tsx";
 import { getPayload } from "../shared/cold-tier.ts";
 import { getEnvOptional } from "../shared/env.ts";
+import {
+  buildHomeView,
+  loadHomeStalenessThresholdDays,
+  mapIssueRow,
+} from "../shared/issue-loaders.ts";
 import { sendMail } from "../shared/mailer.ts";
 import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
 import { loadRawPrompt } from "../shared/prompts.ts";
@@ -190,9 +195,9 @@ const subscribeLimiter = makeRateLimiter({
 
 export const app = new Hono();
 
-// Security headers + per-request CSP nonce. Applied globally so admin
-// pages benefit too. HSTS off on localhost — turn it on for anything
-// with a trusted HTTPS cert.
+// Strict security headers (static CSP, nosniff, frame-deny, HSTS).
+// Applied globally so admin pages benefit too. HSTS off on localhost —
+// turn it on for anything with a trusted HTTPS cert.
 app.use(
   "*",
   securityHeaders({
@@ -1710,34 +1715,11 @@ app.post("/webhooks/resend", async (c) => {
 // migration 042. Returns the surrogate id + public seq of the
 // most-recent issue so the silence panel can deep-link it.
 async function loadHome(): Promise<HomeViewData> {
-  const latest = await loadLatestIssue();
-  if (latest === null) return { kind: "empty" };
-
-  const thresholdDays = await loadHomeStalenessThresholdDays();
-  const ageMs = Date.now() - latest.publishedAt.getTime();
-  if (ageMs > thresholdDays * 24 * 3600_000) {
-    return {
-      kind: "silent",
-      lastIssue: {
-        id: latest.id,
-        publishedSeq: latest.publishedSeq,
-        publishedAt: latest.publishedAt,
-        title: latest.title,
-      },
-    };
-  }
-  return { kind: "issue", issue: latest };
-}
-
-async function loadHomeStalenessThresholdDays(): Promise<number> {
-  const row = await db
-    .selectFrom("config")
-    .select("value")
-    .where("key", "=", "home.staleness_threshold_days")
-    .executeTakeFirst();
-  if (row === undefined) return 8;
-  const n = typeof row.value === "number" ? row.value : Number(row.value);
-  return Number.isFinite(n) && n > 0 ? n : 8;
+  const [latest, thresholdDays] = await Promise.all([
+    loadLatestIssue(),
+    loadHomeStalenessThresholdDays(),
+  ]);
+  return buildHomeView(latest, thresholdDays);
 }
 
 async function loadLatestIssue(): Promise<IssueView | null> {
@@ -1748,15 +1730,7 @@ async function loadLatestIssue(): Promise<IssueView | null> {
     .orderBy("published_at", "desc")
     .limit(1)
     .executeTakeFirst();
-  if (!row) return null;
-  return {
-    id: Number(row.id),
-    publishedSeq: row.published_seq,
-    publishedAt: row.published_at,
-    isEventDriven: row.is_event_driven,
-    title: row.title,
-    html: row.composed_html,
-  };
+  return row ? mapIssueRow(row) : null;
 }
 
 async function loadIssue(id: number): Promise<IssueView | null> {
@@ -1766,15 +1740,7 @@ async function loadIssue(id: number): Promise<IssueView | null> {
     .where("id", "=", id)
     .where("is_draft", "=", false)
     .executeTakeFirst();
-  if (!row) return null;
-  return {
-    id: Number(row.id),
-    publishedSeq: row.published_seq,
-    publishedAt: row.published_at,
-    isEventDriven: row.is_event_driven,
-    title: row.title,
-    html: row.composed_html,
-  };
+  return row ? mapIssueRow(row) : null;
 }
 
 // Load a draft for the reviewer preview page. Only returns drafts —
@@ -4460,12 +4426,16 @@ app.onError((err, c) => {
     return err.getResponse();
   }
   console.error("[api]", err);
+  // Fail safe: never leak stack traces / internal paths to the client by
+  // default — a missing or misspelled NODE_ENV in prod must not flip this
+  // open. The full error is always on the server console above; set
+  // BLURPADURP_DEBUG_ERRORS=1 to also surface it in the browser locally.
   const detail =
-    getEnvOptional("NODE_ENV") === "production"
-      ? undefined
-      : err instanceof Error
+    getEnvOptional("BLURPADURP_DEBUG_ERRORS") === "1"
+      ? err instanceof Error
         ? err.stack ?? err.message
-        : String(err);
+        : String(err)
+      : undefined;
   return c.html(<ServerErrorPage detail={detail} />, 500);
 });
 

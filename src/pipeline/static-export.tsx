@@ -28,9 +28,14 @@ import {
   isStaticExportConfigured,
 } from "../shared/object-store.ts";
 import { cdnPurge, type PurgePath } from "../shared/cdn-purge.ts";
+import {
+  buildHomeView,
+  loadHomeStalenessThresholdDays,
+  mapIssueRow,
+} from "../shared/issue-loaders.ts";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
-import { Home, type HomeViewData } from "../views/home.tsx";
+import { Home } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
 
 const PUBLIC_URL =
@@ -83,14 +88,10 @@ function renderNode(node: unknown): Promise<string> {
   ).then(String);
 }
 
-export interface IssueRow {
-  id: number;
-  publishedSeq: number | null;
-  publishedAt: Date;
-  isEventDriven: boolean;
-  title: string | null;
-  html: string;
-}
+// The public reader-page row is exactly an IssueView. Kept as a named
+// re-export so the static-export test (and any external caller) has a
+// stable type to build fixtures against.
+export type IssueRow = IssueView;
 
 async function loadPublishedIssues(): Promise<IssueRow[]> {
   const rows = await db
@@ -106,54 +107,7 @@ async function loadPublishedIssues(): Promise<IssueRow[]> {
     .where("is_draft", "=", false)
     .orderBy("published_at", "desc")
     .execute();
-  return rows.map((r) => ({
-    id: Number(r.id),
-    publishedSeq: r.published_seq,
-    publishedAt: r.published_at,
-    isEventDriven: r.is_event_driven,
-    title: r.title,
-    html: r.composed_html,
-  }));
-}
-
-async function loadHomeStalenessThresholdDays(): Promise<number> {
-  const row = await db
-    .selectFrom("config")
-    .select("value")
-    .where("key", "=", "home.staleness_threshold_days")
-    .executeTakeFirst();
-  if (row === undefined) return 8;
-  const n = typeof row.value === "number" ? row.value : Number(row.value);
-  return Number.isFinite(n) && n > 0 ? n : 8;
-}
-
-function toIssueView(r: IssueRow): IssueView {
-  return {
-    id: r.id,
-    publishedSeq: r.publishedSeq,
-    publishedAt: r.publishedAt,
-    isEventDriven: r.isEventDriven,
-    title: r.title,
-    html: r.html,
-  };
-}
-
-function buildHome(issues: IssueRow[], thresholdDays: number): HomeViewData {
-  const latest = issues[0];
-  if (latest === undefined) return { kind: "empty" };
-  const ageMs = Date.now() - latest.publishedAt.getTime();
-  if (ageMs > thresholdDays * 24 * 3600_000) {
-    return {
-      kind: "silent",
-      lastIssue: {
-        id: latest.id,
-        publishedSeq: latest.publishedSeq,
-        publishedAt: latest.publishedAt,
-        title: latest.title,
-      },
-    };
-  }
-  return { kind: "issue", issue: toIssueView(latest) };
+  return rows.map(mapIssueRow);
 }
 
 function buildSitemap(issues: IssueRow[]): string {
@@ -208,7 +162,7 @@ export async function renderStaticSurface(
   issues: IssueRow[],
   thresholdDays: number,
 ): Promise<RenderedObject[]> {
-  const home = buildHome(issues, thresholdDays);
+  const home = buildHomeView(issues[0] ?? null, thresholdDays);
   const feedEntries = issues.slice(0, FEED_MAX_ENTRIES).map((r) => ({
     id: r.id,
     publishedSeq: r.publishedSeq,
@@ -239,7 +193,7 @@ export async function renderStaticSurface(
   for (const iss of issues) {
     pages.push({
       key: `issues/${iss.id}.html`,
-      body: await renderNode(<IssuePage issue={toIssueView(iss)} />),
+      body: await renderNode(<IssuePage issue={iss} />),
     });
   }
   return pages;

@@ -6,6 +6,7 @@ import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
 import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
+import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 
 export interface Annotation {
   id: number;
@@ -39,6 +40,11 @@ export function decorateBriefHtml(html: string): {
 } {
   const snippets: AnchorSnippet[] = [];
   const counters: Record<string, number> = { h2: 0, p: 0 };
+  // Sanitize first so the only attributes/tags that survive into the
+  // decorated output are the composer's documented safe set plus the
+  // data-anchor-id we add below. Both admin-review and draft-preview
+  // render the result via dangerouslySetInnerHTML.
+  html = sanitizeBriefHtml(html);
   // Match opening <h2 ...> or <p ...> followed by their inner content.
   // Sonnet's tool-use HTML output is consistent enough that a regex
   // pass is reliable; full HTML parsing is overkill for this controlled

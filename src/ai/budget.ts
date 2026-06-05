@@ -13,6 +13,7 @@
 
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
+import { getConfigNumberOrNull } from "../shared/config-store.ts";
 
 export class BudgetExceededError extends Error {
   constructor(
@@ -34,14 +35,8 @@ async function loadCap(): Promise<number | null> {
   if (capCache !== null && now - capCache.at < CAP_CACHE_MS) {
     return capCache.value;
   }
-  const row = await db
-    .selectFrom("config")
-    .select("value")
-    .where("key", "=", "budget.daily_usd_cap")
-    .executeTakeFirst();
-  if (!row) return null;
-  const v = typeof row.value === "number" ? row.value : Number(row.value);
-  if (!Number.isFinite(v)) return null;
+  const v = await getConfigNumberOrNull("budget.daily_usd_cap");
+  if (v === null) return null;
   capCache = { value: v, at: now };
   return v;
 }
