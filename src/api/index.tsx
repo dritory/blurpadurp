@@ -4426,12 +4426,16 @@ app.onError((err, c) => {
     return err.getResponse();
   }
   console.error("[api]", err);
+  // Fail safe: never leak stack traces / internal paths to the client by
+  // default — a missing or misspelled NODE_ENV in prod must not flip this
+  // open. The full error is always on the server console above; set
+  // BLURPADURP_DEBUG_ERRORS=1 to also surface it in the browser locally.
   const detail =
-    getEnvOptional("NODE_ENV") === "production"
-      ? undefined
-      : err instanceof Error
+    getEnvOptional("BLURPADURP_DEBUG_ERRORS") === "1"
+      ? err instanceof Error
         ? err.stack ?? err.message
-        : String(err);
+        : String(err)
+      : undefined;
   return c.html(<ServerErrorPage detail={detail} />, 500);
 });
 
