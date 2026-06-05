@@ -27,7 +27,23 @@ describe("rate-limit token bucket", () => {
 });
 
 describe("clientIp", () => {
-  test("prefers X-Forwarded-For first entry", () => {
+  test("prefers the trusted Fly-Client-IP over a spoofable XFF", () => {
+    const h = new Headers({
+      "fly-client-ip": "5.5.5.5",
+      "x-forwarded-for": "1.2.3.4, 10.0.0.1",
+    });
+    expect(clientIp(h)).toBe("5.5.5.5");
+  });
+
+  test("prefers CF-Connecting-IP over XFF when no Fly header", () => {
+    const h = new Headers({
+      "cf-connecting-ip": "6.6.6.6",
+      "x-forwarded-for": "1.2.3.4",
+    });
+    expect(clientIp(h)).toBe("6.6.6.6");
+  });
+
+  test("falls back to X-Forwarded-For first entry", () => {
     const h = new Headers({ "x-forwarded-for": "1.2.3.4, 10.0.0.1" });
     expect(clientIp(h)).toBe("1.2.3.4");
   });

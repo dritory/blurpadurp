@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 
 export interface IssueView {
   id: number;
@@ -34,7 +35,7 @@ export const IssueBody: FC<{ issue: IssueView }> = ({ issue }) => (
     {issue.title !== null ? (
       <h1 class="issue-title">{issue.title}</h1>
     ) : null}
-    <div dangerouslySetInnerHTML={{ __html: issue.html }} />
+    <div dangerouslySetInnerHTML={{ __html: sanitizeBriefHtml(issue.html) }} />
   </article>
 );
 

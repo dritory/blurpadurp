@@ -54,9 +54,22 @@ export function makeRateLimiter(params: {
   };
 }
 
-// Extract the client IP from Hono's request headers. X-Forwarded-For wins
-// if present (proxy deployments); falls back to the socket address.
+// Extract the client IP from Hono's request headers.
+//
+// Trust order matters: X-Forwarded-For is appended-to by every hop and
+// its leading entry is fully client-controlled, so trusting it lets an
+// attacker rotate a fake IP per request and never hit the bucket. We
+// prefer the single-value headers set by our actual edge — Fly's
+// `Fly-Client-IP` (the immediate proxy in front of the app, which
+// overwrites any client-supplied value) and Cloudflare's
+// `CF-Connecting-IP` (set when the edge Worker fetches the origin).
+// X-Forwarded-For / X-Real-IP remain only as a last-resort fallback for
+// dev or unknown proxy setups.
 export function clientIp(headers: Headers, remote?: string | null): string {
+  const fly = headers.get("fly-client-ip");
+  if (fly !== null && fly.length > 0) return fly;
+  const cf = headers.get("cf-connecting-ip");
+  if (cf !== null && cf.length > 0) return cf;
   const xff = headers.get("x-forwarded-for");
   if (xff !== null) {
     const first = xff.split(",")[0]?.trim();
