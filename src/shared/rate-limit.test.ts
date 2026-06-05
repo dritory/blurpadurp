@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clientIp, makeRateLimiter } from "./rate-limit.ts";
+import { clientIp, makeRateLimiter, withinCooldown } from "./rate-limit.ts";
 
 describe("rate-limit token bucket", () => {
   test("allows up to capacity, then denies", () => {
@@ -23,6 +23,32 @@ describe("rate-limit token bucket", () => {
     expect(rl.take("k")).toBe(false);
     await new Promise((r) => setTimeout(r, 150));
     expect(rl.take("k")).toBe(true);
+  });
+});
+
+describe("global confirmation-send cap (fixed-key bucket)", () => {
+  test("a fixed key drains one shared budget regardless of caller", () => {
+    // The /subscribe global cap keys every send on one string so distinct
+    // IPs/addresses can't each get their own bucket.
+    const rl = makeRateLimiter({ capacity: 2, refillPerMs: 0 });
+    expect(rl.take("confirmation-send")).toBe(true);
+    expect(rl.take("confirmation-send")).toBe(true);
+    expect(rl.take("confirmation-send")).toBe(false);
+  });
+});
+
+describe("withinCooldown", () => {
+  test("null lastAt is never in cooldown", () => {
+    expect(withinCooldown(null, 1000, 5000)).toBe(false);
+  });
+
+  test("inside the window is in cooldown", () => {
+    expect(withinCooldown(new Date(4500), 1000, 5000)).toBe(true);
+  });
+
+  test("at or past the window is not in cooldown", () => {
+    expect(withinCooldown(new Date(4000), 1000, 5000)).toBe(false);
+    expect(withinCooldown(new Date(3000), 1000, 5000)).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 // Hono app: public archive, subscription endpoints, preference pages.
 // No accounts — subscription is the identity. All routes are public.
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { basicAuth } from "hono/basic-auth";
 import { serveStatic } from "hono/bun";
 import { HTTPException } from "hono/http-exception";
@@ -35,7 +35,12 @@ import {
   mapIssueRow,
 } from "../shared/issue-loaders.ts";
 import { sendMail } from "../shared/mailer.ts";
-import { clientIp, makeRateLimiter } from "../shared/rate-limit.ts";
+import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
+import {
+  clientIp,
+  makeRateLimiter,
+  withinCooldown,
+} from "../shared/rate-limit.ts";
 import { loadRawPrompt } from "../shared/prompts.ts";
 import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
 import { securityHeaders } from "../shared/security-headers.ts";
@@ -193,6 +198,37 @@ const subscribeLimiter = makeRateLimiter({
   refillPerMs: 1 / 30_000,
 });
 
+// Per-recipient resend cooldown (mig 061). A human who lost the
+// confirmation mail can re-request after this window; a bomber re-submitting
+// the same victim address is capped to one mail per window.
+const CONFIRMATION_COOLDOWN_MS = 15 * 60_000;
+
+// Global confirmation-send cap (audit M1, distributed-IP abuse). The per-IP
+// subscribeLimiter only throttles a single source; distinct IPs (a botnet)
+// against distinct addresses still drives unbounded outbound mail on our
+// sending domain. This token bucket is keyed on a fixed string so every
+// accepted send draws from one shared budget: 60 burst, refill 1/min
+// (~1440/day sustained) — generous for an organic signup spike, hard ceiling
+// on abuse. In-memory/single-node by design (Cloudflare is the real DoS
+// layer); the bucket persists across a sustained attack since the machine
+// stays awake, and resets only on an idle restart. When it trips we drop the
+// send silently (no enumeration signal) and alert the operator.
+const CONFIRMATION_SEND_GLOBAL_KEY = "confirmation-send";
+const confirmationSendLimiter = makeRateLimiter({
+  capacity: 60,
+  refillPerMs: 1 / 60_000,
+});
+
+// Coarse per-IP limiter shared across the signed-token routes (/confirm,
+// /unsubscribe, /manage, /draft). HMAC verification is already
+// constant-time, so these aren't an enumeration vector — this is cheap noise
+// control against a script hammering them. Generous: 20 burst, refill 1 per
+// 5s (= 720/hour sustained).
+const tokenRouteLimiter = makeRateLimiter({
+  capacity: 20,
+  refillPerMs: 1 / 5_000,
+});
+
 export const app = new Hono();
 
 // Strict security headers (static CSP, nosniff, frame-deny, HSTS).
@@ -214,6 +250,24 @@ app.use(
     rewriteRequestPath: (path) => path.replace(/^\/assets\//, "/"),
   }),
 );
+
+// Coarse per-IP throttle on the signed-token routes. Registered before the
+// handlers so it wraps them. A tripped bucket returns a plain 429 rather
+// than a branded page — these aren't reader-facing happy paths.
+const tokenRouteGuard = async (
+  c: Context,
+  next: () => Promise<void>,
+): Promise<Response | void> => {
+  const ip = clientIp(c.req.raw.headers, null);
+  if (!tokenRouteLimiter.take(ip)) {
+    return c.text("Too many requests. Please slow down.", 429);
+  }
+  await next();
+};
+app.use("/confirm/*", tokenRouteGuard);
+app.use("/unsubscribe/*", tokenRouteGuard);
+app.use("/manage/*", tokenRouteGuard);
+app.use("/draft/*", tokenRouteGuard);
 
 // /health is the process-alive probe for Fly's http_service check. It
 // MUST NOT touch the database — Fly hits it every minute, and any DB
@@ -1555,13 +1609,13 @@ app.post("/subscribe", async (c) => {
     .insertInto("email_subscription")
     .values({ email })
     .onConflict((oc) => oc.column("email").doNothing())
-    .returning(["id", "confirmed_at"])
+    .returning(["id", "confirmed_at", "last_confirmation_sent_at"])
     .executeTakeFirst();
   if (row === undefined) {
     row = await db
       .selectFrom("email_subscription")
       .where("email", "=", email)
-      .select(["id", "confirmed_at"])
+      .select(["id", "confirmed_at", "last_confirmation_sent_at"])
       .executeTakeFirst();
   }
   if (row === undefined) {
@@ -1573,6 +1627,41 @@ app.post("/subscribe", async (c) => {
   if (row.confirmed_at !== null) {
     // Already confirmed — don't spam them with another confirmation.
     return c.redirect("/subscribe?subscribed=1&already=1", 303);
+  }
+
+  // Per-recipient cooldown (mig 061). Re-submitting an unconfirmed address
+  // would otherwise re-send a confirmation every time, so a victim address
+  // could be bombed. Inside the window we skip the send but return the same
+  // subscribed=1 redirect — the response must never reveal whether the
+  // address exists or was just throttled.
+  if (withinCooldown(row.last_confirmation_sent_at, CONFIRMATION_COOLDOWN_MS)) {
+    return c.redirect("/subscribe?subscribed=1", 303);
+  }
+
+  // Global outbound-confirmation cap. Bounds blast radius from distributed
+  // IPs that the per-IP limiter can't see. On a trip we drop the send
+  // silently (same redirect, no enumeration signal) and alert the operator
+  // — a dedupe key keeps it to one mail per window instead of one per
+  // dropped send.
+  if (!confirmationSendLimiter.take(CONFIRMATION_SEND_GLOBAL_KEY)) {
+    console.warn("[subscribe] global confirmation-send cap tripped; dropping");
+    const notice = renderAdminNotice({
+      heading: "Confirmation-email cap tripped",
+      bodyLines: [
+        "The global outbound-confirmation rate limit was hit, so new " +
+          "confirmation emails are being dropped.",
+        "This usually means a distributed signup flood. Check /admin and " +
+          "the edge (Cloudflare) if this persists.",
+      ],
+    });
+    await notifyAdmin({
+      subject: "Blurpadurp: confirmation-email cap tripped",
+      html: notice.html,
+      text: notice.text,
+      dedupeKey: "confirmation-send-cap",
+      cooldownMs: 60 * 60_000,
+    });
+    return c.redirect("/subscribe?subscribed=1", 303);
   }
 
   // Mint a signed /confirm/:token magic link and send it. Failure to
@@ -1588,6 +1677,15 @@ app.post("/subscribe", async (c) => {
     brandUrl: PUBLIC_URL,
     confirmUrl,
   });
+  // Stamp the send time before awaiting the network call so concurrent
+  // resubmits of the same address can't slip past the cooldown. We stamp
+  // even on send failure: a bouncing/erroring address shouldn't be a
+  // retry-spam loophole, and the operator-facing error is logged below.
+  await db
+    .updateTable("email_subscription")
+    .set({ last_confirmation_sent_at: new Date() })
+    .where("id", "=", Number(row.id))
+    .execute();
   const res = await sendMail({
     to: email,
     subject: mail.subject,
