@@ -184,6 +184,105 @@ export interface DraftProduction {
 export async function produceDraft(
   mode: PromptMode = "live",
 ): Promise<DraftProduction | null> {
+  // Step 0: config + prompts + the composer/editor stage instances.
+  const run = await setupComposeRun(mode);
+
+  // Step 1: gate pool — gate-passing, unpublished, in-window stories,
+  // grouped into the theme-first editor pool. Null = nothing to compose.
+  const gate = await loadGatePool(run.cfg);
+  if (gate === null) return null;
+  const { pool, poolThemeMeta, cutoff } = gate;
+
+  // Step 2: editor curation — pick 10-15 from the pool.
+  const { output: editorResult, input: editorInput } = await curateViaEditor(
+    run.editor,
+    pool,
+    poolThemeMeta,
+  );
+  const normalizedPicks = editorResult.picks
+    .map(normalizePick)
+    .sort((a, b) => a.rank - b.rank);
+  const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
+
+  const builtItems = buildComposerItems(normalizedPicks, byId);
+  if (builtItems.length === 0) {
+    console.log("[compose] editor returned no valid picks — aborting");
+    return null;
+  }
+
+  // Step 3: four-section partition (rank-based + safety override).
+  const sections = await partitionBuiltItems(builtItems, byId);
+
+  // Step 4: assemble the composer input (timelines, synthesis, shrug),
+  // run the composer, and collect the published-set story ids.
+  const input = await buildComposerInput(sections, byId, cutoff);
+
+  const arcCount = builtItems.filter((b) => b.item.kind === "arc").length;
+  const deepArcs = input.theme_timelines.filter(
+    (t) => t.n_prior_publications >= 2,
+  ).length;
+  console.log(
+    `[compose] composing conv=${input.conversation.length} know=${input.worth_knowing.length} watch=${input.worth_watching.length} shrug=${input.shrug.length} arcs=${arcCount} themes=${input.theme_timelines.length} (${deepArcs} with 2+ prior issues)`,
+  );
+  const output = await run.composer.run(input);
+
+  // Collect every story_id that appears in ANY section (including shrug)
+  // — that's what gets persisted on the issue and flipped to
+  // published_to_reader. Marking shrug items as published too prevents
+  // them from recurring in the next week's shrug pool.
+  const mainStoryIds = Array.from(
+    new Set(
+      [input.conversation, input.worth_knowing, input.worth_watching]
+        .flat()
+        .flatMap((it) => it.stories.map((s) => s.story_id)),
+    ),
+  );
+  const shrugStoryIds = input.shrug.map((s) => s.story_id);
+  const storyIds = Array.from(new Set([...mainStoryIds, ...shrugStoryIds]));
+
+  return {
+    output,
+    storyIds,
+    cfg: {
+      ...run.cfg,
+      "composer.prompt_version": run.composerVersion,
+      "editor.prompt_version": run.editorVersion,
+    },
+    editorInput,
+    editorResult,
+    shrug: input.shrug,
+    composerInput: input,
+  };
+}
+
+// One row of the gate-pool query. The pool query and rowsForEditor share
+// an identical SELECT shape, so they share this type.
+type PoolRow = Awaited<ReturnType<typeof rowsForEditor>>[number];
+type EditorPoolEntry = { row: PoolRow; tier1: number; total: number };
+// A materialized pick: the ComposerItem plus the pool rows it came from
+// (kept for partition routing and theme bookkeeping).
+interface BuiltItem {
+  item: ComposerItem;
+  constituentRows: PoolRow[];
+}
+interface ComposeSections {
+  conversation: ComposerItem[];
+  worth_knowing: ComposerItem[];
+  worth_watching: ComposerItem[];
+}
+
+interface ComposeRun {
+  cfg: ConfigMap;
+  composer: ReturnType<typeof makeComposer>;
+  editor: ReturnType<typeof makeEditor>;
+  composerVersion: string;
+  editorVersion: string;
+}
+
+// Step 0: load config + prompts and build the composer/editor instances.
+// mode='live' reads docs/*-prompt.md; mode='replay' checks prompt_draft
+// first, tagging the version with "-staged" so provenance is recoverable.
+async function setupComposeRun(mode: PromptMode): Promise<ComposeRun> {
   const cfg = await loadConfig();
   const composerPrompt = await loadSystemPromptText(
     "composer",
@@ -217,7 +316,18 @@ export async function produceDraft(
     maxTokens: cfg["editor.max_tokens"],
     systemPromptText: editorPrompt.text,
   });
+  return { cfg, composer, editor, composerVersion, editorVersion };
+}
 
+// Step 1: query gate-passing, unpublished, in-window stories and group
+// them into the theme-first editor pool. Returns null (and logs) when no
+// stories qualify. Also returns the freshness cutoff so the shrug pool
+// downstream uses the same window.
+async function loadGatePool(cfg: ConfigMap): Promise<{
+  pool: EditorPoolEntry[];
+  poolThemeMeta: Map<number, ThemeMeta>;
+  cutoff: Date;
+} | null> {
   const cutoff = new Date(Date.now() - COMPOSE_STORY_MAX_AGE_MS);
   const rows = await db
     .selectFrom("story")
@@ -298,25 +408,18 @@ export async function produceDraft(
   ];
   const poolThemeMeta = await loadThemeMeta(poolThemeIds);
 
-  const { output: editorResult, input: editorInput } = await curateViaEditor(
-    editor,
-    pool,
-    poolThemeMeta,
-  );
-  const normalizedPicks = editorResult.picks
-    .map(normalizePick)
-    .sort((a, b) => a.rank - b.rank);
-  const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
+  return { pool, poolThemeMeta, cutoff };
+}
 
-  type PoolRow = NonNullable<ReturnType<typeof byId.get>>;
-
-  // Materialize each normalized pick into a ComposerItem (stories sorted
-  // chronologically). Picks whose ids can't be resolved from the pool
-  // are dropped; partial arcs degrade to what matched.
-  const builtItems: Array<{
-    item: ComposerItem;
-    constituentRows: PoolRow[];
-  }> = [];
+// Step 2 (cont.): materialize each normalized editor pick into a
+// ComposerItem, with its constituent stories sorted chronologically.
+// Picks whose ids can't be resolved from the pool are dropped; partial
+// arcs degrade to what matched. Pure — no DB.
+function buildComposerItems(
+  normalizedPicks: ReturnType<typeof normalizePick>[],
+  byId: Map<number, PoolRow>,
+): BuiltItem[] {
+  const builtItems: BuiltItem[] = [];
   for (const p of normalizedPicks) {
     const matched = p.story_ids
       .map((sid) => byId.get(sid))
@@ -360,16 +463,18 @@ export async function produceDraft(
       },
     });
   }
+  return builtItems;
+}
 
-  if (builtItems.length === 0) {
-    console.log("[compose] editor returned no valid picks — aborting");
-    return null;
-  }
-
-  // Partition into the four fixed sections (see compose-partition.ts for
-  // the routing invariant: rank-based with a low-confidence / weak-evidence
-  // safety override, NOT confidence-primary). The composer never moves items
-  // between sections — placement is decided here.
+// Step 3: partition built items into the four fixed sections (see
+// compose-partition.ts for the routing invariant: rank-based with a
+// low-confidence / weak-evidence safety override, NOT confidence-primary).
+// The composer never moves items between sections — placement is decided
+// here.
+async function partitionBuiltItems(
+  builtItems: BuiltItem[],
+  byId: Map<number, PoolRow>,
+): Promise<ComposeSections> {
   const allRows = builtItems.flatMap((b) => b.constituentRows);
   const leadIds = builtItems.map((b) => b.item.lead_story_id);
   const allFactors = await loadFactorsByStory(
@@ -392,6 +497,18 @@ export async function produceDraft(
     else if (section === "worth_knowing") worth_knowing.push(b.item);
     else worth_watching.push(b.item);
   }
+  return { conversation, worth_knowing, worth_watching };
+}
+
+// Step 4: assemble the full ComposerInput from the partitioned sections —
+// per-theme cross-issue timelines, the synthesis-themes opener seed, and
+// the shrug pool.
+async function buildComposerInput(
+  sections: ComposeSections,
+  byId: Map<number, PoolRow>,
+  cutoff: Date,
+): Promise<ComposerInput> {
+  const { conversation, worth_knowing, worth_watching } = sections;
 
   // Build per-theme metadata + cross-issue timelines. The metadata
   // feeds the composer's ability to anchor arcs ("three weeks in",
@@ -496,7 +613,7 @@ export async function produceDraft(
         })
       : [];
 
-  const input: ComposerInput = {
+  return {
     week_of: new Date().toISOString().slice(0, 10),
     conversation,
     worth_knowing,
@@ -504,41 +621,6 @@ export async function produceDraft(
     shrug,
     theme_timelines,
     synthesis_themes,
-  };
-
-  const arcCount = builtItems.filter((b) => b.item.kind === "arc").length;
-  const deepArcs = theme_timelines.filter((t) => t.n_prior_publications >= 2).length;
-  console.log(
-    `[compose] composing conv=${conversation.length} know=${worth_knowing.length} watch=${worth_watching.length} shrug=${shrug.length} arcs=${arcCount} themes=${theme_timelines.length} (${deepArcs} with 2+ prior issues)`,
-  );
-  const output = await composer.run(input);
-
-  // Collect every story_id that appears in ANY section (including shrug)
-  // — that's what gets persisted on the issue and flipped to
-  // published_to_reader. Marking shrug items as published too prevents
-  // them from recurring in the next week's shrug pool.
-  const mainStoryIds = Array.from(
-    new Set(
-      [conversation, worth_knowing, worth_watching]
-        .flat()
-        .flatMap((it) => it.stories.map((s) => s.story_id)),
-    ),
-  );
-  const shrugStoryIds = shrug.map((s) => s.story_id);
-  const storyIds = Array.from(new Set([...mainStoryIds, ...shrugStoryIds]));
-
-  return {
-    output,
-    storyIds,
-    cfg: {
-      ...cfg,
-      "composer.prompt_version": composerVersion,
-      "editor.prompt_version": editorVersion,
-    },
-    editorInput,
-    editorResult,
-    shrug,
-    composerInput: input,
   };
 }
 
@@ -548,13 +630,7 @@ export async function produceDraft(
 // issue for the admin review page.
 async function curateViaEditor(
   editor: ReturnType<typeof makeEditor>,
-  pool: Array<{
-    row: Awaited<
-      ReturnType<typeof rowsForEditor>
-    >[number];
-    tier1: number;
-    total: number;
-  }>,
+  pool: EditorPoolEntry[],
   themeMeta: Map<number, ThemeMeta>,
 ): Promise<{ output: EditorOutput; input: EditorInput }> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
@@ -665,11 +741,7 @@ function buildPoolComposition(
 // chronologically (earliest published_at first, null dates last).
 // day_span = calendar-day distance between first and last; same-day = 0.
 function buildThemesDigest(
-  pool: Array<{
-    row: Awaited<ReturnType<typeof rowsForEditor>>[number];
-    tier1: number;
-    total: number;
-  }>,
+  pool: EditorPoolEntry[],
   stories: EditorInput["stories"],
   themeMeta: Map<number, ThemeMeta>,
 ): EditorInput["themes"] {
