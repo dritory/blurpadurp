@@ -236,8 +236,7 @@ function extractCurrentEventsItems(html: string): Array<{
   // Match each <li>...</li>; the regex is non-greedy and avoids the
   // navbar via class checks below.
   const liRe = /<li([^>]*)>([\s\S]*?)<\/li>/g;
-  let m: RegExpExecArray | null;
-  while ((m = liRe.exec(html)) !== null) {
+  for (let m = liRe.exec(html); m !== null; m = liRe.exec(html)) {
     const attrs = m[1] ?? "";
     const inner = m[2] ?? "";
     // Skip navbar items + nested-only LIs (LIs that contain other LIs
