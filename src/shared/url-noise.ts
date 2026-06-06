@@ -3,35 +3,25 @@
 // (persist with story.noise_pattern set, used for false-positive
 // evaluation before promoting to block).
 //
-// Snapshot semantics: ingest loads the full filter list once at the
-// start of a run (loadUrlPathFilters), then classifies every URL
-// against the snapshot. Operator changes via /admin/path-filters
-// take effect on the next ingest, not mid-run.
+// The load + hit-recording DB plumbing lives in filter-store.ts (shared
+// with title-noise.ts); this module owns only the URL-substring match
+// strategy. Snapshot semantics: ingest loads the full filter list once at
+// the start of a run, then classifies every URL against the snapshot.
+// Operator changes via /admin/path-filters take effect on the next ingest.
 
-import { sql } from "kysely";
-import { db } from "../db/index.ts";
+import {
+  bumpFilterHits,
+  loadFilterRows,
+  type FilterMatch,
+  type FilterMode,
+  type FilterRow,
+} from "./filter-store.ts";
 
-export type FilterMode = "block" | "tag";
+export type { FilterMode, FilterMatch };
+export type UrlPathFilter = FilterRow;
 
-export interface UrlPathFilter {
-  pattern: string;
-  mode: FilterMode;
-}
-
-export interface FilterMatch {
-  pattern: string;
-  mode: FilterMode;
-}
-
-export async function loadUrlPathFilters(): Promise<UrlPathFilter[]> {
-  const rows = await db
-    .selectFrom("url_path_filter")
-    .select(["pattern", "mode"])
-    .execute();
-  return rows.map((r) => ({
-    pattern: r.pattern,
-    mode: r.mode === "block" ? "block" : "tag",
-  }));
+export function loadUrlPathFilters(): Promise<UrlPathFilter[]> {
+  return loadFilterRows("url_path_filter");
 }
 
 export function classifyUrl(
@@ -48,19 +38,8 @@ export function classifyUrl(
   return null;
 }
 
-// Bumps the hits column for matched patterns. Called once at the end
-// of an ingest run with a per-pattern count, so we get the
-// observability without paying a write per matched URL.
-export async function recordFilterHits(
+export function recordFilterHits(
   hits: ReadonlyMap<string, number>,
 ): Promise<void> {
-  if (hits.size === 0) return;
-  for (const [pattern, n] of hits) {
-    if (n <= 0) continue;
-    await db
-      .updateTable("url_path_filter")
-      .set({ hits: sql`hits + ${n}` })
-      .where("pattern", "=", pattern)
-      .execute();
-  }
+  return bumpFilterHits("url_path_filter", hits);
 }

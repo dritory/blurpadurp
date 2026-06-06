@@ -115,7 +115,7 @@ export const gdelt: Connector = {
   },
 };
 
-function computeRange(lastSeen: Date | null): { start: Date; end: Date } {
+export function computeRange(lastSeen: Date | null): { start: Date; end: Date } {
   const end = new Date();
   let target: Date;
   if (lastSeen === null) {
@@ -214,7 +214,7 @@ async function queryEvents(start: Date, end: Date): Promise<EventRow[]> {
 // beats one with higher raw num_mentions spread across regional
 // aggregators. Also swaps the canonical URL to a tier-1 member when one
 // exists, so normalize() surfaces the reputable URL as primary.
-function rerankByTier1(rows: EventRow[]): EventRow[] {
+export function rerankByTier1(rows: EventRow[]): EventRow[] {
   const scored = rows.map((r) => {
     const tier1Urls = r.all_urls.filter((u) => {
       const d = domainOf(u);
@@ -238,7 +238,7 @@ function rerankByTier1(rows: EventRow[]): EventRow[] {
 // extracted event tuple; a single article often yields N such events.
 // We keep the row with highest num_mentions as the representative and
 // union the mention URLs across all events that share the URL.
-function dedupByCanonicalUrl(rows: EventRow[]): EventRow[] {
+export function dedupByCanonicalUrl(rows: EventRow[]): EventRow[] {
   const groups = new Map<string, EventRow>();
   const urlSets = new Map<string, Set<string>>();
 
@@ -307,7 +307,7 @@ async function scrapeTitle(url: string): Promise<string | null> {
   }
 }
 
-function extractTitle(html: string): string | null {
+export function extractTitle(html: string): string | null {
   const og =
     /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(
       html,
@@ -320,7 +320,7 @@ function extractTitle(html: string): string | null {
   return decodeHtmlEntities(raw).trim().slice(0, 500) || null;
 }
 
-function decodeHtmlEntities(s: string): string {
+export function decodeHtmlEntities(s: string): string {
   return s
     .replaceAll("&amp;", "&")
     .replaceAll("&lt;", "<")
@@ -334,7 +334,7 @@ function decodeHtmlEntities(s: string): string {
     );
 }
 
-function parseSqlDate(sqldate: number): Date | null {
+export function parseSqlDate(sqldate: number): Date | null {
   const s = String(sqldate);
   if (s.length !== 8) return null;
   const y = Number(s.slice(0, 4));

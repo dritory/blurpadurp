@@ -133,7 +133,7 @@ function mountInner(dataNode: HTMLElement, canvas: HTMLElement): void {
 
 function buildTooltip(n: GraphNode): string {
   const parts: string[] = [];
-  parts.push(escape(n.name || `theme #${n.id}`));
+  parts.push(escapeHtml(n.name || `theme #${n.id}`));
   parts.push(`${n.category ?? "(no category)"} · ${n.n_stories} stories`);
   if (n.cohesion !== null) {
     parts.push(`cohesion ${n.cohesion.toFixed(3)}`);
@@ -141,7 +141,7 @@ function buildTooltip(n: GraphNode): string {
   return parts.join("\n");
 }
 
-function escape(s: string): string {
+function escapeHtml(s: string): string {
   const div = document.createElement("div");
   div.textContent = s;
   return div.innerHTML;

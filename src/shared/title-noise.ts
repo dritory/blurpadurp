@@ -3,14 +3,21 @@
 // ingest vs tag for audit) but matches against story.title via
 // JS RegExp instead of URL substrings.
 //
-// Regex compilation is done once per ingest run during loadFilters,
-// not per URL. Invalid patterns are logged and skipped so a single
-// bad row in the table never aborts ingest.
+// The load + hit-recording DB plumbing lives in filter-store.ts (shared
+// with url-noise.ts); this module owns only the regex match strategy and
+// its compilation. Regex compilation is done once per ingest run during
+// loadTitleRegexFilters, not per title. Invalid patterns are logged and
+// skipped so a single bad row in the table never aborts ingest.
 
-import { sql } from "kysely";
-import { db } from "../db/index.ts";
+import {
+  bumpFilterHits,
+  loadFilterRows,
+  type FilterMatch,
+  type FilterMode,
+} from "./filter-store.ts";
 
-export type FilterMode = "block" | "tag";
+export type { FilterMode };
+export type TitleMatch = FilterMatch;
 
 export interface TitleRegexFilter {
   pattern: string;
@@ -18,22 +25,14 @@ export interface TitleRegexFilter {
   regex: RegExp;
 }
 
-export interface TitleMatch {
-  pattern: string;
-  mode: FilterMode;
-}
-
 export async function loadTitleRegexFilters(): Promise<TitleRegexFilter[]> {
-  const rows = await db
-    .selectFrom("title_regex_filter")
-    .select(["pattern", "mode"])
-    .execute();
+  const rows = await loadFilterRows("title_regex_filter");
   const out: TitleRegexFilter[] = [];
   for (const r of rows) {
     try {
       out.push({
         pattern: r.pattern,
-        mode: r.mode === "block" ? "block" : "tag",
+        mode: r.mode,
         regex: new RegExp(r.pattern, "i"),
       });
     } catch (err) {
@@ -71,16 +70,8 @@ export function validateTitleRegex(pattern: string): { ok: true } | { ok: false;
   }
 }
 
-export async function recordTitleFilterHits(
+export function recordTitleFilterHits(
   hits: ReadonlyMap<string, number>,
 ): Promise<void> {
-  if (hits.size === 0) return;
-  for (const [pattern, n] of hits) {
-    if (n <= 0) continue;
-    await db
-      .updateTable("title_regex_filter")
-      .set({ hits: sql`hits + ${n}` })
-      .where("pattern", "=", pattern)
-      .execute();
-  }
+  return bumpFilterHits("title_regex_filter", hits);
 }

@@ -23,7 +23,9 @@ const FLASH_DURATION_MS = 900;
 function clearSelectedAnchor(): void {
   document
     .querySelectorAll<HTMLElement>(`.${SELECTED_CLASS}`)
-    .forEach((el) => el.classList.remove(SELECTED_CLASS));
+    .forEach((el) => {
+      el.classList.remove(SELECTED_CLASS);
+    });
 }
 
 function markSelectedAnchor(key: string): void {

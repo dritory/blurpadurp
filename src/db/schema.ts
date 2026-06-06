@@ -152,6 +152,9 @@ export interface Database {
     // composed (subscription_kind='draft' in dispatch_log), in addition
     // to the published brief every confirmed subscriber receives.
     is_reviewer: Generated<boolean>;
+    // When the last confirmation email was sent. Gates the per-recipient
+    // resend cooldown in POST /subscribe (mig 061). Null = never sent.
+    last_confirmation_sent_at: Date | null;
   };
 
   push_subscription: {

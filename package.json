@@ -7,7 +7,10 @@
     "cli": "bun run src/cli.ts",
     "dev:api": "bun run --watch src/api/index.tsx",
     "migrate": "bun run src/cli.ts migrate",
-    "test": "bun test",
+    "test": "bun test src",
+    "test:integration": "RUN_INTEGRATION=1 bun test test/integration",
+    "lint": "biome lint",
+    "format": "biome format --write",
     "build:admin": "bun build src/admin-client/*.ts --outdir=public/build --target=browser --minify",
     "dev:admin": "bun build src/admin-client/*.ts --outdir=public/build --target=browser --watch"
   },
@@ -27,6 +30,7 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
     "@types/bun": "latest",
     "@types/pg": "latest",
     "@types/sanitize-html": "latest"

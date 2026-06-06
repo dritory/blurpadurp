@@ -14,18 +14,15 @@
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
 import { getConfigNumberOrNull } from "../shared/config-store.ts";
+import {
+  BudgetExceededError,
+  assertWithinBudget,
+  startOfUtcDay,
+} from "./budget-core.ts";
 
-export class BudgetExceededError extends Error {
-  constructor(
-    public readonly spentUsd: number,
-    public readonly capUsd: number,
-  ) {
-    super(
-      `daily budget cap exceeded: spent $${spentUsd.toFixed(2)} / cap $${capUsd.toFixed(2)}`,
-    );
-    this.name = "BudgetExceededError";
-  }
-}
+// Re-export the pure helpers so existing importers (e.g. score.ts) keep
+// referencing them off budget.ts.
+export { BudgetExceededError, assertWithinBudget, startOfUtcDay };
 
 let capCache: { value: number; at: number } | null = null;
 const CAP_CACHE_MS = 60_000;
@@ -49,13 +46,5 @@ export async function checkBudget(): Promise<void> {
     .select(sql<string | null>`coalesce(sum(cost_estimate_usd), 0)`.as("spent"))
     .where("started_at", ">=", startOfUtcDay())
     .executeTakeFirstOrThrow();
-  const spentUsd = Number(spent ?? 0);
-  if (spentUsd >= cap) throw new BudgetExceededError(spentUsd, cap);
-}
-
-function startOfUtcDay(): Date {
-  const now = new Date();
-  return new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
+  assertWithinBudget(Number(spent ?? 0), cap);
 }

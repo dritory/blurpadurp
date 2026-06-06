@@ -48,7 +48,7 @@ export async function loadBlocklist(): Promise<Blocklist> {
   const set = new Set(rows.map((r) => normalizeHost(r.host)));
   return {
     size: set.size,
-    has: (host: string) => isHostBlockedAgainst(host, set),
+    has: (host: string) => isHostBlocked(host, set),
   };
 }
 
@@ -56,8 +56,8 @@ export async function loadBlocklist(): Promise<Blocklist> {
 // the set, the host is blocked. Stops one label short of the bare TLD
 // to avoid an entry like "com" nuking everything — but treats two-label
 // hosts (foo.com) as bottom-level still, so blocking "foo.com" itself
-// continues to work.
-function isHostBlockedAgainst(host: string, set: Set<string>): boolean {
+// continues to work. Pure (set-based) so it's unit-testable.
+export function isHostBlocked(host: string, set: ReadonlySet<string>): boolean {
   const norm = normalizeHost(host);
   if (norm.length === 0) return false;
   if (set.has(norm)) return true;

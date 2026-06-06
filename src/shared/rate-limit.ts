@@ -54,6 +54,19 @@ export function makeRateLimiter(params: {
   };
 }
 
+// Is a timestamped action still inside its cooldown window? Used by
+// POST /subscribe to skip re-sending a confirmation email to the same
+// address within CONFIRMATION_COOLDOWN_MS (mig 061). A null `lastAt`
+// (never acted) is never in cooldown.
+export function withinCooldown(
+  lastAt: Date | null,
+  windowMs: number,
+  now: number = Date.now(),
+): boolean {
+  if (lastAt === null) return false;
+  return now - lastAt.getTime() < windowMs;
+}
+
 // Extract the client IP from Hono's request headers.
 //
 // Trust order matters: X-Forwarded-For is appended-to by every hop and
