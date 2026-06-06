@@ -123,7 +123,7 @@ export const wikipedia: Connector = {
 // Take up to `max` chars or up to the first sentence boundary,
 // whichever is shorter. RSS-style "headline-as-first-sentence" yields
 // usable story titles from a paragraph of body text.
-function firstSentence(text: string, max: number): string {
+export function firstSentence(text: string, max: number): string {
   if (text.length === 0) return "";
   const trimmed = text.length > max ? text.slice(0, max) : text;
   const m = trimmed.match(/^(.{20,}?[.!?])\s/);
@@ -223,7 +223,7 @@ async function fetchCurrentEvents(): Promise<RawSourceItem[]> {
 // the navbar and section heading lists. Uses regex parsing because the
 // structure is consistent and we want to avoid pulling in a full HTML
 // parser dependency.
-function extractCurrentEventsItems(html: string): Array<{
+export function extractCurrentEventsItems(html: string): Array<{
   text: string;
   primaryUrl: string;
   primaryTitle: string;
@@ -263,7 +263,7 @@ function extractCurrentEventsItems(html: string): Array<{
 
 // --- helpers ---
 
-function stripHtml(s: string): string {
+export function stripHtml(s: string): string {
   return s
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<[^>]+>/g, "")
