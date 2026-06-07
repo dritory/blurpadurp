@@ -12,9 +12,9 @@ const RUN = process.env.RUN_INTEGRATION === "1";
 const KEYS = ["test.itest.num", "test.itest.zero", "test.itest.str"];
 
 describe.skipIf(!RUN)("config-store (integration)", () => {
-  const setConfig = (key: string, jsonLiteral: string) =>
+  const setConfig = (key: string, jsonText: string) =>
     sql`
-      INSERT INTO config (key, value) VALUES (${key}, ${sql.raw(jsonLiteral)}::jsonb)
+      INSERT INTO config (key, value) VALUES (${key}, ${jsonText}::jsonb)
       ON CONFLICT (key) DO UPDATE SET value = excluded.value
     `
       .execute(db)
