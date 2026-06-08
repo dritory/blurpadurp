@@ -2485,6 +2485,7 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       "title",
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
+      "gloss_check_jsonb",
     ])
     .where("id", "=", id)
     .executeTakeFirst();
@@ -2559,6 +2560,8 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
     glossFindings,
+    glossCheck:
+      (iss.gloss_check_jsonb as EditorReviewData["glossCheck"]) ?? null,
   };
 }
 
@@ -2821,6 +2824,10 @@ export function parseReviewFlash(
   if (q.noted === "1") return { kind: "ok", msg: "Note added." };
   if (q.deleted_note === "1") return { kind: "ok", msg: "Note deleted." };
   if (q.edited === "1") return { kind: "ok", msg: "Draft edits saved." };
+  if (q.gloss_checked === "1")
+    return { kind: "ok", msg: "AI gloss check complete — see the panel below." };
+  if (q.error === "gloss_check_failed")
+    return { kind: "err", msg: "Gloss check failed — check server logs." };
   if (q.error === "empty_edit")
     return {
       kind: "err",

@@ -96,6 +96,14 @@ import {
   AdminGlossTerms,
 } from "../views/admin-gloss-terms.tsx";
 import { validateTitleRegex } from "../shared/title-noise.ts";
+import { lintGloss } from "../shared/gloss-lint.ts";
+import { loadGlossTerms } from "../shared/gloss-store.ts";
+import {
+  runGlossCheck,
+  GLOSS_CHECKER_MODEL,
+  GLOSS_CHECKER_VERSION,
+} from "../ai/gloss-checker.ts";
+import type { GlossCheckResult } from "../shared/gloss-check-schema.ts";
 import {
   AdminScheduler,
 } from "../views/admin-scheduler.tsx";
@@ -228,6 +236,47 @@ export function registerAdminRoutes(app: Hono): void {
       return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
     }
     return c.redirect(`/admin/review/${id}?edited=1`, 303);
+  });
+
+  // On-demand LLM gloss-check. Re-lints deterministically for grounding
+  // candidates, runs the checker (Haiku), persists the result on the
+  // issue so it survives the redirect + is visible to draft reviewers.
+  // Advisory — never touches the composed brief. Available on any issue
+  // (drafts and published) since it only reads + annotates.
+  app.post("/admin/review/:id/check-glosses", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const iss = await db
+      .selectFrom("issue")
+      .select("composed_markdown")
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (iss === undefined) {
+      return c.redirect(`/admin/review/${id}?error=not_found`, 303);
+    }
+    try {
+      const terms = await loadGlossTerms();
+      const candidates = lintGloss(iss.composed_markdown, terms);
+      const out = await runGlossCheck({
+        markdown: iss.composed_markdown,
+        candidates,
+      });
+      const result: GlossCheckResult = {
+        checked_at: new Date().toISOString(),
+        model_id: GLOSS_CHECKER_MODEL,
+        prompt_version: GLOSS_CHECKER_VERSION,
+        findings: out.findings,
+      };
+      await db
+        .updateTable("issue")
+        .set({ gloss_check_jsonb: JSON.stringify(result) as never })
+        .where("id", "=", id)
+        .execute();
+    } catch (err) {
+      console.error("[check-glosses]", err);
+      return c.redirect(`/admin/review/${id}?error=gloss_check_failed`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?gloss_checked=1#gloss`, 303);
   });
 
   // Non-destructive composer replay: re-runs the composer on the

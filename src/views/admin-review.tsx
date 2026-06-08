@@ -8,6 +8,7 @@ import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
+import type { GlossCheckResult } from "../shared/gloss-check-schema.ts";
 
 export interface Annotation {
   id: number;
@@ -240,6 +241,9 @@ export interface EditorReviewData {
   // Gloss-linter findings against the composed brief (gloss-lint.ts).
   // Advisory only — the operator decides whether to re-compose.
   glossFindings: GlossFinding[];
+  // Last on-demand LLM gloss-check result (gloss-checker.ts), or null if
+  // the operator hasn't run one for this issue yet.
+  glossCheck: GlossCheckResult | null;
 }
 
 // Render a first-use sentence with the flagged term emphasized, so the
@@ -272,25 +276,46 @@ const GLOSS_STYLES = `
   .gloss-ok { color: #2b4f2b; }
   .gloss-panel details { margin-top: 8px; }
   .gloss-panel summary { cursor: pointer; color: var(--ink-soft); }
+  .gloss-llm { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); }
+  .gloss-llm-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
+  .gloss-llm-head h3 { margin: 0; }
+  .gloss-prov { color: var(--ink-soft); font-size: 11px; }
+  .gloss-check-btn { padding: 4px 11px; font: inherit; font-family: var(--sans); font-size: 12px; border: 1px solid var(--rule); background: #fff; color: var(--ink); cursor: pointer; }
+  .gloss-check-btn:hover { border-color: var(--ink); }
+  .gloss-sev { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 2px; margin-left: 6px; }
+  .gloss-sev.missing { background: #f7d7d7; color: #8a2a2a; }
+  .gloss-sev.weak { background: #f7eccf; color: #6b551c; }
+  .gloss-fix { color: #2b4f2b; display: block; margin-top: 2px; }
 `;
 
-// Advisory gloss-lint panel: lists terms used un-glossed on first use so
-// the operator can catch the stragglers the composer prompt misses, then
-// re-compose. Non-blocking by design.
-const GlossLintPanel: FC<{ findings: GlossFinding[] }> = ({ findings }) => {
+// Advisory gloss panel. Two layers, both non-blocking:
+//   - deterministic linter (gloss-lint.ts): zero-cost recall floor, runs
+//     on every page load. Catches all-caps acronyms + the curated jargon
+//     list, can't regress.
+//   - on-demand LLM check (gloss-checker.ts): operator clicks the button;
+//     a focused second pass catches the un-listed long tail and judges
+//     gloss adequacy. Findings persist on the issue.
+const GlossLintPanel: FC<{
+  findings: GlossFinding[];
+  glossCheck: GlossCheckResult | null;
+  issueId: number;
+}> = ({ findings, glossCheck, issueId }) => {
   const flagged = findings.filter((f) => !f.glossed);
   const glossed = findings.filter((f) => f.glossed);
+  const llm = glossCheck?.findings ?? [];
+  const anyFlag = flagged.length > 0 || llm.length > 0;
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
       <section
-        class={flagged.length > 0 ? "gloss-panel flagged" : "gloss-panel"}
+        class={anyFlag ? "gloss-panel flagged" : "gloss-panel"}
         aria-label="Gloss check"
+        id="gloss"
       >
         {flagged.length > 0 ? (
           <>
             <h3>
-              Gloss check — {flagged.length} term
+              Regex check — {flagged.length} term
               {flagged.length === 1 ? "" : "s"} look
               {flagged.length === 1 ? "s" : ""} un-glossed on first use
             </h3>
@@ -306,15 +331,10 @@ const GlossLintPanel: FC<{ findings: GlossFinding[] }> = ({ findings }) => {
                 </li>
               ))}
             </ul>
-            <p class="gloss-note">
-              Heuristic, advisory only — gloss on first use, or re-compose.
-              Universal acronyms (US, UK, EU, NATO…) are skipped; add
-              missed jargon at <a href="/admin/gloss-terms">Gloss terms</a>.
-            </p>
           </>
         ) : (
           <h3 class="gloss-ok">
-            ✓ Gloss check — no un-glossed acronyms or jargon detected
+            ✓ Regex check — no un-glossed acronyms or listed jargon
           </h3>
         )}
         {glossed.length > 0 ? (
@@ -335,6 +355,61 @@ const GlossLintPanel: FC<{ findings: GlossFinding[] }> = ({ findings }) => {
               ))}
             </ul>
           </details>
+        ) : null}
+
+        <div class="gloss-llm">
+          <div class="gloss-llm-head">
+            <h3>AI gloss check</h3>
+            {glossCheck ? (
+              <span class="gloss-prov">
+                {glossCheck.model_id} ·{" "}
+                {glossCheck.checked_at.slice(0, 16).replace("T", " ")} UTC
+              </span>
+            ) : null}
+            <form
+              method="post"
+              action={`/admin/review/${issueId}/check-glosses`}
+              style="margin-left:auto"
+            >
+              <button type="submit" class="gloss-check-btn">
+                {glossCheck ? "Re-check with AI" : "Check glosses with AI"}
+              </button>
+            </form>
+          </div>
+          {glossCheck === null ? (
+            <p class="gloss-note">
+              The regex floor (above) can't see un-listed specialist names
+              like “Brent” or judge whether a gloss is adequate. Run a
+              focused LLM pass — grounded on the regex candidates — to catch
+              the long tail.
+            </p>
+          ) : llm.length === 0 ? (
+            <p class="gloss-ok">✓ AI found no un-glossed terms on first use.</p>
+          ) : (
+            <ul>
+              {llm.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  <span class="gloss-kind">{f.kind}</span>
+                  <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.first_use, f.term)}”
+                  </span>
+                  {f.suggestion ? (
+                    <span class="gloss-fix">→ try: {f.suggestion}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {anyFlag ? (
+          <p class="gloss-note">
+            Advisory — gloss on first use, then re-compose. Universal
+            acronyms (US, UK, EU, NATO…) are skipped; add missed jargon at{" "}
+            <a href="/admin/gloss-terms">Gloss terms</a>.
+          </p>
         ) : null}
       </section>
     </>
@@ -702,7 +777,11 @@ export const AdminReview: FC<{
         </form>
       </details>
     ) : null}
-    <GlossLintPanel findings={data.glossFindings} />
+    <GlossLintPanel
+      findings={data.glossFindings}
+      glossCheck={data.glossCheck}
+      issueId={data.issue.id}
+    />
     {(() => {
       const decorated = decorateBriefHtml(data.issue.composedHtml);
       return (
