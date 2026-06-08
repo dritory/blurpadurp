@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 
 import { db } from "../db/index.ts";
 import {
+  composeDraftFromInput,
   discardDraft,
   publishDraft,
   recomposeDraft,
@@ -92,7 +93,18 @@ import {
 import {
   AdminTitleFilters,
 } from "../views/admin-title-filters.tsx";
+import {
+  AdminGlossTerms,
+} from "../views/admin-gloss-terms.tsx";
 import { validateTitleRegex } from "../shared/title-noise.ts";
+import { lintGloss } from "../shared/gloss-lint.ts";
+import { loadGlossTerms } from "../shared/gloss-store.ts";
+import { runChecker, CHECKER_MODEL, CHECKER_VERSION } from "../ai/checker.ts";
+import type {
+  CheckResult,
+  CheckFinding,
+  FixCandidate,
+} from "../shared/check-schema.ts";
 import {
   AdminScheduler,
 } from "../views/admin-scheduler.tsx";
@@ -111,6 +123,7 @@ import {
   normalizePathPattern,
   loadPathFiltersData,
   loadTitleFiltersData,
+  loadGlossTermsData,
   loadSchedulerData,
   loadStoriesData,
   loadStoryDrilldown,
@@ -141,6 +154,62 @@ import {
   parseReviewFlash,
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
+
+// Run the checker over arbitrary markdown (no DB). Returns the result or
+// "failed" on error (already logged). Used both for the stored check and
+// to re-check an unsaved fix candidate before it's applied.
+async function runCheckOnMarkdown(
+  markdown: string,
+): Promise<CheckResult | "failed"> {
+  try {
+    const terms = await loadGlossTerms();
+    const glossCandidates = lintGloss(markdown, terms);
+    const findings = await runChecker({ markdown, glossCandidates });
+    return {
+      checked_at: new Date().toISOString(),
+      model_id: CHECKER_MODEL,
+      prompt_version: CHECKER_VERSION,
+      findings,
+    };
+  } catch (err) {
+    console.error("[checker]", err);
+    return "failed";
+  }
+}
+
+// Run the checker over an issue's current brief and persist the result.
+// Returns the stored CheckResult, null if the issue doesn't exist, or
+// "failed" on error.
+async function runCheckAndStore(
+  issueId: number,
+): Promise<CheckResult | null | "failed"> {
+  const iss = await db
+    .selectFrom("issue")
+    .select("composed_markdown")
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (iss === undefined) return null;
+  const result = await runCheckOnMarkdown(iss.composed_markdown);
+  if (result === "failed") return "failed";
+  await db
+    .updateTable("issue")
+    .set({ check_jsonb: JSON.stringify(result) as never })
+    .where("id", "=", issueId)
+    .execute();
+  return result;
+}
+
+// Turn gloss findings into targeted composer revision notes for a
+// fix-recompose. Non-gloss tasks are skipped (they have no recompose
+// remedy yet).
+function findingsToNotes(findings: CheckFinding[]): string[] {
+  return findings
+    .filter((f) => f.task === "gloss")
+    .map((f) => {
+      const base = `"${f.term}" is used un-glossed on first use ("${f.excerpt}") — gloss it briefly on first use`;
+      return f.suggestion ? `${base}, e.g. ${f.suggestion}.` : `${base}.`;
+    });
+}
 
 export function registerAdminRoutes(app: Hono): void {
   app.get("/admin", (c) => c.redirect("/admin/issues", 302));
@@ -215,6 +284,10 @@ export function registerAdminRoutes(app: Hono): void {
         title,
         composed_html: composedHtml,
         composed_markdown: composedMarkdown,
+        // Brief edited by hand — any stored checker result + pending fix
+        // proposal are now stale.
+        check_jsonb: null,
+        fix_candidate_jsonb: null,
       })
       .where("id", "=", id)
       .where("is_draft", "=", true)
@@ -224,6 +297,134 @@ export function registerAdminRoutes(app: Hono): void {
       return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
     }
     return c.redirect(`/admin/review/${id}?edited=1`, 303);
+  });
+
+  // Run the checker (re-lints deterministically for grounding, runs the
+  // LLM tasks), persists the task-tagged result on the issue so it
+  // survives the redirect + is visible to draft reviewers. Report-only:
+  // never touches the brief. Available on any issue.
+  app.post("/admin/review/:id/check", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const result = await runCheckAndStore(id);
+    if (result === null) {
+      return c.redirect(`/admin/review/${id}?error=not_found`, 303);
+    }
+    if (result === "failed") {
+      return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?checked=1#gloss`, 303);
+  });
+
+  // The reject→fix round, NON-DESTRUCTIVELY: feed the current checker
+  // findings back into a targeted re-compose (drafts only), re-check the
+  // candidate prose, and stash it as a PROPOSAL on fix_candidate_jsonb.
+  // The live draft is untouched — the reviewer previews and then Accepts
+  // or Discards (routes below). Click again to re-generate the proposal.
+  app.post("/admin/review/:id/check-fix", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const iss = await db
+      .selectFrom("issue")
+      .select(["is_draft", "check_jsonb", "composer_input_jsonb"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (iss === undefined) {
+      return c.redirect(`/admin/review/${id}?error=not_found`, 303);
+    }
+    if (!iss.is_draft) {
+      return c.redirect(`/admin/review/${id}?error=fix_not_draft`, 303);
+    }
+    if (iss.composer_input_jsonb === null) {
+      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
+    }
+    // Prefer stored findings; if none stored yet, run a check first.
+    let findings: CheckFinding[] =
+      (iss.check_jsonb as CheckResult | null)?.findings ?? [];
+    if (findings.length === 0) {
+      const fresh = await runCheckAndStore(id);
+      if (fresh === null || fresh === "failed") {
+        return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+      }
+      findings = fresh.findings;
+    }
+    const notes = findingsToNotes(findings);
+    if (notes.length === 0) {
+      // Findings exist but none are gloss problems we can recompose away.
+      return c.redirect(`/admin/review/${id}?nothing_to_fix=1#gloss`, 303);
+    }
+    let candidate: FixCandidate;
+    try {
+      const out = await composeDraftFromInput(iss.composer_input_jsonb, notes);
+      const recheck = await runCheckOnMarkdown(out.markdown);
+      if (recheck === "failed") {
+        return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+      }
+      candidate = {
+        created_at: new Date().toISOString(),
+        notes,
+        title: out.title,
+        composed_markdown: out.markdown,
+        composed_html: out.html,
+        prompt_version: out.promptVersion,
+        model_id: out.modelId,
+        check: recheck,
+      };
+    } catch (err) {
+      console.error("[check-fix]", err);
+      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
+    }
+    await db
+      .updateTable("issue")
+      .set({ fix_candidate_jsonb: JSON.stringify(candidate) as never })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .execute();
+    return c.redirect(`/admin/review/${id}?fix_proposed=1#gloss`, 303);
+  });
+
+  // Apply a pending fix proposal: copy the candidate prose onto the draft
+  // and adopt its re-check as the live result. The ONLY mutation of draft
+  // prose in the fix path, and only on explicit reviewer action.
+  app.post("/admin/review/:id/check-fix-accept", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const iss = await db
+      .selectFrom("issue")
+      .select(["is_draft", "fix_candidate_jsonb"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (iss === undefined || !iss.is_draft || iss.fix_candidate_jsonb === null) {
+      return c.redirect(`/admin/review/${id}?error=no_proposal`, 303);
+    }
+    const cand = iss.fix_candidate_jsonb as FixCandidate;
+    await db
+      .updateTable("issue")
+      .set({
+        title: cand.title,
+        composed_markdown: cand.composed_markdown,
+        composed_html: cand.composed_html,
+        composer_prompt_version: cand.prompt_version,
+        composer_model_id: cand.model_id,
+        check_jsonb: JSON.stringify(cand.check) as never,
+        fix_candidate_jsonb: null,
+      })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .execute();
+    return c.redirect(`/admin/review/${id}?fixed=1#gloss`, 303);
+  });
+
+  // Drop a pending fix proposal — draft untouched.
+  app.post("/admin/review/:id/check-fix-discard", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    await db
+      .updateTable("issue")
+      .set({ fix_candidate_jsonb: null })
+      .where("id", "=", id)
+      .execute();
+    return c.redirect(`/admin/review/${id}?fix_discarded=1#gloss`, 303);
   });
 
   // Non-destructive composer replay: re-runs the composer on the
@@ -896,6 +1097,69 @@ export function registerAdminRoutes(app: Hono): void {
       .execute();
     return c.redirect(
       "/admin/title-filters?removed=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.get("/admin/gloss-terms", async (c) => {
+    const q = c.req.query();
+    const flash =
+      q.added || q.removed || q.error
+        ? { added: q.added, removed: q.removed, error: q.error }
+        : null;
+    const data = await loadGlossTermsData(flash);
+    return c.html(<AdminGlossTerms d={data} />);
+  });
+
+  app.post("/admin/gloss-terms/add", async (c) => {
+    const body = await c.req.parseBody();
+    // A term is a literal name, not a regex — trim and collapse inner
+    // whitespace, preserve case (display only; matching is case-
+    // insensitive). All-caps terms are pointless here (the linter's
+    // acronym detector owns them), so reject them with a hint.
+    const term = String(body.term ?? "").trim().replace(/\s+/g, " ");
+    const note = String(body.note ?? "").trim().slice(0, 400) || null;
+    if (term.length === 0 || term.length > 60) {
+      return c.redirect(
+        "/admin/gloss-terms?error=" +
+          encodeURIComponent("term must be 1–60 chars"),
+        303,
+      );
+    }
+    if (/^[A-Z][A-Z0-9]{1,5}$/.test(term)) {
+      return c.redirect(
+        "/admin/gloss-terms?error=" +
+          encodeURIComponent(
+            "all-caps acronyms are auto-detected — no need to add them",
+          ),
+        303,
+      );
+    }
+    try {
+      await db
+        .insertInto("gloss_term")
+        .values({ term, note })
+        .onConflict((oc) => oc.column("term").doNothing())
+        .execute();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.redirect(
+        "/admin/gloss-terms?error=" + encodeURIComponent(msg.slice(0, 200)),
+        303,
+      );
+    }
+    return c.redirect(
+      "/admin/gloss-terms?added=" + encodeURIComponent(term),
+      303,
+    );
+  });
+
+  app.post("/admin/gloss-terms/delete", async (c) => {
+    const body = await c.req.parseBody();
+    const term = String(body.term ?? "");
+    await db.deleteFrom("gloss_term").where("term", "=", term).execute();
+    return c.redirect(
+      "/admin/gloss-terms?removed=" + encodeURIComponent(term),
       303,
     );
   });

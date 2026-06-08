@@ -12,6 +12,8 @@ import {
 } from "../shared/issue-loaders.ts";
 import { loadRawPrompt } from "../shared/prompts.ts";
 import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
+import { lintGloss } from "../shared/gloss-lint.ts";
+import { loadGlossTerms } from "../shared/gloss-store.ts";
 import type {
   ConfigRow,
 } from "../views/admin-config.tsx";
@@ -91,6 +93,7 @@ import type {
   TitleFiltersData,
   TitleFilterRow,
 } from "../views/admin-title-filters.tsx";
+import type { GlossTermsData } from "../views/admin-gloss-terms.tsx";
 import type {
   SchedulerData,
   SchedulerStageRow,
@@ -703,6 +706,26 @@ export async function loadTitleFiltersData(
     liveStoryCount: liveCountMap.get(r.pattern) ?? 0,
   }));
   return { rows, flash };
+}
+
+export async function loadGlossTermsData(
+  flash: GlossTermsData["flash"],
+): Promise<GlossTermsData> {
+  const rows = await db
+    .selectFrom("gloss_term")
+    .select(["term", "note", "hits", "created_at"])
+    .orderBy("hits", "desc")
+    .orderBy("term", "asc")
+    .execute();
+  return {
+    rows: rows.map((r) => ({
+      term: r.term,
+      note: r.note,
+      hits: r.hits,
+      createdAt: r.created_at,
+    })),
+    flash,
+  };
 }
 
 export async function loadSchedulerData(
@@ -2462,6 +2485,8 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       "title",
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
+      "check_jsonb",
+      "fix_candidate_jsonb",
     ])
     .where("id", "=", id)
     .executeTakeFirst();
@@ -2504,6 +2529,12 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     .orderBy("created_at", "desc")
     .execute();
 
+  // Re-run the gloss-linter for the advisory panel. Read-only: the
+  // compose stage already bumped gloss_term hit counts when the draft
+  // was produced; here we only render the current findings.
+  const glossTerms = await loadGlossTerms();
+  const glossFindings = lintGloss(iss.composed_markdown, glossTerms);
+
   return {
     issue: {
       id: Number(iss.id),
@@ -2529,6 +2560,10 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     storyTitles,
     storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
+    glossFindings,
+    checkResult: (iss.check_jsonb as EditorReviewData["checkResult"]) ?? null,
+    fixCandidate:
+      (iss.fix_candidate_jsonb as EditorReviewData["fixCandidate"]) ?? null,
   };
 }
 
@@ -2791,6 +2826,30 @@ export function parseReviewFlash(
   if (q.noted === "1") return { kind: "ok", msg: "Note added." };
   if (q.deleted_note === "1") return { kind: "ok", msg: "Note deleted." };
   if (q.edited === "1") return { kind: "ok", msg: "Draft edits saved." };
+  if (q.checked === "1")
+    return { kind: "ok", msg: "Checker run complete — see the panel below." };
+  if (q.fix_proposed === "1")
+    return {
+      kind: "ok",
+      msg: "Fix proposal ready — preview it below, then Accept or Discard. The draft is unchanged until you Accept.",
+    };
+  if (q.fixed === "1")
+    return { kind: "ok", msg: "Fix applied to the draft." };
+  if (q.fix_discarded === "1")
+    return { kind: "ok", msg: "Fix proposal discarded — draft unchanged." };
+  if (q.nothing_to_fix === "1")
+    return {
+      kind: "ok",
+      msg: "No fixable gloss findings — nothing to propose.",
+    };
+  if (q.error === "check_failed")
+    return { kind: "err", msg: "Checker failed — check server logs." };
+  if (q.error === "fix_failed")
+    return { kind: "err", msg: "Fix re-compose failed — check server logs." };
+  if (q.error === "fix_not_draft")
+    return { kind: "err", msg: "Can only propose a fix for a draft." };
+  if (q.error === "no_proposal")
+    return { kind: "err", msg: "No pending fix proposal to apply." };
   if (q.error === "empty_edit")
     return {
       kind: "err",

@@ -30,6 +30,7 @@ export type AdminNavKey =
   | "scheduler"
   | "path-filters"
   | "title-filters"
+  | "gloss-terms"
   | "reviewers"
   | "review"
   | null;
@@ -43,6 +44,7 @@ const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: strin
   { key: "reviewers", href: "/admin/reviewers", label: "Reviewers" },
   { key: "path-filters", href: "/admin/path-filters", label: "Path filters" },
   { key: "title-filters", href: "/admin/title-filters", label: "Title filters" },
+  { key: "gloss-terms", href: "/admin/gloss-terms", label: "Gloss terms" },
   { key: "fixtures", href: "/admin/fixtures", label: "Fixtures" },
   { key: "eval", href: "/admin/eval", label: "Eval" },
   { key: "status", href: "/admin/status", label: "Status" },

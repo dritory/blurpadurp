@@ -175,6 +175,15 @@ function renderUserMessage(input: ComposerInput): string {
   renderItemSection(lines, "worth_watching", input.worth_watching);
   renderShrugSection(lines, input.shrug);
 
+  if (input.revision_notes !== undefined && input.revision_notes.length > 0) {
+    lines.push(
+      "# Revision notes (a previous draft had these problems — FIX each one, and leave everything else as written)",
+      "",
+    );
+    for (const note of input.revision_notes) lines.push(`  - ${note}`);
+    lines.push("");
+  }
+
   if (input.theme_timelines.length > 0) {
     lines.push(
       "# theme_timelines (full recent arc per theme — use to anchor current-issue items to the longer story: 'three weeks in', 'since last month's X', etc. Entries marked [NOW] are in this issue; others are prior published context that should NOT be re-rendered, only referenced.)",

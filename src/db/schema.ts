@@ -113,6 +113,8 @@ export interface Database {
     composer_input_jsonb: Jsonb | null;
     is_draft: Generated<boolean>;
     published_seq: number | null;
+    check_jsonb: Jsonb | null;
+    fix_candidate_jsonb: Jsonb | null;
   };
 
   issue_pick: {
@@ -304,6 +306,13 @@ export interface Database {
     mode: Generated<string>;
     hits: Generated<number>;
     note: string | null;
+    created_at: Created;
+  };
+
+  gloss_term: {
+    term: string;
+    note: string | null;
+    hits: Generated<number>;
     created_at: Created;
   };
 }

@@ -7,6 +7,8 @@ import { Layout } from "./layout.tsx";
 import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
+import type { GlossFinding } from "../shared/gloss-lint.ts";
+import type { CheckResult, FixCandidate } from "../shared/check-schema.ts";
 
 export interface Annotation {
   id: number;
@@ -236,7 +238,279 @@ export interface EditorReviewData {
     source_count: number;
     scorer_one_liner: string;
   }>;
+  // Deterministic gloss-linter findings against the composed brief
+  // (gloss-lint.ts) — the zero-cost recall floor, recomputed each load.
+  glossFindings: GlossFinding[];
+  // Last on-demand checker result (checker.ts), task-tagged, or null if
+  // the operator hasn't run one for this issue yet.
+  checkResult: CheckResult | null;
+  // A pending, non-destructive fix proposal (issue.fix_candidate_jsonb),
+  // or null. When set, the panel previews it with Accept/Discard.
+  fixCandidate: FixCandidate | null;
 }
+
+// Render a first-use sentence with the flagged term emphasized, so the
+// operator can see the context at a glance.
+function highlightTerm(sentence: string, term: string) {
+  const idx = sentence.toLowerCase().indexOf(term.toLowerCase());
+  if (idx < 0) return sentence;
+  return (
+    <>
+      {sentence.slice(0, idx)}
+      <mark>{sentence.slice(idx, idx + term.length)}</mark>
+      {sentence.slice(idx + term.length)}
+    </>
+  );
+}
+
+const GLOSS_STYLES = `
+  .gloss-panel { border: 1px solid var(--rule); background: #fff; padding: 12px 16px; margin: 0 0 20px; font-family: var(--sans); font-size: 13px; }
+  .gloss-panel.flagged { background: #fff6e8; border-color: #d4b84a; }
+  .gloss-panel h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+  .gloss-panel.flagged h3 { color: #8a6d1c; }
+  .gloss-panel ul { margin: 0; padding: 0; list-style: none; }
+  .gloss-panel li { padding: 6px 0; border-top: 1px solid var(--rule); }
+  .gloss-panel li:first-child { border-top: none; }
+  .gloss-term { font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+  .gloss-kind { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; margin-left: 6px; }
+  .gloss-ctx { color: var(--ink); display: block; margin-top: 2px; }
+  .gloss-ctx mark { background: #ffe08a; padding: 0 1px; }
+  .gloss-note { color: var(--ink-soft); }
+  .gloss-ok { color: #2b4f2b; }
+  .gloss-panel details { margin-top: 8px; }
+  .gloss-panel summary { cursor: pointer; color: var(--ink-soft); }
+  .gloss-llm { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); }
+  .gloss-llm-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
+  .gloss-llm-head h3 { margin: 0; }
+  .gloss-prov { color: var(--ink-soft); font-size: 11px; }
+  .gloss-check-btn { padding: 4px 11px; font: inherit; font-family: var(--sans); font-size: 12px; border: 1px solid var(--rule); background: #fff; color: var(--ink); cursor: pointer; }
+  .gloss-check-btn:hover { border-color: var(--ink); }
+  .gloss-sev { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 2px; margin-left: 6px; }
+  .gloss-sev.missing { background: #f7d7d7; color: #8a2a2a; }
+  .gloss-sev.weak { background: #f7eccf; color: #6b551c; }
+  .gloss-fix { color: #2b4f2b; display: block; margin-top: 2px; }
+  .fix-proposal { border: 1px solid #b58b00; background: #fffaf0; padding: 10px 12px; margin-top: 12px; border-radius: 4px; }
+  .fix-proposal h4 { margin: 0 0 4px; font-size: 13px; }
+  .fix-proposal .fix-meta { font-size: 11px; color: #6b6b6b; }
+  .fix-preview { background: #fff; border: 1px solid #e0d9c4; border-radius: 3px; padding: 8px 12px; margin-top: 6px; max-height: 420px; overflow: auto; }
+  .fix-actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  .fix-accept { background: #2b6b2b; color: #fff; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; font-weight: 600; }
+  .fix-discard { background: none; border: 1px solid #b0b0b0; padding: 5px 12px; border-radius: 3px; cursor: pointer; }
+`;
+
+// The pending, non-destructive fix proposal: the re-composed prose plus
+// its re-check, previewed inline. The live draft is untouched until the
+// reviewer clicks Accept (Discard drops the proposal).
+const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
+  issueId,
+  candidate,
+}) => {
+  const after = candidate.check.findings;
+  return (
+    <div class="fix-proposal" id="fix-proposal">
+      <h4>Proposed fix — not applied yet</h4>
+      <div class="fix-meta">
+        re-composed {candidate.model_id} ·{" "}
+        {candidate.created_at.slice(0, 16).replace("T", " ")} UTC · fed{" "}
+        {candidate.notes.length} note{candidate.notes.length === 1 ? "" : "s"}{" "}
+        back to the composer
+      </div>
+      {after.length === 0 ? (
+        <p class="gloss-ok">✓ Re-check of the proposal is clean.</p>
+      ) : (
+        <>
+          <p class="gloss-note">
+            Re-check of the proposal still flags {after.length} term
+            {after.length === 1 ? "" : "s"} — accepting won't fully resolve
+            them:
+          </p>
+          <ul>
+            {after.map((f) => (
+              <li>
+                <span class="gloss-term">{f.term}</span>
+                {f.severity ? (
+                  <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
+                ) : null}
+                <span class="gloss-ctx">“{highlightTerm(f.excerpt, f.term)}”</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <details>
+        <summary>Preview proposed brief</summary>
+        <div
+          class="fix-preview"
+          dangerouslySetInnerHTML={{ __html: candidate.composed_html }}
+        />
+      </details>
+      <div class="fix-actions">
+        <form method="post" action={`/admin/review/${issueId}/check-fix-accept`}>
+          <button type="submit" class="fix-accept">
+            Accept fix
+          </button>
+        </form>
+        <form method="post" action={`/admin/review/${issueId}/check-fix-discard`}>
+          <button type="submit" class="fix-discard">
+            Discard
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Advisory checker panel. Two layers, both non-blocking:
+//   - deterministic linter (gloss-lint.ts): zero-cost recall floor, runs
+//     on every page load. Catches all-caps acronyms + the curated jargon
+//     list, can't regress.
+//   - on-demand checker (checker.ts): operator clicks "Check"; a focused
+//     LLM pass catches the un-listed long tail + judges gloss adequacy.
+//     On a draft, "Propose fix" feeds the findings back into a targeted
+//     re-compose and re-checks, but does NOT touch the draft — it stashes
+//     a candidate the reviewer previews and then Accepts or Discards.
+const CheckPanel: FC<{
+  findings: GlossFinding[];
+  checkResult: CheckResult | null;
+  fixCandidate: FixCandidate | null;
+  issueId: number;
+  isDraft: boolean;
+}> = ({ findings, checkResult, fixCandidate, issueId, isDraft }) => {
+  const flagged = findings.filter((f) => !f.glossed);
+  const glossed = findings.filter((f) => f.glossed);
+  const llm = checkResult?.findings ?? [];
+  const anyFlag = flagged.length > 0 || llm.length > 0;
+  const canPropose = isDraft && llm.length > 0;
+  return (
+    <>
+      <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
+      <section
+        class={anyFlag ? "gloss-panel flagged" : "gloss-panel"}
+        aria-label="Checker"
+        id="gloss"
+      >
+        {flagged.length > 0 ? (
+          <>
+            <h3>
+              Regex check — {flagged.length} term
+              {flagged.length === 1 ? "" : "s"} look
+              {flagged.length === 1 ? "s" : ""} un-glossed on first use
+            </h3>
+            <ul>
+              {flagged.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  <span class="gloss-kind">{f.kind}</span>
+                  {f.note ? <span class="gloss-note"> — {f.note}</span> : null}
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.firstUseSentence, f.term)}”
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <h3 class="gloss-ok">
+            ✓ Regex check — no un-glossed acronyms or listed jargon
+          </h3>
+        )}
+        {glossed.length > 0 ? (
+          <details>
+            <summary>
+              {glossed.length} term{glossed.length === 1 ? "" : "s"} detected
+              with a gloss nearby
+            </summary>
+            <ul>
+              {glossed.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  <span class="gloss-kind">{f.kind}</span>
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.firstUseSentence, f.term)}”
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+
+        <div class="gloss-llm">
+          <div class="gloss-llm-head">
+            <h3>AI checker</h3>
+            {checkResult ? (
+              <span class="gloss-prov">
+                {checkResult.model_id} ·{" "}
+                {checkResult.checked_at.slice(0, 16).replace("T", " ")} UTC
+              </span>
+            ) : null}
+            <form
+              method="post"
+              action={`/admin/review/${issueId}/check`}
+              style="margin-left:auto"
+            >
+              <button type="submit" class="gloss-check-btn">
+                {checkResult ? "Re-check" : "Run checker"}
+              </button>
+            </form>
+            {canPropose ? (
+              <form
+                method="post"
+                action={`/admin/review/${issueId}/check-fix`}
+              >
+                <button type="submit" class="gloss-check-btn">
+                  {fixCandidate ? "Re-generate fix" : "Propose fix"}
+                </button>
+              </form>
+            ) : null}
+          </div>
+          {checkResult === null ? (
+            <p class="gloss-note">
+              The regex floor (above) can't see un-listed specialist names
+              like “Brent” or judge whether a gloss is adequate. Run a
+              focused LLM pass — grounded on the regex candidates — to catch
+              the long tail.
+            </p>
+          ) : llm.length === 0 ? (
+            <p class="gloss-ok">✓ Checker found no un-glossed terms on first use.</p>
+          ) : (
+            <ul>
+              {llm.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  {f.kind ? <span class="gloss-kind">{f.kind}</span> : null}
+                  {f.severity ? (
+                    <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
+                  ) : null}
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.excerpt, f.term)}”
+                  </span>
+                  {f.suggestion ? (
+                    <span class="gloss-fix">→ try: {f.suggestion}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {fixCandidate ? (
+          <FixProposal issueId={issueId} candidate={fixCandidate} />
+        ) : null}
+
+        {anyFlag ? (
+          <p class="gloss-note">
+            Advisory — gloss on first use.{" "}
+            {canPropose
+              ? "“Propose fix” re-composes from these findings into a preview — the draft only changes when you Accept. Or edit by hand. "
+              : ""}
+            Universal acronyms (US, UK, EU, NATO…) are skipped; add missed
+            jargon at <a href="/admin/gloss-terms">Gloss terms</a>.
+          </p>
+        ) : null}
+      </section>
+    </>
+  );
+};
 
 export const AdminReview: FC<{
   data: EditorReviewData;
@@ -599,6 +873,13 @@ export const AdminReview: FC<{
         </form>
       </details>
     ) : null}
+    <CheckPanel
+      findings={data.glossFindings}
+      checkResult={data.checkResult}
+      fixCandidate={data.fixCandidate}
+      issueId={data.issue.id}
+      isDraft={data.issue.isDraft}
+    />
     {(() => {
       const decorated = decorateBriefHtml(data.issue.composedHtml);
       return (

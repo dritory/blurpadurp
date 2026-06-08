@@ -163,10 +163,24 @@ export async function replayReplaceIssue(
   return res;
 }
 
-async function runRecompose(
-  issueId: number,
+// Compose prose from a persisted composer input WITHOUT touching the DB.
+// Used by runRecompose (which then persists) and by the checker's
+// fix-proposal path (which stores the result as a non-destructive
+// candidate, applied only on explicit Accept). Optional revisionNotes
+// are injected transiently into the composer's user message — they steer
+// this one render and are never persisted on composer_input_jsonb.
+export interface DraftCompose {
+  title: string;
+  markdown: string;
+  html: string;
+  promptVersion: string;
+  modelId: string;
+}
+
+export async function composeDraftFromInput(
   composerInput: unknown,
-): Promise<{ ok: true }> {
+  revisionNotes?: string[],
+): Promise<DraftCompose> {
   const cfg = await loadComposerConfig();
   const prompt = await loadSystemPromptText(
     "composer",
@@ -185,17 +199,39 @@ async function runRecompose(
     systemPromptText: prompt.text,
   });
 
-  const input = composerInput as unknown as ComposerInput;
+  const base = composerInput as unknown as ComposerInput;
+  const input: ComposerInput =
+    revisionNotes !== undefined && revisionNotes.length > 0
+      ? { ...base, revision_notes: revisionNotes }
+      : base;
   const output = await composer.run(input);
+  return {
+    title: output.title,
+    markdown: output.markdown,
+    html: output.html,
+    promptVersion: effectiveVersion,
+    modelId: cfg.modelId,
+  };
+}
+
+async function runRecompose(
+  issueId: number,
+  composerInput: unknown,
+): Promise<{ ok: true }> {
+  const out = await composeDraftFromInput(composerInput);
 
   await db
     .updateTable("issue")
     .set({
-      title: output.title,
-      composed_markdown: output.markdown,
-      composed_html: output.html,
-      composer_prompt_version: effectiveVersion,
-      composer_model_id: cfg.modelId,
+      title: out.title,
+      composed_markdown: out.markdown,
+      composed_html: out.html,
+      composer_prompt_version: out.promptVersion,
+      composer_model_id: out.modelId,
+      // The brief changed — any stored checker result + pending fix
+      // proposal are now stale.
+      check_jsonb: null,
+      fix_candidate_jsonb: null,
     })
     .where("id", "=", issueId)
     .execute();
@@ -240,6 +276,10 @@ export async function reeditDraft(issueId: number): Promise<ReeditResult> {
         editor_output_jsonb: JSON.stringify(draft.editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(draft.shrug) as never,
         composer_input_jsonb: JSON.stringify(draft.composerInput) as never,
+        // Brief replaced — any stored checker result + pending fix
+        // proposal are now stale.
+        check_jsonb: null,
+        fix_candidate_jsonb: null,
       })
       .where("id", "=", issueId)
       .execute();
