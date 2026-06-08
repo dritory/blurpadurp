@@ -121,9 +121,14 @@ if they reappear it's a tuning regression):
   threads pretending to be one with em-dashes ("At $126,
   the standoff has fractured OPEC — the UAE quit after 59
   years — triggered a food warning…").
-- Bare acronyms with no gloss (VRA, ICC, IRGC, EMA, OPEC).
-  Universal acronyms only — US, UK, EU, NATO, AI, FBI, GDP —
-  go bare; everything else gets a six-word gloss on first use.
+- Bare acronyms with no gloss (VRA, ICC, IRGC, EMA, OPEC), and
+  bare specialist names the regex can't catch (Brent, gilt,
+  tirzepatide). Universal acronyms only — US, UK, EU, NATO, AI,
+  FBI, GDP — go bare; everything else gets a six-word gloss on
+  first use. Backstopped mechanically: `gloss-lint.ts` flags
+  un-glossed acronyms + curated jargon on the draft-review page
+  (it's prompt + linter, since the prompt alone misses one or
+  two per issue).
 - Telegraphic headline fragments ("Third attempt, charges
   filed, officer shot."). Brief is prose, not chyron.
 - Detail-before-meaning leads: opening with what happened
@@ -156,6 +161,7 @@ medium**. This shapes partition choices:
 
 | Failure | Where fixed | File |
 |---|---|---|
+| Composer leaves an acronym/jargon un-glossed on first use (slips past the prompt one or two per issue) | Deterministic gloss-linter — acronym regex + curated `gloss_term` jargon list (mig 062); advisory panel on `/admin/review`, hit-bump at compose, managed at `/admin/gloss-terms` | `src/shared/gloss-lint.ts`, `src/shared/gloss-store.ts` |
 | Same story appears in consecutive issues | `persistIssue` flips `published_to_reader = true` | `src/pipeline/compose.ts` |
 | Shrug items recur across runs | Shrug IDs included in the published-set | `src/pipeline/compose.ts` |
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |
@@ -233,6 +239,7 @@ See `docs/tuning.md`. Short version:
 - Scorer rubric + prompt: `docs/scoring.md`, `docs/scoring-prompt.md`
 - Editor curation rules + prompt: `docs/editor-prompt.md`
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
+- Gloss-linter (acronym/jargon first-use check): `src/shared/gloss-lint.ts`
 - Dispatch design + live behavior: `docs/dispatch.md`
 - Storage tiering + cold-storage plan: `docs/storage.md`
 - Scaling reads (edge Worker + static export to R2): `docs/scaling.md`

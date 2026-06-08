@@ -12,6 +12,8 @@ import {
 } from "../shared/issue-loaders.ts";
 import { loadRawPrompt } from "../shared/prompts.ts";
 import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
+import { lintGloss } from "../shared/gloss-lint.ts";
+import { loadGlossTerms } from "../shared/gloss-store.ts";
 import type {
   ConfigRow,
 } from "../views/admin-config.tsx";
@@ -91,6 +93,7 @@ import type {
   TitleFiltersData,
   TitleFilterRow,
 } from "../views/admin-title-filters.tsx";
+import type { GlossTermsData } from "../views/admin-gloss-terms.tsx";
 import type {
   SchedulerData,
   SchedulerStageRow,
@@ -703,6 +706,26 @@ export async function loadTitleFiltersData(
     liveStoryCount: liveCountMap.get(r.pattern) ?? 0,
   }));
   return { rows, flash };
+}
+
+export async function loadGlossTermsData(
+  flash: GlossTermsData["flash"],
+): Promise<GlossTermsData> {
+  const rows = await db
+    .selectFrom("gloss_term")
+    .select(["term", "note", "hits", "created_at"])
+    .orderBy("hits", "desc")
+    .orderBy("term", "asc")
+    .execute();
+  return {
+    rows: rows.map((r) => ({
+      term: r.term,
+      note: r.note,
+      hits: r.hits,
+      createdAt: r.created_at,
+    })),
+    flash,
+  };
 }
 
 export async function loadSchedulerData(
@@ -2504,6 +2527,12 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     .orderBy("created_at", "desc")
     .execute();
 
+  // Re-run the gloss-linter for the advisory panel. Read-only: the
+  // compose stage already bumped gloss_term hit counts when the draft
+  // was produced; here we only render the current findings.
+  const glossTerms = await loadGlossTerms();
+  const glossFindings = lintGloss(iss.composed_markdown, glossTerms);
+
   return {
     issue: {
       id: Number(iss.id),
@@ -2529,6 +2558,7 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     storyTitles,
     storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
+    glossFindings,
   };
 }
 

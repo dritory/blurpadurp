@@ -1,7 +1,18 @@
-# Composer prompt v0.8
+# Composer prompt v0.9
 
-Version tag: `composer-v0.8`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.9`. Pre-1.0 — schema and behavior may change
 freely.
+
+v0.9 is a gloss-discipline pass. The gloss-on-first-use rule kept losing
+one or two terms per issue, and the gold examples were part of the
+problem: the acronym-soup correction wrote "Brent is at $126" with no
+gloss while glossing OPEC right beside it — teaching the bare habit it's
+meant to ban. Fixed that example (Brent crude, the oil benchmark) and
+named "Brent crude" explicitly in the jargon-gloss list so the
+oil-benchmark case is unambiguous. The rule itself is unchanged; this
+just stops the examples undercutting it. A deterministic gloss-linter
+now backs the prompt — it flags un-glossed acronyms and curated jargon
+on the draft-review page, so stragglers get caught before publish.
 
 v0.8 reframes the central failure mode: paragraphs that list everything
 that happened instead of explaining what matters. New rule "Explain
@@ -157,8 +168,11 @@ reader is in the United States. Bold headlines can still be playful
       (instead of "the IRGC")
     - sentence-level setup: "Gilt yields — what the UK government
       pays to borrow — hit a 1998 high."
-  Same rule covers domain jargon: "amicus brief," "gilt yields,"
-  "redistricting," "Section 122," "AIS transponders." If a literate
+  Same rule covers domain jargon and trade names: "amicus brief," "gilt
+  yields," "Brent crude" (the oil benchmark), "redistricting," "Section
+  122," "AIS transponders." A specialist name a reader in Berlin or São
+  Paulo wouldn't recognise needs context the first time, even when it
+  isn't an acronym — "Brent," "the Knesset," "tirzepatide." If a literate
   non-specialist has to pause to decode a word, it failed. The test:
   would a smart reader in Berlin or São Paulo follow the sentence
   on first read?
@@ -246,8 +260,9 @@ standoff has fractured OPEC — the UAE quit after 59 years — triggered a
 food-security warning from the ICC Secretary General over fertilizer
 shortages, and drawn active fire exchanges between US and Iranian forces
 in the strait."
-Better: "Brent is at $126 and OPEC, the oil-producer cartel, has lost
-the UAE after 59 years. The International Criminal Court's secretary
+Better: "Brent crude, the oil benchmark, is at $126 and OPEC, the
+oil-producer cartel, has lost the UAE after 59 years. The International
+Criminal Court's secretary
 general warned of a food-security crunch as fertilizer supply tightens.
 US and Iranian forces are now exchanging fire inside the strait itself."
 

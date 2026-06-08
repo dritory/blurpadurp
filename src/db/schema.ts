@@ -306,4 +306,11 @@ export interface Database {
     note: string | null;
     created_at: Created;
   };
+
+  gloss_term: {
+    term: string;
+    note: string | null;
+    hits: Generated<number>;
+    created_at: Created;
+  };
 }

@@ -7,6 +7,7 @@ import { Layout } from "./layout.tsx";
 import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
+import type { GlossFinding } from "../shared/gloss-lint.ts";
 
 export interface Annotation {
   id: number;
@@ -236,7 +237,109 @@ export interface EditorReviewData {
     source_count: number;
     scorer_one_liner: string;
   }>;
+  // Gloss-linter findings against the composed brief (gloss-lint.ts).
+  // Advisory only — the operator decides whether to re-compose.
+  glossFindings: GlossFinding[];
 }
+
+// Render a first-use sentence with the flagged term emphasized, so the
+// operator can see the context at a glance.
+function highlightTerm(sentence: string, term: string) {
+  const idx = sentence.toLowerCase().indexOf(term.toLowerCase());
+  if (idx < 0) return sentence;
+  return (
+    <>
+      {sentence.slice(0, idx)}
+      <mark>{sentence.slice(idx, idx + term.length)}</mark>
+      {sentence.slice(idx + term.length)}
+    </>
+  );
+}
+
+const GLOSS_STYLES = `
+  .gloss-panel { border: 1px solid var(--rule); background: #fff; padding: 12px 16px; margin: 0 0 20px; font-family: var(--sans); font-size: 13px; }
+  .gloss-panel.flagged { background: #fff6e8; border-color: #d4b84a; }
+  .gloss-panel h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+  .gloss-panel.flagged h3 { color: #8a6d1c; }
+  .gloss-panel ul { margin: 0; padding: 0; list-style: none; }
+  .gloss-panel li { padding: 6px 0; border-top: 1px solid var(--rule); }
+  .gloss-panel li:first-child { border-top: none; }
+  .gloss-term { font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+  .gloss-kind { color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; margin-left: 6px; }
+  .gloss-ctx { color: var(--ink); display: block; margin-top: 2px; }
+  .gloss-ctx mark { background: #ffe08a; padding: 0 1px; }
+  .gloss-note { color: var(--ink-soft); }
+  .gloss-ok { color: #2b4f2b; }
+  .gloss-panel details { margin-top: 8px; }
+  .gloss-panel summary { cursor: pointer; color: var(--ink-soft); }
+`;
+
+// Advisory gloss-lint panel: lists terms used un-glossed on first use so
+// the operator can catch the stragglers the composer prompt misses, then
+// re-compose. Non-blocking by design.
+const GlossLintPanel: FC<{ findings: GlossFinding[] }> = ({ findings }) => {
+  const flagged = findings.filter((f) => !f.glossed);
+  const glossed = findings.filter((f) => f.glossed);
+  return (
+    <>
+      <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
+      <section
+        class={flagged.length > 0 ? "gloss-panel flagged" : "gloss-panel"}
+        aria-label="Gloss check"
+      >
+        {flagged.length > 0 ? (
+          <>
+            <h3>
+              Gloss check — {flagged.length} term
+              {flagged.length === 1 ? "" : "s"} look
+              {flagged.length === 1 ? "s" : ""} un-glossed on first use
+            </h3>
+            <ul>
+              {flagged.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  <span class="gloss-kind">{f.kind}</span>
+                  {f.note ? <span class="gloss-note"> — {f.note}</span> : null}
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.firstUseSentence, f.term)}”
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p class="gloss-note">
+              Heuristic, advisory only — gloss on first use, or re-compose.
+              Universal acronyms (US, UK, EU, NATO…) are skipped; add
+              missed jargon at <a href="/admin/gloss-terms">Gloss terms</a>.
+            </p>
+          </>
+        ) : (
+          <h3 class="gloss-ok">
+            ✓ Gloss check — no un-glossed acronyms or jargon detected
+          </h3>
+        )}
+        {glossed.length > 0 ? (
+          <details>
+            <summary>
+              {glossed.length} term{glossed.length === 1 ? "" : "s"} detected
+              with a gloss nearby
+            </summary>
+            <ul>
+              {glossed.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  <span class="gloss-kind">{f.kind}</span>
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.firstUseSentence, f.term)}”
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+      </section>
+    </>
+  );
+};
 
 export const AdminReview: FC<{
   data: EditorReviewData;
@@ -599,6 +702,7 @@ export const AdminReview: FC<{
         </form>
       </details>
     ) : null}
+    <GlossLintPanel findings={data.glossFindings} />
     {(() => {
       const decorated = decorateBriefHtml(data.issue.composedHtml);
       return (

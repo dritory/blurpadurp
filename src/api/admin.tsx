@@ -92,6 +92,9 @@ import {
 import {
   AdminTitleFilters,
 } from "../views/admin-title-filters.tsx";
+import {
+  AdminGlossTerms,
+} from "../views/admin-gloss-terms.tsx";
 import { validateTitleRegex } from "../shared/title-noise.ts";
 import {
   AdminScheduler,
@@ -111,6 +114,7 @@ import {
   normalizePathPattern,
   loadPathFiltersData,
   loadTitleFiltersData,
+  loadGlossTermsData,
   loadSchedulerData,
   loadStoriesData,
   loadStoryDrilldown,
@@ -896,6 +900,69 @@ export function registerAdminRoutes(app: Hono): void {
       .execute();
     return c.redirect(
       "/admin/title-filters?removed=" + encodeURIComponent(pattern),
+      303,
+    );
+  });
+
+  app.get("/admin/gloss-terms", async (c) => {
+    const q = c.req.query();
+    const flash =
+      q.added || q.removed || q.error
+        ? { added: q.added, removed: q.removed, error: q.error }
+        : null;
+    const data = await loadGlossTermsData(flash);
+    return c.html(<AdminGlossTerms d={data} />);
+  });
+
+  app.post("/admin/gloss-terms/add", async (c) => {
+    const body = await c.req.parseBody();
+    // A term is a literal name, not a regex — trim and collapse inner
+    // whitespace, preserve case (display only; matching is case-
+    // insensitive). All-caps terms are pointless here (the linter's
+    // acronym detector owns them), so reject them with a hint.
+    const term = String(body.term ?? "").trim().replace(/\s+/g, " ");
+    const note = String(body.note ?? "").trim().slice(0, 400) || null;
+    if (term.length === 0 || term.length > 60) {
+      return c.redirect(
+        "/admin/gloss-terms?error=" +
+          encodeURIComponent("term must be 1–60 chars"),
+        303,
+      );
+    }
+    if (/^[A-Z][A-Z0-9]{1,5}$/.test(term)) {
+      return c.redirect(
+        "/admin/gloss-terms?error=" +
+          encodeURIComponent(
+            "all-caps acronyms are auto-detected — no need to add them",
+          ),
+        303,
+      );
+    }
+    try {
+      await db
+        .insertInto("gloss_term")
+        .values({ term, note })
+        .onConflict((oc) => oc.column("term").doNothing())
+        .execute();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.redirect(
+        "/admin/gloss-terms?error=" + encodeURIComponent(msg.slice(0, 200)),
+        303,
+      );
+    }
+    return c.redirect(
+      "/admin/gloss-terms?added=" + encodeURIComponent(term),
+      303,
+    );
+  });
+
+  app.post("/admin/gloss-terms/delete", async (c) => {
+    const body = await c.req.parseBody();
+    const term = String(body.term ?? "");
+    await db.deleteFrom("gloss_term").where("term", "=", term).execute();
+    return c.redirect(
+      "/admin/gloss-terms?removed=" + encodeURIComponent(term),
       303,
     );
   });
