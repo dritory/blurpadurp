@@ -132,26 +132,6 @@ export async function recomposeDraft(issueId: number): Promise<RecomposeResult> 
   return runRecompose(issueId, iss.composer_input_jsonb);
 }
 
-// Re-compose a draft with targeted revision notes injected into the
-// composer's user message — used by the checker's reject→fix→re-check
-// loop ("VRA used un-glossed on first use; gloss it"). Same picks, same
-// editor output; the notes are transient (not persisted on
-// composer_input_jsonb), so they steer only this one re-compose.
-export async function recomposeDraftWithNotes(
-  issueId: number,
-  notes: string[],
-): Promise<RecomposeResult> {
-  const iss = await db
-    .selectFrom("issue")
-    .select(["id", "is_draft", "composer_input_jsonb"])
-    .where("id", "=", issueId)
-    .executeTakeFirst();
-  if (iss === undefined || !iss.is_draft) return { ok: false, reason: "not_draft" };
-  if (iss.composer_input_jsonb === null)
-    return { ok: false, reason: "missing_input" };
-  return runRecompose(issueId, iss.composer_input_jsonb, notes);
-}
-
 // Replay-and-replace on a PUBLISHED issue. Overwrites composed_html /
 // composed_markdown / title in place; no edit history, no rollback.
 // Cheat hatch for the case where a prompt rev produces meaningfully
@@ -183,11 +163,24 @@ export async function replayReplaceIssue(
   return res;
 }
 
-async function runRecompose(
-  issueId: number,
+// Compose prose from a persisted composer input WITHOUT touching the DB.
+// Used by runRecompose (which then persists) and by the checker's
+// fix-proposal path (which stores the result as a non-destructive
+// candidate, applied only on explicit Accept). Optional revisionNotes
+// are injected transiently into the composer's user message — they steer
+// this one render and are never persisted on composer_input_jsonb.
+export interface DraftCompose {
+  title: string;
+  markdown: string;
+  html: string;
+  promptVersion: string;
+  modelId: string;
+}
+
+export async function composeDraftFromInput(
   composerInput: unknown,
   revisionNotes?: string[],
-): Promise<{ ok: true }> {
+): Promise<DraftCompose> {
   const cfg = await loadComposerConfig();
   const prompt = await loadSystemPromptText(
     "composer",
@@ -207,24 +200,38 @@ async function runRecompose(
   });
 
   const base = composerInput as unknown as ComposerInput;
-  // Inject transient revision notes (not persisted) so a fix-recompose
-  // steers this one render without polluting the canonical input.
   const input: ComposerInput =
     revisionNotes !== undefined && revisionNotes.length > 0
       ? { ...base, revision_notes: revisionNotes }
       : base;
   const output = await composer.run(input);
+  return {
+    title: output.title,
+    markdown: output.markdown,
+    html: output.html,
+    promptVersion: effectiveVersion,
+    modelId: cfg.modelId,
+  };
+}
+
+async function runRecompose(
+  issueId: number,
+  composerInput: unknown,
+): Promise<{ ok: true }> {
+  const out = await composeDraftFromInput(composerInput);
 
   await db
     .updateTable("issue")
     .set({
-      title: output.title,
-      composed_markdown: output.markdown,
-      composed_html: output.html,
-      composer_prompt_version: effectiveVersion,
-      composer_model_id: cfg.modelId,
-      // The brief changed — any stored checker result is now stale.
+      title: out.title,
+      composed_markdown: out.markdown,
+      composed_html: out.html,
+      composer_prompt_version: out.promptVersion,
+      composer_model_id: out.modelId,
+      // The brief changed — any stored checker result + pending fix
+      // proposal are now stale.
       check_jsonb: null,
+      fix_candidate_jsonb: null,
     })
     .where("id", "=", issueId)
     .execute();
@@ -269,8 +276,10 @@ export async function reeditDraft(issueId: number): Promise<ReeditResult> {
         editor_output_jsonb: JSON.stringify(draft.editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(draft.shrug) as never,
         composer_input_jsonb: JSON.stringify(draft.composerInput) as never,
-        // Brief replaced — any stored checker result is now stale.
+        // Brief replaced — any stored checker result + pending fix
+        // proposal are now stale.
         check_jsonb: null,
+        fix_candidate_jsonb: null,
       })
       .where("id", "=", issueId)
       .execute();

@@ -114,6 +114,7 @@ export interface Database {
     is_draft: Generated<boolean>;
     published_seq: number | null;
     check_jsonb: Jsonb | null;
+    fix_candidate_jsonb: Jsonb | null;
   };
 
   issue_pick: {

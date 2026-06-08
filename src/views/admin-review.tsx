@@ -8,7 +8,7 @@ import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
-import type { CheckResult } from "../shared/check-schema.ts";
+import type { CheckResult, FixCandidate } from "../shared/check-schema.ts";
 
 export interface Annotation {
   id: number;
@@ -244,6 +244,9 @@ export interface EditorReviewData {
   // Last on-demand checker result (checker.ts), task-tagged, or null if
   // the operator hasn't run one for this issue yet.
   checkResult: CheckResult | null;
+  // A pending, non-destructive fix proposal (issue.fix_candidate_jsonb),
+  // or null. When set, the panel previews it with Accept/Discard.
+  fixCandidate: FixCandidate | null;
 }
 
 // Render a first-use sentence with the flagged term emphasized, so the
@@ -286,7 +289,76 @@ const GLOSS_STYLES = `
   .gloss-sev.missing { background: #f7d7d7; color: #8a2a2a; }
   .gloss-sev.weak { background: #f7eccf; color: #6b551c; }
   .gloss-fix { color: #2b4f2b; display: block; margin-top: 2px; }
+  .fix-proposal { border: 1px solid #b58b00; background: #fffaf0; padding: 10px 12px; margin-top: 12px; border-radius: 4px; }
+  .fix-proposal h4 { margin: 0 0 4px; font-size: 13px; }
+  .fix-proposal .fix-meta { font-size: 11px; color: #6b6b6b; }
+  .fix-preview { background: #fff; border: 1px solid #e0d9c4; border-radius: 3px; padding: 8px 12px; margin-top: 6px; max-height: 420px; overflow: auto; }
+  .fix-actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  .fix-accept { background: #2b6b2b; color: #fff; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; font-weight: 600; }
+  .fix-discard { background: none; border: 1px solid #b0b0b0; padding: 5px 12px; border-radius: 3px; cursor: pointer; }
 `;
+
+// The pending, non-destructive fix proposal: the re-composed prose plus
+// its re-check, previewed inline. The live draft is untouched until the
+// reviewer clicks Accept (Discard drops the proposal).
+const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
+  issueId,
+  candidate,
+}) => {
+  const after = candidate.check.findings;
+  return (
+    <div class="fix-proposal" id="fix-proposal">
+      <h4>Proposed fix — not applied yet</h4>
+      <div class="fix-meta">
+        re-composed {candidate.model_id} ·{" "}
+        {candidate.created_at.slice(0, 16).replace("T", " ")} UTC · fed{" "}
+        {candidate.notes.length} note{candidate.notes.length === 1 ? "" : "s"}{" "}
+        back to the composer
+      </div>
+      {after.length === 0 ? (
+        <p class="gloss-ok">✓ Re-check of the proposal is clean.</p>
+      ) : (
+        <>
+          <p class="gloss-note">
+            Re-check of the proposal still flags {after.length} term
+            {after.length === 1 ? "" : "s"} — accepting won't fully resolve
+            them:
+          </p>
+          <ul>
+            {after.map((f) => (
+              <li>
+                <span class="gloss-term">{f.term}</span>
+                {f.severity ? (
+                  <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
+                ) : null}
+                <span class="gloss-ctx">“{highlightTerm(f.excerpt, f.term)}”</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <details>
+        <summary>Preview proposed brief</summary>
+        <div
+          class="fix-preview"
+          dangerouslySetInnerHTML={{ __html: candidate.composed_html }}
+        />
+      </details>
+      <div class="fix-actions">
+        <form method="post" action={`/admin/review/${issueId}/check-fix-accept`}>
+          <button type="submit" class="fix-accept">
+            Accept fix
+          </button>
+        </form>
+        <form method="post" action={`/admin/review/${issueId}/check-fix-discard`}>
+          <button type="submit" class="fix-discard">
+            Discard
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
 
 // Advisory checker panel. Two layers, both non-blocking:
 //   - deterministic linter (gloss-lint.ts): zero-cost recall floor, runs
@@ -294,18 +366,21 @@ const GLOSS_STYLES = `
 //     list, can't regress.
 //   - on-demand checker (checker.ts): operator clicks "Check"; a focused
 //     LLM pass catches the un-listed long tail + judges gloss adequacy.
-//     On a draft, "Re-compose to fix" feeds the findings back into a
-//     targeted re-compose and re-checks — the reject→fix→re-check round.
+//     On a draft, "Propose fix" feeds the findings back into a targeted
+//     re-compose and re-checks, but does NOT touch the draft — it stashes
+//     a candidate the reviewer previews and then Accepts or Discards.
 const CheckPanel: FC<{
   findings: GlossFinding[];
   checkResult: CheckResult | null;
+  fixCandidate: FixCandidate | null;
   issueId: number;
   isDraft: boolean;
-}> = ({ findings, checkResult, issueId, isDraft }) => {
+}> = ({ findings, checkResult, fixCandidate, issueId, isDraft }) => {
   const flagged = findings.filter((f) => !f.glossed);
   const glossed = findings.filter((f) => f.glossed);
   const llm = checkResult?.findings ?? [];
   const anyFlag = flagged.length > 0 || llm.length > 0;
+  const canPropose = isDraft && llm.length > 0;
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
@@ -377,13 +452,13 @@ const CheckPanel: FC<{
                 {checkResult ? "Re-check" : "Run checker"}
               </button>
             </form>
-            {isDraft && llm.length > 0 ? (
+            {canPropose ? (
               <form
                 method="post"
                 action={`/admin/review/${issueId}/check-fix`}
               >
                 <button type="submit" class="gloss-check-btn">
-                  Re-compose to fix → re-check
+                  {fixCandidate ? "Re-generate fix" : "Propose fix"}
                 </button>
               </form>
             ) : null}
@@ -418,11 +493,15 @@ const CheckPanel: FC<{
           )}
         </div>
 
+        {fixCandidate ? (
+          <FixProposal issueId={issueId} candidate={fixCandidate} />
+        ) : null}
+
         {anyFlag ? (
           <p class="gloss-note">
             Advisory — gloss on first use.{" "}
-            {isDraft && llm.length > 0
-              ? "Use “Re-compose to fix” to feed these back into the composer, or edit by hand. "
+            {canPropose
+              ? "“Propose fix” re-composes from these findings into a preview — the draft only changes when you Accept. Or edit by hand. "
               : ""}
             Universal acronyms (US, UK, EU, NATO…) are skipped; add missed
             jargon at <a href="/admin/gloss-terms">Gloss terms</a>.
@@ -797,6 +876,7 @@ export const AdminReview: FC<{
     <CheckPanel
       findings={data.glossFindings}
       checkResult={data.checkResult}
+      fixCandidate={data.fixCandidate}
       issueId={data.issue.id}
       isDraft={data.issue.isDraft}
     />

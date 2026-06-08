@@ -8,10 +8,10 @@ import { resolve } from "node:path";
 
 import { db } from "../db/index.ts";
 import {
+  composeDraftFromInput,
   discardDraft,
   publishDraft,
   recomposeDraft,
-  recomposeDraftWithNotes,
   reeditDraft,
   replayReplaceIssue,
 } from "../pipeline/draft.ts";
@@ -100,7 +100,11 @@ import { validateTitleRegex } from "../shared/title-noise.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
 import { loadGlossTerms } from "../shared/gloss-store.ts";
 import { runChecker, CHECKER_MODEL, CHECKER_VERSION } from "../ai/checker.ts";
-import type { CheckResult, CheckFinding } from "../shared/check-schema.ts";
+import type {
+  CheckResult,
+  CheckFinding,
+  FixCandidate,
+} from "../shared/check-schema.ts";
 import {
   AdminScheduler,
 } from "../views/admin-scheduler.tsx";
@@ -151,9 +155,31 @@ import {
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
 
-// Run the checker over an issue's current brief and persist the
-// task-tagged result. Returns the stored CheckResult, null if the issue
-// doesn't exist, or "failed" on an error (already logged).
+// Run the checker over arbitrary markdown (no DB). Returns the result or
+// "failed" on error (already logged). Used both for the stored check and
+// to re-check an unsaved fix candidate before it's applied.
+async function runCheckOnMarkdown(
+  markdown: string,
+): Promise<CheckResult | "failed"> {
+  try {
+    const terms = await loadGlossTerms();
+    const glossCandidates = lintGloss(markdown, terms);
+    const findings = await runChecker({ markdown, glossCandidates });
+    return {
+      checked_at: new Date().toISOString(),
+      model_id: CHECKER_MODEL,
+      prompt_version: CHECKER_VERSION,
+      findings,
+    };
+  } catch (err) {
+    console.error("[checker]", err);
+    return "failed";
+  }
+}
+
+// Run the checker over an issue's current brief and persist the result.
+// Returns the stored CheckResult, null if the issue doesn't exist, or
+// "failed" on error.
 async function runCheckAndStore(
   issueId: number,
 ): Promise<CheckResult | null | "failed"> {
@@ -163,29 +189,14 @@ async function runCheckAndStore(
     .where("id", "=", issueId)
     .executeTakeFirst();
   if (iss === undefined) return null;
-  try {
-    const terms = await loadGlossTerms();
-    const glossCandidates = lintGloss(iss.composed_markdown, terms);
-    const findings = await runChecker({
-      markdown: iss.composed_markdown,
-      glossCandidates,
-    });
-    const result: CheckResult = {
-      checked_at: new Date().toISOString(),
-      model_id: CHECKER_MODEL,
-      prompt_version: CHECKER_VERSION,
-      findings,
-    };
-    await db
-      .updateTable("issue")
-      .set({ check_jsonb: JSON.stringify(result) as never })
-      .where("id", "=", issueId)
-      .execute();
-    return result;
-  } catch (err) {
-    console.error("[checker]", err);
-    return "failed";
-  }
+  const result = await runCheckOnMarkdown(iss.composed_markdown);
+  if (result === "failed") return "failed";
+  await db
+    .updateTable("issue")
+    .set({ check_jsonb: JSON.stringify(result) as never })
+    .where("id", "=", issueId)
+    .execute();
+  return result;
 }
 
 // Turn gloss findings into targeted composer revision notes for a
@@ -273,8 +284,10 @@ export function registerAdminRoutes(app: Hono): void {
         title,
         composed_html: composedHtml,
         composed_markdown: composedMarkdown,
-        // Brief edited by hand — any stored checker result is now stale.
+        // Brief edited by hand — any stored checker result + pending fix
+        // proposal are now stale.
         check_jsonb: null,
+        fix_candidate_jsonb: null,
       })
       .where("id", "=", id)
       .where("is_draft", "=", true)
@@ -303,16 +316,17 @@ export function registerAdminRoutes(app: Hono): void {
     return c.redirect(`/admin/review/${id}?checked=1#gloss`, 303);
   });
 
-  // The reject→fix→re-check round: feed the current checker findings back
-  // into a targeted re-compose (drafts only), then re-check the new
-  // brief and store the result. One round per click — click again if it
-  // still flags. Findings that aren't gloss problems are ignored here.
+  // The reject→fix round, NON-DESTRUCTIVELY: feed the current checker
+  // findings back into a targeted re-compose (drafts only), re-check the
+  // candidate prose, and stash it as a PROPOSAL on fix_candidate_jsonb.
+  // The live draft is untouched — the reviewer previews and then Accepts
+  // or Discards (routes below). Click again to re-generate the proposal.
   app.post("/admin/review/:id/check-fix", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const iss = await db
       .selectFrom("issue")
-      .select(["composed_markdown", "is_draft", "check_jsonb"])
+      .select(["is_draft", "check_jsonb", "composer_input_jsonb"])
       .where("id", "=", id)
       .executeTakeFirst();
     if (iss === undefined) {
@@ -321,7 +335,10 @@ export function registerAdminRoutes(app: Hono): void {
     if (!iss.is_draft) {
       return c.redirect(`/admin/review/${id}?error=fix_not_draft`, 303);
     }
-    // Prefer the stored findings; if none stored yet, run a check first.
+    if (iss.composer_input_jsonb === null) {
+      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
+    }
+    // Prefer stored findings; if none stored yet, run a check first.
     let findings: CheckFinding[] =
       (iss.check_jsonb as CheckResult | null)?.findings ?? [];
     if (findings.length === 0) {
@@ -336,16 +353,78 @@ export function registerAdminRoutes(app: Hono): void {
       // Findings exist but none are gloss problems we can recompose away.
       return c.redirect(`/admin/review/${id}?nothing_to_fix=1#gloss`, 303);
     }
-    const re = await recomposeDraftWithNotes(id, notes);
-    if (!re.ok) {
+    let candidate: FixCandidate;
+    try {
+      const out = await composeDraftFromInput(iss.composer_input_jsonb, notes);
+      const recheck = await runCheckOnMarkdown(out.markdown);
+      if (recheck === "failed") {
+        return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+      }
+      candidate = {
+        created_at: new Date().toISOString(),
+        notes,
+        title: out.title,
+        composed_markdown: out.markdown,
+        composed_html: out.html,
+        prompt_version: out.promptVersion,
+        model_id: out.modelId,
+        check: recheck,
+      };
+    } catch (err) {
+      console.error("[check-fix]", err);
       return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
     }
-    // recompose cleared the stale result; re-check the new brief.
-    const after = await runCheckAndStore(id);
-    if (after === null || after === "failed") {
-      return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+    await db
+      .updateTable("issue")
+      .set({ fix_candidate_jsonb: JSON.stringify(candidate) as never })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .execute();
+    return c.redirect(`/admin/review/${id}?fix_proposed=1#gloss`, 303);
+  });
+
+  // Apply a pending fix proposal: copy the candidate prose onto the draft
+  // and adopt its re-check as the live result. The ONLY mutation of draft
+  // prose in the fix path, and only on explicit reviewer action.
+  app.post("/admin/review/:id/check-fix-accept", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const iss = await db
+      .selectFrom("issue")
+      .select(["is_draft", "fix_candidate_jsonb"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (iss === undefined || !iss.is_draft || iss.fix_candidate_jsonb === null) {
+      return c.redirect(`/admin/review/${id}?error=no_proposal`, 303);
     }
+    const cand = iss.fix_candidate_jsonb as FixCandidate;
+    await db
+      .updateTable("issue")
+      .set({
+        title: cand.title,
+        composed_markdown: cand.composed_markdown,
+        composed_html: cand.composed_html,
+        composer_prompt_version: cand.prompt_version,
+        composer_model_id: cand.model_id,
+        check_jsonb: JSON.stringify(cand.check) as never,
+        fix_candidate_jsonb: null,
+      })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .execute();
     return c.redirect(`/admin/review/${id}?fixed=1#gloss`, 303);
+  });
+
+  // Drop a pending fix proposal — draft untouched.
+  app.post("/admin/review/:id/check-fix-discard", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    await db
+      .updateTable("issue")
+      .set({ fix_candidate_jsonb: null })
+      .where("id", "=", id)
+      .execute();
+    return c.redirect(`/admin/review/${id}?fix_discarded=1#gloss`, 303);
   });
 
   // Non-destructive composer replay: re-runs the composer on the

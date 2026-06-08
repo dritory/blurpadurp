@@ -2486,6 +2486,7 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
       "check_jsonb",
+      "fix_candidate_jsonb",
     ])
     .where("id", "=", id)
     .executeTakeFirst();
@@ -2561,6 +2562,8 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
     glossFindings,
     checkResult: (iss.check_jsonb as EditorReviewData["checkResult"]) ?? null,
+    fixCandidate:
+      (iss.fix_candidate_jsonb as EditorReviewData["fixCandidate"]) ?? null,
   };
 }
 
@@ -2825,22 +2828,28 @@ export function parseReviewFlash(
   if (q.edited === "1") return { kind: "ok", msg: "Draft edits saved." };
   if (q.checked === "1")
     return { kind: "ok", msg: "Checker run complete — see the panel below." };
-  if (q.fixed === "1")
+  if (q.fix_proposed === "1")
     return {
       kind: "ok",
-      msg: "Re-composed to fix the findings and re-checked — see the panel below.",
+      msg: "Fix proposal ready — preview it below, then Accept or Discard. The draft is unchanged until you Accept.",
     };
+  if (q.fixed === "1")
+    return { kind: "ok", msg: "Fix applied to the draft." };
+  if (q.fix_discarded === "1")
+    return { kind: "ok", msg: "Fix proposal discarded — draft unchanged." };
   if (q.nothing_to_fix === "1")
     return {
       kind: "ok",
-      msg: "No fixable gloss findings — nothing to re-compose.",
+      msg: "No fixable gloss findings — nothing to propose.",
     };
   if (q.error === "check_failed")
     return { kind: "err", msg: "Checker failed — check server logs." };
   if (q.error === "fix_failed")
     return { kind: "err", msg: "Fix re-compose failed — check server logs." };
   if (q.error === "fix_not_draft")
-    return { kind: "err", msg: "Can only fix-recompose a draft." };
+    return { kind: "err", msg: "Can only propose a fix for a draft." };
+  if (q.error === "no_proposal")
+    return { kind: "err", msg: "No pending fix proposal to apply." };
   if (q.error === "empty_edit")
     return {
       kind: "err",
