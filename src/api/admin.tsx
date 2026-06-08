@@ -11,6 +11,7 @@ import {
   discardDraft,
   publishDraft,
   recomposeDraft,
+  recomposeDraftWithNotes,
   reeditDraft,
   replayReplaceIssue,
 } from "../pipeline/draft.ts";
@@ -98,12 +99,8 @@ import {
 import { validateTitleRegex } from "../shared/title-noise.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
 import { loadGlossTerms } from "../shared/gloss-store.ts";
-import {
-  runGlossCheck,
-  GLOSS_CHECKER_MODEL,
-  GLOSS_CHECKER_VERSION,
-} from "../ai/gloss-checker.ts";
-import type { GlossCheckResult } from "../shared/gloss-check-schema.ts";
+import { runChecker, CHECKER_MODEL, CHECKER_VERSION } from "../ai/checker.ts";
+import type { CheckResult, CheckFinding } from "../shared/check-schema.ts";
 import {
   AdminScheduler,
 } from "../views/admin-scheduler.tsx";
@@ -153,6 +150,55 @@ import {
   parseReviewFlash,
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
+
+// Run the checker over an issue's current brief and persist the
+// task-tagged result. Returns the stored CheckResult, null if the issue
+// doesn't exist, or "failed" on an error (already logged).
+async function runCheckAndStore(
+  issueId: number,
+): Promise<CheckResult | null | "failed"> {
+  const iss = await db
+    .selectFrom("issue")
+    .select("composed_markdown")
+    .where("id", "=", issueId)
+    .executeTakeFirst();
+  if (iss === undefined) return null;
+  try {
+    const terms = await loadGlossTerms();
+    const glossCandidates = lintGloss(iss.composed_markdown, terms);
+    const findings = await runChecker({
+      markdown: iss.composed_markdown,
+      glossCandidates,
+    });
+    const result: CheckResult = {
+      checked_at: new Date().toISOString(),
+      model_id: CHECKER_MODEL,
+      prompt_version: CHECKER_VERSION,
+      findings,
+    };
+    await db
+      .updateTable("issue")
+      .set({ check_jsonb: JSON.stringify(result) as never })
+      .where("id", "=", issueId)
+      .execute();
+    return result;
+  } catch (err) {
+    console.error("[checker]", err);
+    return "failed";
+  }
+}
+
+// Turn gloss findings into targeted composer revision notes for a
+// fix-recompose. Non-gloss tasks are skipped (they have no recompose
+// remedy yet).
+function findingsToNotes(findings: CheckFinding[]): string[] {
+  return findings
+    .filter((f) => f.task === "gloss")
+    .map((f) => {
+      const base = `"${f.term}" is used un-glossed on first use ("${f.excerpt}") — gloss it briefly on first use`;
+      return f.suggestion ? `${base}, e.g. ${f.suggestion}.` : `${base}.`;
+    });
+}
 
 export function registerAdminRoutes(app: Hono): void {
   app.get("/admin", (c) => c.redirect("/admin/issues", 302));
@@ -227,6 +273,8 @@ export function registerAdminRoutes(app: Hono): void {
         title,
         composed_html: composedHtml,
         composed_markdown: composedMarkdown,
+        // Brief edited by hand — any stored checker result is now stale.
+        check_jsonb: null,
       })
       .where("id", "=", id)
       .where("is_draft", "=", true)
@@ -238,45 +286,66 @@ export function registerAdminRoutes(app: Hono): void {
     return c.redirect(`/admin/review/${id}?edited=1`, 303);
   });
 
-  // On-demand LLM gloss-check. Re-lints deterministically for grounding
-  // candidates, runs the checker (Haiku), persists the result on the
-  // issue so it survives the redirect + is visible to draft reviewers.
-  // Advisory — never touches the composed brief. Available on any issue
-  // (drafts and published) since it only reads + annotates.
-  app.post("/admin/review/:id/check-glosses", async (c) => {
+  // Run the checker (re-lints deterministically for grounding, runs the
+  // LLM tasks), persists the task-tagged result on the issue so it
+  // survives the redirect + is visible to draft reviewers. Report-only:
+  // never touches the brief. Available on any issue.
+  app.post("/admin/review/:id/check", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const result = await runCheckAndStore(id);
+    if (result === null) {
+      return c.redirect(`/admin/review/${id}?error=not_found`, 303);
+    }
+    if (result === "failed") {
+      return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?checked=1#gloss`, 303);
+  });
+
+  // The reject→fix→re-check round: feed the current checker findings back
+  // into a targeted re-compose (drafts only), then re-check the new
+  // brief and store the result. One round per click — click again if it
+  // still flags. Findings that aren't gloss problems are ignored here.
+  app.post("/admin/review/:id/check-fix", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const iss = await db
       .selectFrom("issue")
-      .select("composed_markdown")
+      .select(["composed_markdown", "is_draft", "check_jsonb"])
       .where("id", "=", id)
       .executeTakeFirst();
     if (iss === undefined) {
       return c.redirect(`/admin/review/${id}?error=not_found`, 303);
     }
-    try {
-      const terms = await loadGlossTerms();
-      const candidates = lintGloss(iss.composed_markdown, terms);
-      const out = await runGlossCheck({
-        markdown: iss.composed_markdown,
-        candidates,
-      });
-      const result: GlossCheckResult = {
-        checked_at: new Date().toISOString(),
-        model_id: GLOSS_CHECKER_MODEL,
-        prompt_version: GLOSS_CHECKER_VERSION,
-        findings: out.findings,
-      };
-      await db
-        .updateTable("issue")
-        .set({ gloss_check_jsonb: JSON.stringify(result) as never })
-        .where("id", "=", id)
-        .execute();
-    } catch (err) {
-      console.error("[check-glosses]", err);
-      return c.redirect(`/admin/review/${id}?error=gloss_check_failed`, 303);
+    if (!iss.is_draft) {
+      return c.redirect(`/admin/review/${id}?error=fix_not_draft`, 303);
     }
-    return c.redirect(`/admin/review/${id}?gloss_checked=1#gloss`, 303);
+    // Prefer the stored findings; if none stored yet, run a check first.
+    let findings: CheckFinding[] =
+      (iss.check_jsonb as CheckResult | null)?.findings ?? [];
+    if (findings.length === 0) {
+      const fresh = await runCheckAndStore(id);
+      if (fresh === null || fresh === "failed") {
+        return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+      }
+      findings = fresh.findings;
+    }
+    const notes = findingsToNotes(findings);
+    if (notes.length === 0) {
+      // Findings exist but none are gloss problems we can recompose away.
+      return c.redirect(`/admin/review/${id}?nothing_to_fix=1#gloss`, 303);
+    }
+    const re = await recomposeDraftWithNotes(id, notes);
+    if (!re.ok) {
+      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
+    }
+    // recompose cleared the stale result; re-check the new brief.
+    const after = await runCheckAndStore(id);
+    if (after === null || after === "failed") {
+      return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?fixed=1#gloss`, 303);
   });
 
   // Non-destructive composer replay: re-runs the composer on the

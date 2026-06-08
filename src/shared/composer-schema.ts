@@ -96,6 +96,13 @@ export const ComposerInputSchema = z.object({
       ),
     }),
   ),
+  // Targeted revision notes fed back into a re-compose — e.g. the gloss
+  // checker's findings ("VRA used un-glossed on first use; gloss it").
+  // Absent on a first compose; set only when re-composing to fix specific
+  // problems. The composer applies them and leaves everything else as-is.
+  // Not persisted on the issue's composer_input_jsonb (it's a transient
+  // correction for one re-compose, not part of the canonical input).
+  revision_notes: z.array(z.string()).optional(),
 });
 export type ComposerInput = z.infer<typeof ComposerInputSchema>;
 

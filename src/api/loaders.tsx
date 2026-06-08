@@ -2485,7 +2485,7 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       "title",
       "editor_output_jsonb",
       "shrug_candidates_jsonb",
-      "gloss_check_jsonb",
+      "check_jsonb",
     ])
     .where("id", "=", id)
     .executeTakeFirst();
@@ -2560,8 +2560,7 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
     glossFindings,
-    glossCheck:
-      (iss.gloss_check_jsonb as EditorReviewData["glossCheck"]) ?? null,
+    checkResult: (iss.check_jsonb as EditorReviewData["checkResult"]) ?? null,
   };
 }
 
@@ -2824,10 +2823,24 @@ export function parseReviewFlash(
   if (q.noted === "1") return { kind: "ok", msg: "Note added." };
   if (q.deleted_note === "1") return { kind: "ok", msg: "Note deleted." };
   if (q.edited === "1") return { kind: "ok", msg: "Draft edits saved." };
-  if (q.gloss_checked === "1")
-    return { kind: "ok", msg: "AI gloss check complete — see the panel below." };
-  if (q.error === "gloss_check_failed")
-    return { kind: "err", msg: "Gloss check failed — check server logs." };
+  if (q.checked === "1")
+    return { kind: "ok", msg: "Checker run complete — see the panel below." };
+  if (q.fixed === "1")
+    return {
+      kind: "ok",
+      msg: "Re-composed to fix the findings and re-checked — see the panel below.",
+    };
+  if (q.nothing_to_fix === "1")
+    return {
+      kind: "ok",
+      msg: "No fixable gloss findings — nothing to re-compose.",
+    };
+  if (q.error === "check_failed")
+    return { kind: "err", msg: "Checker failed — check server logs." };
+  if (q.error === "fix_failed")
+    return { kind: "err", msg: "Fix re-compose failed — check server logs." };
+  if (q.error === "fix_not_draft")
+    return { kind: "err", msg: "Can only fix-recompose a draft." };
   if (q.error === "empty_edit")
     return {
       kind: "err",

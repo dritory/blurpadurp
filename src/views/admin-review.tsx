@@ -8,7 +8,7 @@ import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
-import type { GlossCheckResult } from "../shared/gloss-check-schema.ts";
+import type { CheckResult } from "../shared/check-schema.ts";
 
 export interface Annotation {
   id: number;
@@ -238,12 +238,12 @@ export interface EditorReviewData {
     source_count: number;
     scorer_one_liner: string;
   }>;
-  // Gloss-linter findings against the composed brief (gloss-lint.ts).
-  // Advisory only — the operator decides whether to re-compose.
+  // Deterministic gloss-linter findings against the composed brief
+  // (gloss-lint.ts) — the zero-cost recall floor, recomputed each load.
   glossFindings: GlossFinding[];
-  // Last on-demand LLM gloss-check result (gloss-checker.ts), or null if
+  // Last on-demand checker result (checker.ts), task-tagged, or null if
   // the operator hasn't run one for this issue yet.
-  glossCheck: GlossCheckResult | null;
+  checkResult: CheckResult | null;
 }
 
 // Render a first-use sentence with the flagged term emphasized, so the
@@ -288,28 +288,30 @@ const GLOSS_STYLES = `
   .gloss-fix { color: #2b4f2b; display: block; margin-top: 2px; }
 `;
 
-// Advisory gloss panel. Two layers, both non-blocking:
+// Advisory checker panel. Two layers, both non-blocking:
 //   - deterministic linter (gloss-lint.ts): zero-cost recall floor, runs
 //     on every page load. Catches all-caps acronyms + the curated jargon
 //     list, can't regress.
-//   - on-demand LLM check (gloss-checker.ts): operator clicks the button;
-//     a focused second pass catches the un-listed long tail and judges
-//     gloss adequacy. Findings persist on the issue.
-const GlossLintPanel: FC<{
+//   - on-demand checker (checker.ts): operator clicks "Check"; a focused
+//     LLM pass catches the un-listed long tail + judges gloss adequacy.
+//     On a draft, "Re-compose to fix" feeds the findings back into a
+//     targeted re-compose and re-checks — the reject→fix→re-check round.
+const CheckPanel: FC<{
   findings: GlossFinding[];
-  glossCheck: GlossCheckResult | null;
+  checkResult: CheckResult | null;
   issueId: number;
-}> = ({ findings, glossCheck, issueId }) => {
+  isDraft: boolean;
+}> = ({ findings, checkResult, issueId, isDraft }) => {
   const flagged = findings.filter((f) => !f.glossed);
   const glossed = findings.filter((f) => f.glossed);
-  const llm = glossCheck?.findings ?? [];
+  const llm = checkResult?.findings ?? [];
   const anyFlag = flagged.length > 0 || llm.length > 0;
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
       <section
         class={anyFlag ? "gloss-panel flagged" : "gloss-panel"}
-        aria-label="Gloss check"
+        aria-label="Checker"
         id="gloss"
       >
         {flagged.length > 0 ? (
@@ -359,24 +361,34 @@ const GlossLintPanel: FC<{
 
         <div class="gloss-llm">
           <div class="gloss-llm-head">
-            <h3>AI gloss check</h3>
-            {glossCheck ? (
+            <h3>AI checker</h3>
+            {checkResult ? (
               <span class="gloss-prov">
-                {glossCheck.model_id} ·{" "}
-                {glossCheck.checked_at.slice(0, 16).replace("T", " ")} UTC
+                {checkResult.model_id} ·{" "}
+                {checkResult.checked_at.slice(0, 16).replace("T", " ")} UTC
               </span>
             ) : null}
             <form
               method="post"
-              action={`/admin/review/${issueId}/check-glosses`}
+              action={`/admin/review/${issueId}/check`}
               style="margin-left:auto"
             >
               <button type="submit" class="gloss-check-btn">
-                {glossCheck ? "Re-check with AI" : "Check glosses with AI"}
+                {checkResult ? "Re-check" : "Run checker"}
               </button>
             </form>
+            {isDraft && llm.length > 0 ? (
+              <form
+                method="post"
+                action={`/admin/review/${issueId}/check-fix`}
+              >
+                <button type="submit" class="gloss-check-btn">
+                  Re-compose to fix → re-check
+                </button>
+              </form>
+            ) : null}
           </div>
-          {glossCheck === null ? (
+          {checkResult === null ? (
             <p class="gloss-note">
               The regex floor (above) can't see un-listed specialist names
               like “Brent” or judge whether a gloss is adequate. Run a
@@ -384,16 +396,18 @@ const GlossLintPanel: FC<{
               the long tail.
             </p>
           ) : llm.length === 0 ? (
-            <p class="gloss-ok">✓ AI found no un-glossed terms on first use.</p>
+            <p class="gloss-ok">✓ Checker found no un-glossed terms on first use.</p>
           ) : (
             <ul>
               {llm.map((f) => (
                 <li>
                   <span class="gloss-term">{f.term}</span>
-                  <span class="gloss-kind">{f.kind}</span>
-                  <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
+                  {f.kind ? <span class="gloss-kind">{f.kind}</span> : null}
+                  {f.severity ? (
+                    <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
+                  ) : null}
                   <span class="gloss-ctx">
-                    “{highlightTerm(f.first_use, f.term)}”
+                    “{highlightTerm(f.excerpt, f.term)}”
                   </span>
                   {f.suggestion ? (
                     <span class="gloss-fix">→ try: {f.suggestion}</span>
@@ -406,9 +420,12 @@ const GlossLintPanel: FC<{
 
         {anyFlag ? (
           <p class="gloss-note">
-            Advisory — gloss on first use, then re-compose. Universal
-            acronyms (US, UK, EU, NATO…) are skipped; add missed jargon at{" "}
-            <a href="/admin/gloss-terms">Gloss terms</a>.
+            Advisory — gloss on first use.{" "}
+            {isDraft && llm.length > 0
+              ? "Use “Re-compose to fix” to feed these back into the composer, or edit by hand. "
+              : ""}
+            Universal acronyms (US, UK, EU, NATO…) are skipped; add missed
+            jargon at <a href="/admin/gloss-terms">Gloss terms</a>.
           </p>
         ) : null}
       </section>
@@ -777,10 +794,11 @@ export const AdminReview: FC<{
         </form>
       </details>
     ) : null}
-    <GlossLintPanel
+    <CheckPanel
       findings={data.glossFindings}
-      glossCheck={data.glossCheck}
+      checkResult={data.checkResult}
       issueId={data.issue.id}
+      isDraft={data.issue.isDraft}
     />
     {(() => {
       const decorated = decorateBriefHtml(data.issue.composedHtml);

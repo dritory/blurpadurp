@@ -161,7 +161,7 @@ medium**. This shapes partition choices:
 
 | Failure | Where fixed | File |
 |---|---|---|
-| Composer leaves an acronym/jargon un-glossed on first use (slips past the prompt one or two per issue) | Two advisory layers on `/admin/review`, both non-blocking: (1) deterministic linter — acronym regex + curated `gloss_term` list (mig 062), zero-cost recall floor, hit-bumped at compose, managed at `/admin/gloss-terms`; (2) on-demand LLM check (Haiku) the operator triggers per draft — catches the un-listed long tail + judges gloss adequacy, grounded on the deterministic findings, persisted on `issue.gloss_check_jsonb` (mig 064) | `src/shared/gloss-lint.ts`, `src/ai/gloss-checker.ts` |
+| Composer leaves an acronym/jargon un-glossed on first use (slips past the prompt one or two per issue) | Two advisory layers on `/admin/review`, both non-blocking: (1) deterministic linter — acronym regex + curated `gloss_term` list (mig 062), zero-cost recall floor, hit-bumped at compose, managed at `/admin/gloss-terms`; (2) on-demand `checker` (Haiku, task-tagged so future review tasks bolt on) the operator triggers per draft — catches the un-listed long tail + judges gloss adequacy, grounded on the deterministic findings, persisted on `issue.check_jsonb` (mig 064). On a draft, "Re-compose to fix" feeds findings back as composer `revision_notes` and re-checks (the reject→fix→re-check round); any re-compose/edit nulls the stale result | `src/shared/gloss-lint.ts`, `src/ai/checker.ts` |
 | Same story appears in consecutive issues | `persistIssue` flips `published_to_reader = true` | `src/pipeline/compose.ts` |
 | Shrug items recur across runs | Shrug IDs included in the published-set | `src/pipeline/compose.ts` |
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |
@@ -239,7 +239,7 @@ See `docs/tuning.md`. Short version:
 - Scorer rubric + prompt: `docs/scoring.md`, `docs/scoring-prompt.md`
 - Editor curation rules + prompt: `docs/editor-prompt.md`
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
-- Gloss check (acronym/jargon first-use): deterministic `src/shared/gloss-lint.ts` + on-demand LLM `src/ai/gloss-checker.ts`
+- Draft checker (gloss first-use today; task-tagged for more later): deterministic `src/shared/gloss-lint.ts` + on-demand LLM `src/ai/checker.ts` (`src/shared/check-schema.ts`)
 - Dispatch design + live behavior: `docs/dispatch.md`
 - Storage tiering + cold-storage plan: `docs/storage.md`
 - Scaling reads (edge Worker + static export to R2): `docs/scaling.md`

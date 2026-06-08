@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderUserMessage } from "./gloss-checker.ts";
+import { renderGlossUserMessage } from "./checker.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
 
 const CANDIDATES: GlossFinding[] = [
@@ -19,21 +19,23 @@ const CANDIDATES: GlossFinding[] = [
   },
 ];
 
-describe("renderUserMessage", () => {
+describe("renderGlossUserMessage", () => {
   test("embeds the brief and labels each candidate's regex verdict", () => {
-    const msg = renderUserMessage({
+    const msg = renderGlossUserMessage({
       markdown: "## Brief body\n\nThe VRA was gutted.",
-      candidates: CANDIDATES,
+      glossCandidates: CANDIDATES,
     });
     expect(msg).toContain("## Brief body");
-    // The un-glossed verdict is surfaced for the model to verify.
     expect(msg).toContain("VRA [acronym] — regex thinks UN-GLOSSED");
     expect(msg).toContain("OPEC [acronym] — regex thinks GLOSSED");
     expect(msg).toContain("report_gloss_issues");
   });
 
   test("notes the regex blind spot when it found nothing", () => {
-    const msg = renderUserMessage({ markdown: "Clean prose.", candidates: [] });
+    const msg = renderGlossUserMessage({
+      markdown: "Clean prose.",
+      glossCandidates: [],
+    });
     expect(msg).toContain("can't see un-listed specialist names");
   });
 });

@@ -1,34 +1,31 @@
-// On-demand LLM gloss-checker. Advisory, operator-triggered from
-// /admin/review — NOT a scheduled pipeline stage (it never gates or
-// rewrites published output, so it stays clear of the "no new AI stage"
-// invariant in the spirit that matters: nothing in the hourly pipeline
-// depends on it).
+// On-demand "checker" — a draft-review aid that runs focused review
+// TASKS over a composed brief and reports problems. Advisory and
+// operator-triggered from /admin/review; NOT a scheduled pipeline stage
+// (nothing in the hourly pipeline depends on it, and it never gates).
 //
-// Why it exists: the composer already glosses on first use most of the
-// time, but a single generate-everything pass misses one or two terms an
-// issue, and the deterministic linter (gloss-lint.ts) can only check a
-// hand-maintained jargon list + an acronym regex. A focused second pass
-// whose ONLY job is gloss-checking is both more reliable than the
-// composer self-policing and broader than the regex — it knows "Brent"
-// is oil jargon with no list entry, and it judges gloss adequacy, not
-// just punctuation adjacency.
+// Today it runs one task, "gloss": un-glossed acronyms / specialist
+// names on first use. The module is structured so a second task is a
+// localized add — give it a prompt + tool, validate its output, map it
+// into CheckFinding rows tagged with the task id. runChecker fans out
+// over the requested tasks and returns the merged, task-tagged findings.
 //
-// The deterministic findings are passed in as grounding candidates: the
-// model verifies a concrete list (and adds what the regex missed) rather
+// Why an LLM pass at all: the deterministic linter (gloss-lint.ts) is a
+// zero-cost recall floor but can't see un-listed specialist names or
+// judge gloss adequacy. A focused second pass — whose only job is the
+// check — is both more reliable than the composer self-policing in one
+// shot and broader than the regex. The deterministic findings are fed in
+// as grounding candidates so the model verifies a concrete list rather
 // than free-associating, which keeps it stable run-to-run.
 //
-// Pattern mirrors editor.ts: Anthropic tool-call, structured output via
-// zod, cache-on-input-hash so a re-click on an unedited draft is free,
-// every call logged to ai_call_log.
+// Pattern mirrors editor.ts: Anthropic tool-call, cache-on-input-hash so
+// a re-click on an unedited draft is free, every call logged.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import { getEnv } from "../shared/env.ts";
-import {
-  GlossCheckOutputSchema,
-  type GlossCheckOutput,
-} from "../shared/gloss-check-schema.ts";
+import type { CheckFinding, CheckTask } from "../shared/check-schema.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
 import { checkBudget } from "./budget.ts";
@@ -36,13 +33,36 @@ import { checkBudget } from "./budget.ts";
 const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 
 // Pinned, like every other AIStage modelId. Cheap + strong at the
-// language-judgment this needs. Bump the version string below whenever
-// the prompt changes so cache lookups don't serve stale verdicts.
-export const GLOSS_CHECKER_MODEL = "claude-haiku-4-5-20251001";
-export const GLOSS_CHECKER_VERSION = "gloss-checker-v1";
+// language judgment this needs. Bump CHECKER_VERSION whenever any task
+// prompt changes so cache lookups don't serve stale verdicts.
+export const CHECKER_MODEL = "claude-haiku-4-5-20251001";
+export const CHECKER_VERSION = "checker-v1";
 const MAX_TOKENS = 2000;
 
-const SYSTEM_PROMPT = `You are a copy-editor checking one specific rule in a news brief: every unfamiliar acronym AND every specialist name must be glossed — briefly explained — on its FIRST appearance, so a literate non-specialist reader anywhere (Berlin, São Paulo, Nairobi) can follow without pausing to look something up.
+export interface CheckerInput {
+  markdown: string;
+  // Deterministic gloss-linter findings, used to ground the gloss task.
+  glossCandidates: GlossFinding[];
+}
+
+// Run the requested check tasks and return merged, task-tagged findings.
+// Defaults to every known task (just "gloss" today).
+export async function runChecker(
+  input: CheckerInput,
+  tasks: CheckTask[] = ["gloss"],
+): Promise<CheckFinding[]> {
+  const out: CheckFinding[] = [];
+  for (const task of tasks) {
+    if (task === "gloss") {
+      out.push(...(await runGlossTask(input)));
+    }
+  }
+  return out;
+}
+
+// ── gloss task ──────────────────────────────────────────────────────
+
+const GLOSS_SYSTEM = `You are a copy-editor checking one specific rule in a news brief: every unfamiliar acronym AND every specialist name must be glossed — briefly explained — on its FIRST appearance, so a literate non-specialist reader anywhere (Berlin, São Paulo, Nairobi) can follow without pausing to look something up.
 
 These go bare and never need a gloss: US, USA, UK, EU, UN, NATO, AI, FBI, CIA, NASA, CEO, GDP, and ordinary English.
 
@@ -58,7 +78,7 @@ You will receive:
 
 Call the report_gloss_issues tool with ONLY the terms that are NOT adequately glossed on first use — either missing a gloss entirely (severity "missing") or glossed too thinly for a non-specialist (severity "weak"). For each, quote the first-use sentence from the brief and offer a short suggested gloss (≤6 words). If every unfamiliar term is properly glossed on first use, return an empty findings list. Do not flag whitelisted universal acronyms or ordinary words.`;
 
-const TOOL = {
+const GLOSS_TOOL = {
   name: "report_gloss_issues",
   description:
     "Report terms used un-glossed (or under-glossed) on their first appearance in the brief.",
@@ -106,24 +126,29 @@ const TOOL = {
   },
 };
 
-export interface GlossCheckInput {
-  markdown: string;
-  // Deterministic linter findings, used as grounding candidates.
-  candidates: GlossFinding[];
-}
+// Task-specific output validator (the LLM's raw tool shape).
+const GlossToolOutputSchema = z.object({
+  findings: z.array(
+    z.object({
+      term: z.string(),
+      kind: z.enum(["acronym", "jargon"]).default("jargon"),
+      first_use: z.string(),
+      severity: z.enum(["missing", "weak"]),
+      suggestion: z.string().default(""),
+    }),
+  ),
+});
 
-// Exported for testing: builds the user message that grounds the model
-// on the deterministic findings (candidates to verify, not trust).
-export function renderUserMessage(input: GlossCheckInput): string {
+function renderGlossUserMessage(input: CheckerInput): string {
   const lines: string[] = [];
   lines.push("# Brief", "", input.markdown.trim(), "");
   lines.push("# Regex pre-screen (candidates — verify, don't trust)", "");
-  if (input.candidates.length === 0) {
+  if (input.glossCandidates.length === 0) {
     lines.push(
       "(the regex found no acronyms or listed jargon — but it can't see un-listed specialist names, so still read the brief yourself)",
     );
   } else {
-    for (const c of input.candidates) {
+    for (const c of input.glossCandidates) {
       lines.push(
         `- ${c.term} [${c.kind}] — regex thinks ${c.glossed ? "GLOSSED" : "UN-GLOSSED"}; first use: "${c.firstUseSentence}"`,
       );
@@ -133,26 +158,25 @@ export function renderUserMessage(input: GlossCheckInput): string {
   return lines.join("\n");
 }
 
-// Run the gloss-checker. Returns the structured findings; the caller
-// wraps them with provenance and persists. Cached on input hash so a
-// re-click on an unedited draft costs nothing.
-export async function runGlossCheck(
-  input: GlossCheckInput,
-): Promise<GlossCheckOutput> {
-  const userMessage = renderUserMessage(input);
+// Exported for testing: the grounding message that feeds the
+// deterministic findings to the model as candidates to verify.
+export { renderGlossUserMessage };
+
+async function runGlossTask(input: CheckerInput): Promise<CheckFinding[]> {
+  const userMessage = renderGlossUserMessage(input);
   const input_hash = createHash("sha256")
-    .update(JSON.stringify({ system: SYSTEM_PROMPT, userMessage }))
+    .update(JSON.stringify({ task: "gloss", system: GLOSS_SYSTEM, userMessage }))
     .digest("hex");
 
   const cached = await findCachedOutput({
-    stage_name: "gloss-checker",
-    stage_version: GLOSS_CHECKER_VERSION,
-    model_id: GLOSS_CHECKER_MODEL,
+    stage_name: "checker",
+    stage_version: CHECKER_VERSION,
+    model_id: CHECKER_MODEL,
     input_hash,
   });
   if (cached !== null) {
-    const validated = GlossCheckOutputSchema.safeParse(cached);
-    if (validated.success) return validated.data;
+    const validated = GlossToolOutputSchema.safeParse(cached);
+    if (validated.success) return mapGlossFindings(validated.data);
   }
 
   await checkBudget();
@@ -167,31 +191,31 @@ export async function runGlossCheck(
 
   try {
     const resp = await CLIENT.messages.create({
-      model: GLOSS_CHECKER_MODEL,
+      model: CHECKER_MODEL,
       max_tokens: MAX_TOKENS,
       temperature: 0,
       system: [
-        { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+        { type: "text", text: GLOSS_SYSTEM, cache_control: { type: "ephemeral" } },
       ],
       messages: [{ role: "user", content: userMessage }],
-      tools: [TOOL],
-      tool_choice: { type: "tool", name: TOOL.name },
+      tools: [GLOSS_TOOL],
+      tool_choice: { type: "tool", name: GLOSS_TOOL.name },
     });
     tokens_in = resp.usage?.input_tokens ?? null;
     tokens_out = resp.usage?.output_tokens ?? null;
     cache_read = resp.usage?.cache_read_input_tokens ?? null;
     cache_write = resp.usage?.cache_creation_input_tokens ?? null;
-    output = extractToolUse(resp, TOOL.name);
+    output = extractToolUse(resp, GLOSS_TOOL.name);
   } catch (e) {
     error = e instanceof Error ? e.message : String(e);
     throw e;
   } finally {
     await logAICall({
-      stage_name: "gloss-checker",
-      stage_version: GLOSS_CHECKER_VERSION,
-      model_id: GLOSS_CHECKER_MODEL,
+      stage_name: "checker",
+      stage_version: CHECKER_VERSION,
+      model_id: CHECKER_MODEL,
       input_hash,
-      input_jsonb: input,
+      input_jsonb: { task: "gloss", ...input },
       output_jsonb: output ?? null,
       tokens_in,
       tokens_out,
@@ -200,8 +224,23 @@ export async function runGlossCheck(
       error,
     });
   }
-  return GlossCheckOutputSchema.parse(output);
+  return mapGlossFindings(GlossToolOutputSchema.parse(output));
 }
+
+function mapGlossFindings(
+  out: z.infer<typeof GlossToolOutputSchema>,
+): CheckFinding[] {
+  return out.findings.map((f) => ({
+    task: "gloss",
+    term: f.term,
+    kind: f.kind,
+    excerpt: f.first_use,
+    severity: f.severity,
+    suggestion: f.suggestion,
+  }));
+}
+
+// ── shared plumbing ─────────────────────────────────────────────────
 
 function extractToolUse(resp: Anthropic.Message, toolName: string): unknown {
   const block = resp.content.find(
@@ -210,9 +249,7 @@ function extractToolUse(resp: Anthropic.Message, toolName: string): unknown {
   );
   if (!block) {
     const preview = JSON.stringify(resp.content).slice(0, 200);
-    throw new Error(
-      `gloss-checker: no tool_use block named ${toolName}; got: ${preview}`,
-    );
+    throw new Error(`checker: no tool_use block named ${toolName}; got: ${preview}`);
   }
   return block.input;
 }

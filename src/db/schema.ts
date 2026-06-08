@@ -113,7 +113,7 @@ export interface Database {
     composer_input_jsonb: Jsonb | null;
     is_draft: Generated<boolean>;
     published_seq: number | null;
-    gloss_check_jsonb: Jsonb | null;
+    check_jsonb: Jsonb | null;
   };
 
   issue_pick: {
