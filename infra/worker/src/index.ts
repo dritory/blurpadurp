@@ -52,6 +52,14 @@ function pageTarget(pathname: string): StaticMatch | null {
       return { key: "home.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
     case "/archive":
       return { key: "archive.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
+    // /about and /privacy are linked from the footer of every reader
+    // page — without these the first click after a cached visit wakes
+    // Fly. They're effectively static, so the publish pipeline renders
+    // them into R2 alongside the rolling pages.
+    case "/about":
+      return { key: "about.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
+    case "/privacy":
+      return { key: "privacy.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
     case "/feed.xml":
       return { key: "feed.xml", contentType: "application/atom+xml; charset=utf-8", ttl: TTL_ROLLING };
     case "/sitemap.xml":

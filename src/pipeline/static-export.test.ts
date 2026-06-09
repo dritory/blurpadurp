@@ -47,6 +47,8 @@ describe("renderStaticSurface", () => {
     for (const k of [
       "home.html",
       "archive.html",
+      "about.html",
+      "privacy.html",
       "feed.xml",
       "sitemap.xml",
       "robots.txt",
@@ -55,8 +57,8 @@ describe("renderStaticSurface", () => {
     ]) {
       expect(keys.has(k)).toBe(true);
     }
-    // No stray keys beyond the rolling 5 + one per issue.
-    expect(objs.length).toBe(7);
+    // No stray keys beyond the rolling 7 + one per issue.
+    expect(objs.length).toBe(9);
   });
 
   test("fresh latest issue renders into home + its permalink + feed", async () => {
@@ -82,7 +84,7 @@ describe("renderStaticSurface", () => {
     const keys = new Set(objs.map((o) => o.key));
     expect(keys.has("home.html")).toBe(true);
     expect([...keys].some((k) => k.startsWith("issues/"))).toBe(false);
-    expect(objs.length).toBe(5);
+    expect(objs.length).toBe(7);
   });
 });
 

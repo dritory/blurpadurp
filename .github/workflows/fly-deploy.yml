@@ -48,14 +48,21 @@ jobs:
 
           ID=$(flyctl machines list -a "$FLY_APP" --json \
                | jq -r '.[] | select(.name=="scheduler") | .id' | head -n1)
+          # Memory is sized to match fly.toml's [[vm]] block. Peak RSS
+          # across all stages stays under ~300 MB, so 512 MB is the
+          # paid floor with headroom. Keep these two in sync.
           if [ -z "$ID" ]; then
             echo "Creating scheduler machine"
             flyctl machine run "$IMG" \
               --schedule hourly \
               --name scheduler \
+              --vm-memory 512 \
               -a "$FLY_APP" \
               -- bun run src/cli.ts scheduler-tick
           else
             echo "Updating scheduler machine ($ID) → $IMG"
-            flyctl machine update "$ID" --image "$IMG" --yes -a "$FLY_APP"
+            flyctl machine update "$ID" \
+              --image "$IMG" \
+              --vm-memory 512 \
+              --yes -a "$FLY_APP"
           fi
