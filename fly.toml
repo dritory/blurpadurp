@@ -62,3 +62,15 @@ primary_region = "ams"
     path = "/health"
     protocol = "http"
     timeout = "5s"
+
+# Observed peak RSS across both the http_service `app` machine and the
+# hourly `scheduler` machine has stayed under ~300 MB — ingest, score,
+# and compose are network-bound on the LLM/embedding calls, not
+# memory-bound. 512 MB leaves a comfortable headroom while halving the
+# default per-machine cost. If a future stage starts approaching the
+# cap, bump this rather than chasing OOMs. The `scheduler` machine is
+# sized separately in .github/workflows/fly-deploy.yml — keep the two
+# in sync.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

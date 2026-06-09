@@ -33,10 +33,12 @@ import {
   loadHomeStalenessThresholdDays,
   mapIssueRow,
 } from "../shared/issue-loaders.ts";
+import { About } from "../views/about.tsx";
 import { Archive, type ArchiveEntry } from "../views/archive.tsx";
 import { renderAtomFeed } from "../views/feed.ts";
 import { Home } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
+import { Privacy } from "../views/privacy.tsx";
 
 const PUBLIC_URL =
   getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
@@ -46,6 +48,8 @@ const FEED_MAX_ENTRIES = 20;
 // `issues/<id>.html`). Mirrored in the Worker's keyFor().
 const KEY_HOME = "home.html";
 const KEY_ARCHIVE = "archive.html";
+const KEY_ABOUT = "about.html";
+const KEY_PRIVACY = "privacy.html";
 const KEY_FEED = "feed.xml";
 const KEY_SITEMAP = "sitemap.xml";
 const KEY_ROBOTS = "robots.txt";
@@ -115,6 +119,7 @@ function buildSitemap(issues: IssueRow[]): string {
     { loc: `${PUBLIC_URL}/` },
     { loc: `${PUBLIC_URL}/archive` },
     { loc: `${PUBLIC_URL}/about` },
+    { loc: `${PUBLIC_URL}/privacy` },
   ];
   for (const iss of issues) {
     urls.push({
@@ -179,6 +184,8 @@ export async function renderStaticSurface(
       key: KEY_ARCHIVE,
       body: await renderNode(<Archive issues={issues as ArchiveEntry[]} />),
     },
+    { key: KEY_ABOUT, body: await renderNode(<About />) },
+    { key: KEY_PRIVACY, body: await renderNode(<Privacy />) },
     {
       key: KEY_FEED,
       body: renderAtomFeed({
