@@ -58,6 +58,12 @@ function pageTarget(pathname: string): StaticMatch | null {
       return { key: "sitemap.xml", contentType: "application/xml; charset=utf-8", ttl: TTL_ROLLING };
     case "/robots.txt":
       return { key: "robots.txt", contentType: "text/plain; charset=utf-8", ttl: TTL_ROLLING };
+    // The layout sets an explicit <link rel="icon">, but crawlers and
+    // older clients still probe /favicon.ico directly — and every miss
+    // wakes the Fly origin. Map it to the same SVG mark the page links
+    // to so the Worker serves it from R2.
+    case "/favicon.ico":
+      return { key: "assets/blurp.svg", contentType: "image/svg+xml", ttl: TTL_ASSET };
   }
   const m = pathname.match(/^\/issue\/(\d+)$/);
   if (m) {
