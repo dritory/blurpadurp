@@ -158,6 +158,28 @@ publish. Discarding deletes the issue row and returns its stories to the
 pool (they were never marked `published_to_reader`); publishing would
 mark three-week-old stories as used and burn them.
 
+**If discard fails with a foreign-key error** — `update or delete on
+table "issue" violates foreign key constraint
+"dispatch_log_issue_id_fkey"` — the draft has already been emailed to
+reviewers. `dispatch_log.issue_id` has no `ON DELETE CASCADE`, unlike
+`issue_pick` / `issue_annotation`. `discardDraft` clears the draft's
+send-log rows inside its transaction, so an up-to-date deploy handles
+this. On an older deploy the manual equivalent is:
+
+```sql
+BEGIN;
+DELETE FROM dispatch_log
+ WHERE issue_id = <id>
+   AND EXISTS (SELECT id FROM issue WHERE id = <id> AND is_draft = true);
+DELETE FROM issue WHERE id = <id> AND is_draft = true;
+COMMIT;
+```
+
+The `EXISTS` guard is load-bearing: without it a mistyped id would wipe
+a *published* issue's send log. Losing a draft's rows is fine — they
+record sends for an issue that never shipped, and bounce suppression
+lives on `email_subscription.unsubscribed_at`, not here.
+
 **Recovering a backlog after a gap.** Once the blocking draft is gone,
 `/admin/release` shows what's strandable. A normal compose only ever
 sees the last 7 days, so anything older ages out unread. To recover it,
