@@ -15,7 +15,8 @@ import { sql } from "kysely";
 import { db } from "./db/index.ts";
 import { ingest } from "./pipeline/ingest.ts";
 import { score } from "./pipeline/score.ts";
-import { compose } from "./pipeline/compose.ts";
+import { compose, type RetroOptions } from "./pipeline/compose.ts";
+import { autopublish } from "./pipeline/autopublish.ts";
 import { dispatch } from "./pipeline/dispatch.ts";
 import { retention } from "./pipeline/retention.ts";
 
@@ -28,19 +29,42 @@ const TICK_INTERVAL_MS = 60 * 60_000;
 
 export interface StageJob {
   stage: string;
-  run: () => Promise<void>;
+  // `args` carries the jsonb payload from pipeline_force_run (mig 067)
+  // for manually triggered runs, and is undefined on the cron path.
+  // Stages that take no parameters simply ignore it.
+  run: (args?: unknown) => Promise<void>;
 }
 
 // Order matters within a single tick: ingest first (downstream sees
 // fresh data), retention last (don't prune rows another stage may
-// still want).
+// still want). autopublish sits between compose and dispatch so a
+// draft that comes due is published in time for the same tick's
+// dispatch sweep to mail it, rather than waiting a further hour.
 const STAGES: StageJob[] = [
   { stage: "ingest", run: ingest },
   { stage: "score", run: score },
-  { stage: "compose", run: compose },
+  { stage: "compose", run: (args) => compose(parseRetroArgs(args)) },
+  { stage: "autopublish", run: autopublish },
   { stage: "dispatch", run: dispatch },
   { stage: "retention", run: retention },
 ];
+
+// Decode compose's force-run payload. Shape: {"retro": true} for a
+// ranked catch-up run, or {"retro": {"storyIds": [1,2,3]}} for an
+// operator-chosen set from /admin/release. Anything else means a normal
+// run — a malformed payload must not silently become a catch-up.
+export function parseRetroArgs(args: unknown): RetroOptions | undefined {
+  if (args === null || typeof args !== "object") return undefined;
+  const retro = (args as { retro?: unknown }).retro;
+  if (retro === true) return {};
+  if (retro === null || typeof retro !== "object") return undefined;
+  const ids = (retro as { storyIds?: unknown }).storyIds;
+  if (!Array.isArray(ids)) return {};
+  const storyIds = ids
+    .map((v) => Number(v))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return { storyIds };
+}
 
 export function getStage(name: string): StageJob | undefined {
   return STAGES.find((s) => s.stage === name);
@@ -58,6 +82,37 @@ interface StageState {
   enabled: boolean;
   forced: boolean;
   last_success_at: Date | null;
+  cron_dow: number | null;
+  cron_hour: number | null;
+  // Payload of the pending force-run row, if any (mig 067).
+  forced_args: unknown;
+}
+
+// Is an anchored stage due? Anchored stages (mig 066) fire on a fixed
+// UTC weekday at/after a fixed UTC hour, at most once that day.
+//
+// This replaces interval drift for compose. "604800s since last
+// success" moved the draft day forward by the run duration plus up to
+// an hour of tick granularity every week, and any manual trigger
+// re-anchored it permanently — which is why drafts arrived on
+// arbitrary days.
+//
+// No TICK_INTERVAL_MS lookahead here: firing an anchored stage early
+// would land it on the wrong day, which is the whole thing we're
+// fixing. Late-by-under-an-hour is fine, early-by-a-day is not.
+export function anchoredStageDue(
+  s: Pick<StageState, "cron_dow" | "cron_hour" | "last_success_at">,
+  now: Date,
+): boolean {
+  if (s.cron_dow === null || s.cron_hour === null) return false;
+  if (now.getUTCDay() !== s.cron_dow) return false;
+  if (now.getUTCHours() < s.cron_hour) return false;
+  // Already ran today? Compare UTC calendar dates rather than a 24h
+  // window, so a run at 06:05 doesn't leave the stage eligible again
+  // at 06:00 sharp the following week.
+  const last = s.last_success_at;
+  if (last === null) return true;
+  return last.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10);
 }
 
 // One combined query for the full scheduler state — schedule rows,
@@ -74,14 +129,22 @@ async function loadState(): Promise<StageState[]> {
     enabled: boolean;
     forced: boolean;
     last_success_at: Date | null;
+    cron_dow: number | null;
+    cron_hour: number | null;
+    forced_args: unknown;
   }>`
     SELECT
       s.stage,
       s.interval_sec,
       s.enabled,
+      s.cron_dow,
+      s.cron_hour,
       EXISTS (
         SELECT 1 FROM pipeline_force_run f WHERE f.stage = s.stage
       ) AS forced,
+      (
+        SELECT f.args FROM pipeline_force_run f WHERE f.stage = s.stage
+      ) AS forced_args,
       (
         SELECT pr.completed_at
         FROM pipeline_run pr
@@ -94,6 +157,43 @@ async function loadState(): Promise<StageState[]> {
   return result.rows;
 }
 
+// Next UTC datetime an anchored stage will fire. The display-side twin
+// of anchoredStageDue — kept in this file so the two can't drift apart.
+// Used by /admin/scheduler, which would otherwise project "last success
+// + interval_sec" and print a date the scheduler will never act on.
+export function nextAnchoredRun(
+  dow: number,
+  hour: number,
+  lastSuccessAt: Date | null,
+  now: Date,
+): Date {
+  const ranToday =
+    lastSuccessAt !== null &&
+    lastSuccessAt.toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+
+  const candidate = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      hour,
+      0,
+      0,
+      0,
+    ),
+  );
+  // Today is the next slot only on the right weekday and only if the
+  // stage hasn't already taken its turn — whether the hour has arrived
+  // (due now) or is still ahead.
+  if (now.getUTCDay() === dow && !ranToday) return candidate;
+
+  let daysAhead = (dow - now.getUTCDay() + 7) % 7;
+  // Same weekday, but today is spoken for → it's a week out.
+  if (daysAhead === 0) daysAhead = 7;
+  candidate.setUTCDate(candidate.getUTCDate() + daysAhead);
+  return candidate;
+}
+
 export async function runTick(): Promise<void> {
   const state = await loadState();
   const byStage = new Map(state.map((r) => [r.stage, r]));
@@ -102,13 +202,22 @@ export async function runTick(): Promise<void> {
   // the DB again. If nothing is due and nothing is forced, exit
   // without further queries — the DB then idle-suspends on Neon
   // within the timeout window.
-  const ready: Array<{ job: StageJob; forced: boolean }> = [];
+  const ready: Array<{ job: StageJob; forced: boolean; args?: unknown }> = [];
   for (const job of STAGES) {
     const s = byStage.get(job.stage);
     if (s === undefined) continue;
     if (!s.enabled) continue;
     if (s.forced) {
-      ready.push({ job, forced: true });
+      ready.push({ job, forced: true, args: s.forced_args });
+      continue;
+    }
+    // Anchored stages ignore interval_sec entirely — the calendar slot
+    // is the schedule. Note this also means an anchored stage that has
+    // never run does NOT fire immediately; it waits for its slot.
+    if (s.cron_dow !== null && s.cron_hour !== null) {
+      if (anchoredStageDue(s, new Date())) {
+        ready.push({ job, forced: false });
+      }
       continue;
     }
     if (s.last_success_at === null) {
@@ -131,7 +240,7 @@ export async function runTick(): Promise<void> {
   console.log(
     `[scheduler] tick @ ${new Date().toISOString()} — ${ready.length} stage(s) firing`,
   );
-  for (const { job, forced } of ready) {
+  for (const { job, forced, args } of ready) {
     // Delete the force-run row before firing so a crash mid-run does
     // not auto-retry on the next tick. Operator re-queues by clicking
     // "Run now" again. Cron path is unaffected.
@@ -144,7 +253,7 @@ export async function runTick(): Promise<void> {
     console.log(
       `[scheduler] ${job.stage}: firing (${forced ? "manual" : "cron"})`,
     );
-    await runWithBookkeeping(job, forced ? "manual" : "cron");
+    await runWithBookkeeping(job, forced ? "manual" : "cron", args);
   }
   console.log(`[scheduler] tick done`);
 }
@@ -155,6 +264,7 @@ export async function runTick(): Promise<void> {
 export async function runWithBookkeeping(
   job: StageJob,
   triggeredBy: TriggerSource,
+  args?: unknown,
 ): Promise<void> {
   const t0 = Date.now();
   const inserted = await db
@@ -167,7 +277,7 @@ export async function runWithBookkeeping(
     .returning("id")
     .executeTakeFirstOrThrow();
   try {
-    await job.run();
+    await job.run(args);
     await db
       .updateTable("pipeline_run")
       .set({

@@ -41,3 +41,18 @@ export async function getConfigNumberOrNull(
   const v = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(v) ? v : null;
 }
+
+// Read a boolean config value. Accepts a real jsonb boolean or the
+// strings "true"/"false" (the /admin/config editor round-trips values
+// as text). Anything else falls back — an unparseable kill-switch
+// should keep its documented default, not silently read as false.
+export async function getConfigBool(
+  key: string,
+  fallback: boolean,
+): Promise<boolean> {
+  const raw = await readConfigValue(key);
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return fallback;
+}

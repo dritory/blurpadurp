@@ -115,6 +115,16 @@ export interface Database {
     published_seq: number | null;
     check_jsonb: Jsonb | null;
     fix_candidate_jsonb: Jsonb | null;
+    // Creation time of the draft, and the clock the auto-publish sweep
+    // runs off. Distinct from published_at, which publishDraft
+    // overwrites. NULL on rows published before mig 066.
+    drafted_at: Date | null;
+    // Operator parked this draft: exempt from auto-publish until
+    // cleared. Also set by the sweep itself when a draft is still
+    // failing its check after the last auto-fix pass.
+    hold: Generated<boolean>;
+    // Audit trail for automatically applied gloss fixes (mig 066).
+    auto_fix_jsonb: Jsonb | null;
   };
 
   issue_pick: {
@@ -273,6 +283,11 @@ export interface Database {
     interval_sec: number;
     enabled: Generated<boolean>;
     updated_at: Generated<Date>;
+    // Calendar anchor (mig 066). Both NULL → fire on interval_sec
+    // since last success. Both set → fire on that UTC weekday
+    // (0=Sun…6=Sat) at/after that UTC hour, once per day.
+    cron_dow: number | null;
+    cron_hour: number | null;
   };
 
   pipeline_run: {
@@ -291,6 +306,9 @@ export interface Database {
   pipeline_force_run: {
     stage: string;
     requested_at: Generated<Date>;
+    // Optional stage parameters (mig 067) — e.g. compose's
+    // {"retro": {"storyIds": [...]}}. NULL means a plain run.
+    args: Jsonb | null;
   };
 
   url_path_filter: {

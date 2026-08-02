@@ -122,6 +122,75 @@ would catch this automatically — not built yet.
 
 ---
 
+### 5b. No issues going out / a draft is stuck
+
+**Symptom:** Weeks pass with no brief. Nothing errors. `/admin/scheduler`
+shows compose "succeeding" or simply never firing.
+
+**Start here: `/admin/release`.** It lists every current blocker (open
+draft, held lock, cadence gap, next anchored compose) and counts the
+unpublished backlog by age band, flagging the bands that are already
+past the 7-day compose window and will never ship through a normal run.
+That page exists specifically for this failure; the rest of this entry
+is the underlying mechanism.
+
+**Quick diagnosis:** Open `/admin/issues` and look for an open draft.
+`runCompose` bails while *any* `is_draft` row exists — it logs
+`[compose] open draft #N exists — publish or discard it first, skipping`
+and returns success. One forgotten draft therefore blocks every compose
+behind it, and the failure is invisible unless you read the logs. This is
+what silently ate three weeks of briefs before mig 066.
+
+**Immediate:** Check the auto-publish banner at the top of
+`/admin/review/<id>`. It says one of:
+
+- *Publishes automatically at …* — nothing to do, it will clear itself.
+- *Auto-publish will hold this draft: N un-glossed terms remain* — the
+  checker couldn't fix it in its allotted passes. Fix the gloss by hand
+  and publish, or publish anyway if the findings are false positives.
+- *Held* — either you parked it or the sweep did. Clear the hold to hand
+  it back to the sweep.
+- *Auto-publish is off* — `compose.auto_publish_enabled` is false in
+  `/admin/config`.
+
+If the draft is simply stale (weeks old), **discard** rather than
+publish. Discarding deletes the issue row and returns its stories to the
+pool (they were never marked `published_to_reader`); publishing would
+mark three-week-old stories as used and burn them.
+
+**Recovering a backlog after a gap.** Once the blocking draft is gone,
+`/admin/release` shows what's strandable. A normal compose only ever
+sees the last 7 days, so anything older ages out unread. To recover it,
+queue a **catch-up run** from that page:
+
+- *Compose with selected* — you tick the specific stories. Preferred:
+  deciding which quiet items still deserve air is editorial judgment.
+- *Compose with top N by rank* — takes the highest
+  `structural_importance × half_life` items automatically.
+- *Compose fresh week only* — a plain run, ignoring the backlog.
+
+Catch-up candidates are ranked on durable significance and the gate is
+deliberately ignored, so gate-failing stories can and should appear —
+those are the quiet×significant picks. The fresh week is still selected
+normally and still dominates the issue; the editor may cut every
+catch-up item, which is a legitimate outcome. A catch-up run also
+bypasses `compose.min_publish_gap_hours`, since it's an explicit
+operator action rather than the cadence firing.
+
+**Root cause:** Pre-066, nothing bounded how long a draft could sit.
+Now the autopublish sweep does. If a draft is stuck *despite* the sweep,
+check that the `autopublish` stage is enabled on `/admin/scheduler` and
+that its lock isn't wedged (clear it there).
+
+**Note on the fixed day:** compose is anchored to Saturday 06:00 UTC via
+`pipeline_schedule.cron_dow` / `cron_hour`, and `interval_sec` is ignored
+for anchored stages. If briefs stop arriving on the right day, check
+those two columns before touching the interval. An anchored stage that
+misses its slot waits for the next one rather than firing on the wrong
+day — that's deliberate.
+
+---
+
 ## Ingestion
 
 ### 6. GDELT connector empty / timing out

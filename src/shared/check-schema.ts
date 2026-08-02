@@ -63,3 +63,51 @@ export interface FixCandidate {
   // proposal would (or wouldn't) resolve before it's applied.
   check: CheckResult;
 }
+
+// ============================================================
+// Automatic fix loop (mig 066). Types + the cleanliness predicate live
+// here, in the dependency-free schema module, so the pipeline sweep and
+// the review page share one definition instead of two that must agree.
+// ============================================================
+
+// One recorded automatic pass, persisted on issue.auto_fix_jsonb so the
+// review page can show what the machine changed and why.
+export interface AutoFixPass {
+  pass: number;
+  at: string; // ISO 8601
+  notes: string[];
+  findings_before: CheckFinding[];
+  markdown_before: string;
+  // Findings still present after this pass recomposed the brief.
+  findings_after: CheckFinding[];
+  // False when the recompose didn't reduce the finding count — the pass
+  // ran but bought nothing.
+  improved: boolean;
+}
+
+export interface AutoFixLog {
+  passes: AutoFixPass[];
+  // Findings outstanding when the loop stopped. Empty === clean.
+  final_findings: CheckFinding[];
+  // Why the loop stopped, for the review page and the hold notification.
+  outcome: "clean" | "exhausted" | "nothing_to_fix" | "failed" | "disabled";
+}
+
+// Is this draft safe to publish unattended?
+//
+// The last gate before an issue is mailed, and email is irreversible
+// (dispatch_log is at-most-once, there is no recall). Every ambiguous
+// input therefore resolves to NOT clean: a draft that merely fails to
+// prove itself safe gets held, not sent.
+export function isCleanAutoFix(raw: unknown): boolean {
+  const log = raw as { outcome?: string; final_findings?: unknown[] } | null;
+  if (log === null || typeof log !== "object") return false;
+  // Explicit operator kill-switch: the fixer is off, which is not a
+  // statement about this draft. Publish on the normal schedule.
+  if (log.outcome === "disabled") return true;
+  if (log.outcome !== "clean") return false;
+  // Require a real array. A missing findings list is a malformed record,
+  // not a clean bill of health — treating absent evidence as proof of
+  // cleanliness would mail an unverified brief.
+  return Array.isArray(log.final_findings) && log.final_findings.length === 0;
+}

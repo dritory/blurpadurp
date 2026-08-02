@@ -14,6 +14,7 @@ import { loadRawPrompt } from "../shared/prompts.ts";
 import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
 import { loadGlossTerms } from "../shared/gloss-store.ts";
+import { getConfigBool, getConfigNumber } from "../shared/config-store.ts";
 import type {
   ConfigRow,
 } from "../views/admin-config.tsx";
@@ -100,7 +101,14 @@ import type {
 } from "../views/admin-scheduler.tsx";
 import {
   listStages as listSchedulerStages,
+  nextAnchoredRun,
 } from "../scheduler.ts";
+import type {
+  BacklogBucket,
+  ReleaseBlocker,
+  ReleaseData,
+  RetroCandidate,
+} from "../views/admin-release.tsx";
 import type {
   EditorSandboxData,
   SandboxBucket,
@@ -734,7 +742,7 @@ export async function loadSchedulerData(
   const stages = listSchedulerStages();
   const scheduleRows = await db
     .selectFrom("pipeline_schedule")
-    .select(["stage", "interval_sec", "enabled"])
+    .select(["stage", "interval_sec", "enabled", "cron_dow", "cron_hour"])
     .execute();
   const scheduleMap = new Map(scheduleRows.map((r) => [r.stage, r]));
 
@@ -789,8 +797,19 @@ export async function loadSchedulerData(
         (lastAttemptRow.started_at !== null &&
           lastAttemptRow.started_at > lastSuccessAt));
 
-    const nextDueAt =
-      cfg !== undefined && lastSuccessAt !== null
+    // Anchored stages (mig 066) ignore interval_sec, so projecting
+    // "last success + interval" would print a date the scheduler will
+    // never act on.
+    const anchored =
+      cfg !== undefined && cfg.cron_dow !== null && cfg.cron_hour !== null;
+    const nextDueAt = anchored
+      ? nextAnchoredRun(
+          cfg.cron_dow as number,
+          cfg.cron_hour as number,
+          lastSuccessAt,
+          new Date(now),
+        )
+      : cfg !== undefined && lastSuccessAt !== null
         ? new Date(lastSuccessAt.getTime() + intervalSec * 1000)
         : cfg !== undefined
           ? new Date(now)
@@ -800,6 +819,8 @@ export async function loadSchedulerData(
       stage: job.stage,
       intervalSec,
       enabled,
+      cronDow: cfg?.cron_dow ?? null,
+      cronHour: cfg?.cron_hour ?? null,
       lastSuccessAt,
       lastSuccessAgeSec:
         lastSuccessAt !== null
@@ -2487,6 +2508,9 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       "shrug_candidates_jsonb",
       "check_jsonb",
       "fix_candidate_jsonb",
+      "drafted_at",
+      "hold",
+      "auto_fix_jsonb",
     ])
     .where("id", "=", id)
     .executeTakeFirst();
@@ -2547,7 +2571,14 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       composedHtml: iss.composed_html,
       composedMarkdown: iss.composed_markdown,
       title: iss.title,
+      draftedAt: iss.drafted_at,
+      hold: iss.hold,
     },
+    autoPublish: {
+      enabled: await getConfigBool("compose.auto_publish_enabled", true),
+      hours: await getConfigNumber("compose.auto_publish_hours", 24),
+    },
+    autoFix: (iss.auto_fix_jsonb as EditorReviewData["autoFix"]) ?? null,
     annotations: annotations.map((a) => ({
       id: Number(a.id),
       slot: a.slot,
@@ -2842,6 +2873,16 @@ export function parseReviewFlash(
       kind: "ok",
       msg: "No fixable gloss findings — nothing to propose.",
     };
+  if (q.held === "1")
+    return {
+      kind: "ok",
+      msg: "Draft held — it will not auto-publish until you release it.",
+    };
+  if (q.released === "1")
+    return {
+      kind: "ok",
+      msg: "Hold cleared — the next sweep will auto-publish this draft once its deadline passes and its check is clean.",
+    };
   if (q.error === "check_failed")
     return { kind: "err", msg: "Checker failed — check server logs." };
   if (q.error === "fix_failed")
@@ -2883,4 +2924,280 @@ export function parseReviewFlash(
   if (q.error === "not_draft_share")
     return { kind: "err", msg: "Preview links are only for drafts." };
   return null;
+}
+
+// ============================================================
+// Release console (/admin/release)
+// ============================================================
+
+const RELEASE_FRESH_DAYS = 7;
+// A gate-failing story counts as a catch-up candidate only above this
+// structural score. Below it the item is genuinely minor, not
+// quiet-but-significant, and listing it would bury the real ones.
+const DURABLE_STRUCTURAL_MIN = 3;
+
+export async function loadReleaseData(
+  flash: ReleaseData["flash"],
+): Promise<ReleaseData> {
+  const retroWindowDays = await getConfigNumber("compose.retro_window_days", 21);
+  const retroMaxItems = Math.floor(
+    await getConfigNumber("compose.retro_max_items", 8),
+  );
+  const gapHours = await getConfigNumber("compose.min_publish_gap_hours", 20);
+
+  const [openDraft, lastPublished, composeLock, queued, composeSchedule] =
+    await Promise.all([
+      db
+        .selectFrom("issue")
+        .select(["id", "title", "drafted_at", "hold"])
+        .where("is_draft", "=", true)
+        .orderBy("drafted_at", "asc")
+        .executeTakeFirst(),
+      db
+        .selectFrom("issue")
+        .select(({ fn }) => fn.max("published_at").as("last"))
+        .where("is_draft", "=", false)
+        .where("is_event_driven", "=", false)
+        .executeTakeFirst(),
+      db
+        .selectFrom("pipeline_lock")
+        .select("expires_at")
+        .where("stage_name", "=", "compose")
+        .executeTakeFirst(),
+      db
+        .selectFrom("pipeline_force_run")
+        .select(["stage", "args"])
+        .where("stage", "=", "compose")
+        .executeTakeFirst(),
+      db
+        .selectFrom("pipeline_schedule")
+        .select(["enabled", "cron_dow", "cron_hour"])
+        .where("stage", "=", "compose")
+        .executeTakeFirst(),
+    ]);
+
+  const blockers: ReleaseBlocker[] = [];
+
+  // The one that caused the stall: compose refuses to run at all while
+  // any draft is open, and says so only in the logs.
+  if (openDraft !== undefined) {
+    blockers.push({
+      kind: "warn",
+      label: "Open draft",
+      detail:
+        `#${openDraft.id}${openDraft.title !== null ? ` "${openDraft.title}"` : ""} is open` +
+        `${openDraft.hold ? " and held" : ""}. compose will not run until it is published or discarded.`,
+      href: `/admin/review/${openDraft.id}`,
+      hrefLabel: "review it",
+    });
+  } else {
+    blockers.push({
+      kind: "ok",
+      label: "Open draft",
+      detail: "None — compose is free to run.",
+    });
+  }
+
+  if (composeSchedule !== undefined && !composeSchedule.enabled) {
+    blockers.push({
+      kind: "warn",
+      label: "Schedule",
+      detail: "The compose stage is disabled on /admin/scheduler.",
+      href: "/admin/scheduler",
+      hrefLabel: "enable",
+    });
+  } else if (
+    composeSchedule?.cron_dow != null &&
+    composeSchedule.cron_hour != null
+  ) {
+    const next = nextAnchoredRun(
+      composeSchedule.cron_dow,
+      composeSchedule.cron_hour,
+      lastPublished?.last ?? null,
+      new Date(),
+    );
+    blockers.push({
+      kind: "ok",
+      label: "Next scheduled compose",
+      detail: next.toUTCString(),
+    });
+  }
+
+  if (composeLock !== undefined && composeLock.expires_at > new Date()) {
+    blockers.push({
+      kind: "warn",
+      label: "Lock held",
+      detail: `A compose run holds the lock until ${composeLock.expires_at.toUTCString()}.`,
+      href: "/admin/scheduler",
+      hrefLabel: "clear",
+    });
+  }
+
+  if (lastPublished?.last) {
+    const ageHours = (Date.now() - lastPublished.last.getTime()) / 3600_000;
+    blockers.push(
+      ageHours < gapHours
+        ? {
+            kind: "warn",
+            label: "Cadence gap",
+            detail: `Last issue published ${ageHours.toFixed(1)}h ago; the ${gapHours}h gap blocks a scheduled compose. A catch-up run from this page bypasses it.`,
+          }
+        : {
+            kind: "ok",
+            label: "Last published",
+            detail: `${lastPublished.last.toUTCString()} (${Math.floor(ageHours / 24)}d ago).`,
+          },
+    );
+  } else {
+    blockers.push({
+      kind: "ok",
+      label: "Last published",
+      detail: "No regular issue published yet.",
+    });
+  }
+
+  const buckets = await loadBacklogBuckets(retroWindowDays);
+  const candidates = await loadRetroCandidates(retroWindowDays);
+
+  return {
+    blockers,
+    buckets,
+    candidates,
+    retroWindowDays,
+    retroMaxItems,
+    composeQueued: queued !== undefined,
+    queuedArgs:
+      queued?.args != null ? JSON.stringify(queued.args) : null,
+    flash,
+  };
+}
+
+// Unpublished scored stories bucketed by age. Deliberately counts the
+// gate-failing-but-durable column separately: those are invisible to
+// every existing admin view, and they're the population a catch-up run
+// draws from.
+async function loadBacklogBuckets(
+  retroWindowDays: number,
+): Promise<BacklogBucket[]> {
+  const bands: Array<{ label: string; from: number; to: number | null }> = [
+    { label: "0–7 days", from: 0, to: RELEASE_FRESH_DAYS },
+    { label: "8–14 days", from: RELEASE_FRESH_DAYS, to: 14 },
+    { label: `15–${retroWindowDays} days`, from: 14, to: retroWindowDays },
+    { label: `${retroWindowDays}+ days`, from: retroWindowDays, to: null },
+  ];
+
+  // Raw SQL rather than the query builder: this groups by select
+  // aliases, which Postgres allows but Kysely doesn't model cleanly.
+  // Same reasoning as loadState in scheduler.ts.
+  //
+  // Age uses the same published_at-with-ingested_at-fallback rule the
+  // compose window applies, so the bands mean what the pipeline means.
+  const result = await sql<{
+    age_days: number;
+    passed_gate: boolean;
+    structural: number;
+    n: number;
+  }>`
+    SELECT
+      floor(extract(epoch from (now() - coalesce(story.published_at, story.ingested_at))) / 86400)::int AS age_days,
+      story.passed_gate,
+      coalesce(story.structural_importance, 0) AS structural,
+      count(story.id)::int AS n
+    FROM story
+    WHERE story.published_to_reader = false
+      AND story.scored_at IS NOT NULL
+      AND story.source_name <> 'wikipedia'
+    GROUP BY age_days, story.passed_gate, structural
+  `.execute(db);
+  const rows = result.rows;
+
+  return bands.map((b) => {
+    let passing = 0;
+    let durable = 0;
+    for (const r of rows) {
+      const age = Number(r.age_days);
+      if (age < b.from) continue;
+      if (b.to !== null && age >= b.to) continue;
+      const n = Number(r.n);
+      if (r.passed_gate) passing += n;
+      else if (Number(r.structural) >= DURABLE_STRUCTURAL_MIN) durable += n;
+    }
+    return { ...b, passing, durable, stranded: b.from >= RELEASE_FRESH_DAYS };
+  });
+}
+
+// The catch-up shortlist. Mirrors loadRetroRows in compose.ts — same
+// window, same ranking, same gate-agnosticism — so what the operator
+// ticks here is what the editor actually sees.
+async function loadRetroCandidates(
+  retroWindowDays: number,
+): Promise<RetroCandidate[]> {
+  const now = Date.now();
+  const freshCutoff = new Date(now - RELEASE_FRESH_DAYS * 24 * 3600_000);
+  const retroCutoff = new Date(now - retroWindowDays * 24 * 3600_000);
+
+  const rows = await db
+    .selectFrom("story")
+    .leftJoin("theme", "theme.id", "story.theme_id")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select([
+      "story.id as story_id",
+      "story.title",
+      "story.source_url",
+      "story.scorer_summary",
+      "story.passed_gate",
+      "story.published_at",
+      "story.ingested_at",
+      "story.zeitgeist_score",
+      "story.half_life",
+      "story.structural_importance",
+      "category.slug as category_slug",
+      "theme.name as theme_name",
+    ])
+    .where("story.published_to_reader", "=", false)
+    .where("story.scored_at", "is not", null)
+    .where("story.source_name", "!=", "wikipedia")
+    .where((eb) =>
+      eb.or([
+        eb.and([
+          eb("story.published_at", "is not", null),
+          eb("story.published_at", "<", freshCutoff),
+          eb("story.published_at", ">=", retroCutoff),
+        ]),
+        eb.and([
+          eb("story.published_at", "is", null),
+          eb("story.ingested_at", "<", freshCutoff),
+          eb("story.ingested_at", ">=", retroCutoff),
+        ]),
+      ]),
+    )
+    .orderBy(
+      sql`coalesce(story.structural_importance, 0) * coalesce(story.half_life, 0)`,
+      "desc",
+    )
+    .orderBy("story.composite", "desc")
+    // Show more than retro_max_items so the operator picks from a real
+    // shortlist rather than being handed the ranking's own answer.
+    .limit(40)
+    .execute();
+
+  return rows.map((r) => {
+    const when = r.published_at ?? r.ingested_at;
+    return {
+      storyId: Number(r.story_id),
+      title: r.title,
+      sourceUrl: r.source_url,
+      category: r.category_slug,
+      themeName: r.theme_name,
+      ageDays: Math.max(
+        0,
+        Math.floor((now - when.getTime()) / (24 * 3600_000)),
+      ),
+      structural: r.structural_importance ?? 0,
+      halfLife: r.half_life ?? 0,
+      zeitgeist: r.zeitgeist_score ?? 0,
+      passedGate: r.passed_gate,
+      oneLiner: r.scorer_summary ?? "",
+    };
+  });
 }

@@ -215,7 +215,10 @@ function renderUserMessage(input: EditorInput): string {
     }
   }
 
-  lines.push("stories (ordered by composite score; all have passed the gate):", "");
+  lines.push(
+    "stories (ordered by composite score; all passed the gate unless flagged catch_up):",
+    "",
+  );
   for (const s of input.stories) {
     lines.push(`  - story_id: ${s.story_id}`);
     lines.push(`    title: ${s.title}`);
@@ -224,6 +227,13 @@ function renderUserMessage(input: EditorInput): string {
       `    theme: ${s.theme_name ?? "-"}${s.theme_id !== null ? ` (id=${s.theme_id})` : ""}`,
     );
     lines.push(`    published_at: ${s.published_at ?? "-"}`);
+    // Only rendered for catch-up items, so a normal run's prompt is
+    // byte-identical to v0.4's and its cache entries still hit.
+    if (s.catch_up) {
+      lines.push(
+        `    catch_up: true  age_days: ${s.age_days}  (durable-significance pick, may not have passed the gate — judge on structural_importance)`,
+      );
+    }
     lines.push(`    composite: ${s.composite}`);
     lines.push(
       `    zeitgeist: ${s.zeitgeist} half_life: ${s.half_life} reach: ${s.reach} non_obviousness: ${s.non_obviousness}`,

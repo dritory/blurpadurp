@@ -5,6 +5,7 @@
 // containing every currently-passing, unpublished story.
 
 import { sql } from "kysely";
+import { getConfigNumber } from "../shared/config-store.ts";
 
 import { makeComposer } from "../ai/composer.ts";
 import { makeEditor } from "../ai/editor.ts";
@@ -65,6 +66,36 @@ const EDITOR_PROMPT_PATH = "docs/editor-prompt.md";
 // URLs can't smuggle ancient material into the brief.
 const COMPOSE_STORY_MAX_AGE_MS = 7 * 24 * 3600_000;
 
+// Catch-up ("retro") composition. After a gap in publishing, everything
+// older than the window above is invisible to the editor and never
+// ships — it simply ages out. A catch-up run adds a bounded set of
+// older stories to the pool.
+//
+// It deliberately does NOT widen the window above. The gate is
+// explicitly "discussed NOW" (docs/scoring-prompt.md), so re-ranking
+// three-week-old stories by composite sorts them by how loud they were
+// three weeks ago — a stale trending list, which is the algorithmic
+// recency artifact this product exists to reject. Catch-up items are
+// instead ranked on structural_importance × half_life, the durable
+// axis, which is already scored on every story and deliberately does
+// NOT enter the composite (docs/scoring.md).
+//
+// It also ignores passed_gate. A gate-failing story can be highly
+// structural — that's the quiet×significant quadrant the editor rubric
+// already asks for, and the gate was measuring the wrong thing for
+// these items anyway.
+const DEFAULT_RETRO_WINDOW_DAYS = 21;
+const DEFAULT_RETRO_MAX_ITEMS = 8;
+
+export interface RetroOptions {
+  // Explicit story ids chosen by the operator on /admin/release. When
+  // present, these are the catch-up pool verbatim (still age- and
+  // unpublished-filtered) instead of the ranked top-N. Picking which
+  // quiet items still deserve air is editorial judgment, so the console
+  // offers it rather than trusting a ranking function.
+  storyIds?: number[];
+}
+
 export type ConfigMap = {
   "composer.model_id": string;
   "composer.prompt_version": string;
@@ -78,15 +109,20 @@ export type ConfigMap = {
   "compose.min_publish_gap_hours": number;
 };
 
-export async function compose(): Promise<void> {
+// `retro` turns this into a catch-up run: the pool gains a bounded set
+// of older, durably-significant stories that the 7-day window would
+// otherwise strand. Set from /admin/release (via pipeline_force_run
+// .args) or `bun run cli compose --retro`; the scheduled weekly run
+// never passes it.
+export async function compose(retro?: RetroOptions): Promise<void> {
   if (await isLockHeld("score")) {
     console.log("[compose] score is still running, skipping");
     return;
   }
-  await withLock("compose", 15 * 60_000, runCompose);
+  await withLock("compose", 15 * 60_000, () => runCompose(retro));
 }
 
-async function runCompose(): Promise<void> {
+async function runCompose(retro?: RetroOptions): Promise<void> {
   // One open draft at a time. If a previous run produced a draft that
   // hasn't been published or discarded yet, bail — the operator needs
   // to resolve it. Prevents the next cron firing from stealing fresh
@@ -115,7 +151,11 @@ async function runCompose(): Promise<void> {
     .where("is_draft", "=", false)
     .where("is_event_driven", "=", false)
     .executeTakeFirst();
-  if (lastPublished?.last) {
+  // A catch-up run is an explicit operator action, not the cadence
+  // firing, so the gap guard doesn't apply — it exists to stop the
+  // schedule double-firing. The open-draft guard above still does:
+  // that one is about correctness, not timing.
+  if (lastPublished?.last && retro === undefined) {
     const ageHours = (Date.now() - lastPublished.last.getTime()) / 3600_000;
     if (ageHours < gapHours) {
       console.log(
@@ -125,7 +165,7 @@ async function runCompose(): Promise<void> {
     }
   }
 
-  const draft = await produceDraft();
+  const draft = await produceDraft("live", retro);
   if (draft === null) return;
 
   // Gloss-lint the fresh draft: log un-glossed acronyms/jargon and bump
@@ -210,6 +250,7 @@ export interface DraftProduction {
 // replay picks up a staged prompt so the provenance is recoverable.
 export async function produceDraft(
   mode: PromptMode = "live",
+  retro?: RetroOptions,
 ): Promise<DraftProduction | null> {
   // Step 0: config + prompts + the composer/editor stage instances.
   const run = await setupComposeRun(mode);
@@ -218,7 +259,41 @@ export async function produceDraft(
   // grouped into the theme-first editor pool. Null = nothing to compose.
   const gate = await loadGatePool(run.cfg);
   if (gate === null) return null;
-  const { pool, poolThemeMeta, cutoff } = gate;
+  const { poolThemeMeta, cutoff } = gate;
+  let pool = gate.pool;
+
+  // Step 1b (catch-up runs only): append a bounded set of older,
+  // durably-significant stories. Appended AFTER theme-first selection
+  // rather than fed through it — selectEditorPool ranks on composite,
+  // which is the axis catch-up items are deliberately not judged on.
+  // The editor still sees them as one pool and may cut them all.
+  if (retro !== undefined) {
+    const retroRows = await loadRetroRows(retro);
+    if (retroRows.length > 0) {
+      const already = new Set(pool.map((p) => Number(p.row.story_id)));
+      const retroEntries: EditorPoolEntry[] = retroRows
+        .filter((r) => !already.has(Number(r.story_id)))
+        .map((row) => {
+          // Same source-count derivation selectEditorPool applies to
+          // fresh rows — the editor reads these as corroboration, so
+          // they must mean the same thing for both halves of the pool.
+          const urls = [
+            ...(row.source_url ? [row.source_url] : []),
+            ...(row.additional_source_urls ?? []),
+          ];
+          return {
+            row,
+            tier1: countTier1(urls),
+            total: urls.length,
+            catchUp: true,
+          };
+        });
+      pool = [...pool, ...retroEntries];
+      console.log(
+        `[compose] pool ${gate.pool.length} fresh + ${retroEntries.length} catch-up = ${pool.length}`,
+      );
+    }
+  }
 
   // Step 2: editor curation — pick 10-15 from the pool.
   const { output: editorResult, input: editorInput } = await curateViaEditor(
@@ -282,10 +357,42 @@ export async function produceDraft(
   };
 }
 
+// The pool SELECT shape. Shared verbatim by the gate pool, the catch-up
+// pool, and the rowsForEditor type helper — PoolRow is derived from it,
+// so a column added here reaches all three and none of them can drift
+// into a different row shape.
+const POOL_COLUMNS = [
+  "story.id as story_id",
+  "story.title",
+  "story.summary",
+  "story.source_url",
+  "story.additional_source_urls",
+  "category.slug as category_slug",
+  "theme.name as theme_name",
+  "story.theme_id",
+  "story.theme_relationship",
+  "story.published_at",
+  "story.zeitgeist_score",
+  "story.half_life",
+  "story.reach",
+  "story.non_obviousness",
+  "story.composite",
+  "story.point_in_time_confidence",
+  "story.raw_output",
+  "story.payload_key",
+] as const;
+
 // One row of the gate-pool query. The pool query and rowsForEditor share
 // an identical SELECT shape, so they share this type.
 type PoolRow = Awaited<ReturnType<typeof rowsForEditor>>[number];
-type EditorPoolEntry = { row: PoolRow; tier1: number; total: number };
+type EditorPoolEntry = {
+  row: PoolRow;
+  tier1: number;
+  total: number;
+  // Catch-up item (see RetroOptions). Drives the editor-input flag so
+  // the prompt can judge it on durability rather than stale zeitgeist.
+  catchUp?: boolean;
+};
 // A materialized pick: the ComposerItem plus the pool rows it came from
 // (kept for partition routing and theme bookkeeping).
 interface BuiltItem {
@@ -360,26 +467,7 @@ async function loadGatePool(cfg: ConfigMap): Promise<{
     .selectFrom("story")
     .leftJoin("theme", "theme.id", "story.theme_id")
     .leftJoin("category", "category.id", "story.category_id")
-    .select([
-      "story.id as story_id",
-      "story.title",
-      "story.summary",
-      "story.source_url",
-      "story.additional_source_urls",
-      "category.slug as category_slug",
-      "theme.name as theme_name",
-      "story.theme_id",
-      "story.theme_relationship",
-      "story.published_at",
-      "story.zeitgeist_score",
-      "story.half_life",
-      "story.reach",
-      "story.non_obviousness",
-      "story.composite",
-      "story.point_in_time_confidence",
-      "story.raw_output",
-      "story.payload_key",
-    ])
+    .select(POOL_COLUMNS)
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
     .where("story.ingested_at", ">=", cutoff)
@@ -436,6 +524,78 @@ async function loadGatePool(cfg: ConfigMap): Promise<{
   const poolThemeMeta = await loadThemeMeta(poolThemeIds);
 
   return { pool, poolThemeMeta, cutoff };
+}
+
+// Catch-up pool: unpublished stories BETWEEN the retro window and the
+// normal freshness cutoff (i.e. too old for the main pool), ranked by
+// durable significance. See the RetroOptions header for why this axis
+// and why passed_gate is ignored.
+//
+// Returns [] when nothing qualifies — a catch-up run with no worthwhile
+// backlog is just a normal run, not an error.
+async function loadRetroRows(opts: RetroOptions): Promise<PoolRow[]> {
+  const windowDays = await getConfigNumber(
+    "compose.retro_window_days",
+    DEFAULT_RETRO_WINDOW_DAYS,
+  );
+  const maxItems = Math.floor(
+    await getConfigNumber("compose.retro_max_items", DEFAULT_RETRO_MAX_ITEMS),
+  );
+  const now = Date.now();
+  const freshCutoff = new Date(now - COMPOSE_STORY_MAX_AGE_MS);
+  const retroCutoff = new Date(now - windowDays * 24 * 3600_000);
+
+  let q = db
+    .selectFrom("story")
+    .leftJoin("theme", "theme.id", "story.theme_id")
+    .leftJoin("category", "category.id", "story.category_id")
+    .select(POOL_COLUMNS)
+    .where("story.published_to_reader", "=", false)
+    .where("story.scored_at", "is not", null)
+    .where("story.source_name", "!=", "wikipedia")
+    // Older than the fresh window but inside the catch-up window. Same
+    // published_at-with-ingested_at-fallback treatment as the main pool
+    // so a re-ingested archive URL can't smuggle ancient material in.
+    .where((eb) =>
+      eb.or([
+        eb.and([
+          eb("story.published_at", "is not", null),
+          eb("story.published_at", "<", freshCutoff),
+          eb("story.published_at", ">=", retroCutoff),
+        ]),
+        eb.and([
+          eb("story.published_at", "is", null),
+          eb("story.ingested_at", "<", freshCutoff),
+          eb("story.ingested_at", ">=", retroCutoff),
+        ]),
+      ]),
+    );
+
+  if (opts.storyIds !== undefined) {
+    if (opts.storyIds.length === 0) return [];
+    // Operator-chosen ids. Still window- and unpublished-filtered above,
+    // so a stale console tab can't resurrect an already-published story.
+    q = q.where("story.id", "in", opts.storyIds);
+  }
+
+  const rows = await q
+    .orderBy(
+      sql`coalesce(story.structural_importance, 0) * coalesce(story.half_life, 0)`,
+      "desc",
+    )
+    .orderBy("story.composite", "desc")
+    .limit(opts.storyIds !== undefined ? opts.storyIds.length : maxItems)
+    .execute();
+
+  if (rows.length === 0) {
+    console.log("[compose] catch-up: nothing in the backlog window");
+    return [];
+  }
+  await hydrateRawOutput(rows);
+  console.log(
+    `[compose] catch-up: ${rows.length} item(s) from the ${windowDays}-day backlog window (ranked on structural_importance × half_life, gate ignored)`,
+  );
+  return rows;
 }
 
 // Step 2 (cont.): materialize each normalized editor pick into a
@@ -655,6 +815,17 @@ async function buildComposerInput(
 // so we can surface it to the editor) and call the editor stage. Returns
 // the editor's full output so compose can persist cuts_summary onto the
 // issue for the admin review page.
+// Whole days since publication. 0 for undated rows — the editor only
+// reads this on catch-up items, which the pool query already bounded by
+// date, so an unknown age there is better shown as 0 than guessed at.
+function ageDays(publishedAt: Date | null): number {
+  if (publishedAt === null) return 0;
+  return Math.max(
+    0,
+    Math.floor((Date.now() - publishedAt.getTime()) / (24 * 3600_000)),
+  );
+}
+
 async function curateViaEditor(
   editor: ReturnType<typeof makeEditor>,
   pool: EditorPoolEntry[],
@@ -678,6 +849,8 @@ async function curateViaEditor(
       theme_id: p.row.theme_id !== null ? Number(p.row.theme_id) : null,
       theme_name: p.row.theme_name,
       published_at: p.row.published_at?.toISOString() ?? null,
+      catch_up: p.catchUp === true,
+      age_days: ageDays(p.row.published_at),
       composite: p.row.composite !== null ? Number(p.row.composite) : 0,
       zeitgeist: p.row.zeitgeist_score ?? 0,
       half_life: p.row.half_life ?? 0,
@@ -865,26 +1038,7 @@ async function rowsForEditor() {
     .selectFrom("story")
     .leftJoin("theme", "theme.id", "story.theme_id")
     .leftJoin("category", "category.id", "story.category_id")
-    .select([
-      "story.id as story_id",
-      "story.title",
-      "story.summary",
-      "story.source_url",
-      "story.additional_source_urls",
-      "category.slug as category_slug",
-      "theme.name as theme_name",
-      "story.theme_id",
-      "story.theme_relationship",
-      "story.published_at",
-      "story.zeitgeist_score",
-      "story.half_life",
-      "story.reach",
-      "story.non_obviousness",
-      "story.composite",
-      "story.point_in_time_confidence",
-      "story.raw_output",
-      "story.payload_key",
-    ])
+    .select(POOL_COLUMNS)
     .where("story.passed_gate", "=", true)
     .where("story.published_to_reader", "=", false)
     .orderBy("story.composite", "desc")
