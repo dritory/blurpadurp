@@ -61,6 +61,16 @@ is how the drift hid last time.
 - **compose** partitions picks into four fixed sections server-side,
   then runs the composer model to write prose
   (`docs/composer-prompt.md`).
+  A **catch-up run** (`compose(retro)`, from `/admin/release` or
+  `bun run cli compose --retro`) additionally pulls a bounded set of
+  8–21-day-old unpublished stories that the 7-day window would strand.
+  These are ranked on `structural_importance × half_life` and **ignore
+  `passed_gate`** — the gate is "discussed NOW", so re-ranking old
+  stories by composite would just sort them by how loud they were then.
+  Don't "simplify" this by widening `COMPOSE_STORY_MAX_AGE_MS`; that
+  reintroduces exactly the stale-trending-list failure the split
+  avoids. Catch-up items reach the editor flagged `catch_up: true`
+  (editor v0.5 tells it to judge them on durability).
 - **autopublish** (`src/pipeline/autopublish.ts`) runs hourly and does
   two things: auto-fixes any open draft that hasn't been through the
   checker yet (so the draft you open is already glossed), and publishes
@@ -180,6 +190,7 @@ medium**. This shapes partition choices:
 | Failure | Where fixed | File |
 |---|---|---|
 | Composer leaves an acronym/jargon un-glossed on first use (slips past the prompt one or two per issue) | Two advisory layers on `/admin/review`, both non-blocking: (1) deterministic linter — acronym regex + curated `gloss_term` list (mig 062), zero-cost recall floor, hit-bumped at compose, managed at `/admin/gloss-terms`; (2) on-demand `checker` (Haiku, task-tagged so future review tasks bolt on) the operator triggers per draft — catches the un-listed long tail + judges gloss adequacy, grounded on the deterministic findings, persisted on `issue.check_jsonb` (mig 064). On a draft, "Propose fix" feeds findings back as composer `revision_notes` and re-composes into a **non-destructive candidate** (`issue.fix_candidate_jsonb`, mig 065) — re-checked and previewed inline; the live draft changes only on explicit Accept (Discard drops it). Any re-compose/edit nulls the stale result + pending candidate. **As of mig 066 this runs automatically** — the autopublish sweep calls `autoFixDraft` on any draft with no `auto_fix_jsonb`, applying up to `compose.auto_fix_max_passes` (2) check→fix→re-check rounds directly, with the pre-fix prose kept on `issue.auto_fix_jsonb` for before/after. A pass is accepted only if it strictly *reduces* the finding count, so a thrashing composer can't make the brief worse on the way to its deadline. The manual propose→preview→accept path is unchanged and still there | `src/shared/gloss-lint.ts`, `src/ai/checker.ts`, `src/shared/auto-fix.ts` |
+| Operator can't tell a blocked pipeline from a quiet week, and can't drive a release from the web (every parameterized op was CLI-only because `pipeline_force_run` had nowhere to put an argument) | `/admin/release`: blockers (open draft, lock, cadence gap, next anchored compose), unpublished-backlog counts by age band with the stranded bands flagged, and a catch-up picker. `pipeline_force_run.args` (mig 067) carries stage parameters, so `/admin/run/:stage` can finally say *how* to run, not just *that* it should | `src/views/admin-release.tsx`, `src/api/admin.tsx` |
 | One forgotten draft silently stalls the whole pipeline (`runCompose` bails while any `is_draft` row exists, so every later compose no-ops with only a log line — this ate three weeks of briefs once, and a blocked pipeline looked exactly like a quiet one) | The autopublish sweep: a draft that can't sit forever can't block forever. Backed by the `/admin/review` banner, which states the actual publish time for an open draft instead of leaving the deadline implicit | `src/pipeline/autopublish.ts`, `src/views/admin-review.tsx` |
 | Same story appears in consecutive issues | `persistIssue` flips `published_to_reader = true` | `src/pipeline/compose.ts` |
 | Shrug items recur across runs | Shrug IDs included in the published-set | `src/pipeline/compose.ts` |

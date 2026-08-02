@@ -17,6 +17,7 @@ import type { FC } from "hono/jsx";
 const HTMX_SRC = "/assets/vendor/htmx-2.0.4.min.js";
 
 export type AdminNavKey =
+  | "release"
   | "issues"
   | "prompts"
   | "explore"
@@ -36,6 +37,7 @@ export type AdminNavKey =
   | null;
 
 const ITEMS: Array<{ key: Exclude<AdminNavKey, null>; href: string; label: string }> = [
+  { key: "release", href: "/admin/release", label: "Release" },
   { key: "issues", href: "/admin/issues", label: "Issues" },
   { key: "prompts", href: "/admin/prompts", label: "Prompts" },
   { key: "explore", href: "/admin/explore", label: "Explore" },

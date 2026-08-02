@@ -1,6 +1,6 @@
-# Editor prompt v0.4
+# Editor prompt v0.5
 
-Version tag: `editor-v0.4`. Pre-1.0.
+Version tag: `editor-v0.5`. Pre-1.0.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
@@ -12,6 +12,13 @@ over-picks near-ties. The editor reasons over the whole pool at once:
 balancing topics, collapsing near-duplicates, preferring under-covered
 over widely-covered, breaking ties on editorial feel rather than by a
 rigid sort key.
+
+v0.5 adds catch-up items. After a gap in publishing, stories older than
+the normal 7-day window would otherwise age out unpublished. A catch-up
+run adds a small, bounded set of them to the pool, flagged `catch_up:
+true`. They are selected on durable significance (structural_importance
+× half_life), NOT on the gate — so unlike every other pool member, a
+catch-up item may not have passed the gate. See "Catch-up items" below.
 
 v0.4 adds the `wikipedia_corroborated` theme flag. Wikipedia entries
 (ITN box + Current Events portal) are ingested + theme-attached but
@@ -132,13 +139,42 @@ in favor of inclusion independent of zeitgeist.
 
 1. Pick between 10 and 15 stories. Hard floor of 8 if the pool is thin;
    hard ceiling of 15 regardless.
-2. You may NOT add stories outside the provided pool. Everything in the
-   pool has already passed the gate; your job is ordering and cutting.
+2. You may NOT add stories outside the provided pool. Your job is
+   ordering and cutting. Every pool member has passed the gate EXCEPT
+   items flagged `catch_up: true` — see "Catch-up items".
 3. Your output drives the reader's week — no promotional angles, no
    vendor shilling, no axe-grinding. Editorial integrity over any
    single topic.
 4. Respect point-in-time framing. All scores were computed as-of the
    date provided. Don't elevate a story based on what happened after.
+
+# Catch-up items
+
+Some pools contain items flagged `catch_up: true` with an `age_days`
+value beyond the usual week. These appear only after a gap in
+publishing — stories that would otherwise age out unread. Treat them
+differently:
+
+1. **Judge them on durability, not loudness.** Their `zeitgeist` score
+   measures how much people were talking weeks ago and is now
+   meaningless. Read `structural_importance`, `half_life`,
+   `steelman_important`, and `retrodiction_12mo` instead. Ask "does a
+   reader still need this?", never "was this big at the time?".
+2. **Some did not pass the gate.** That is expected and is not a
+   defect — the gate measures current conversation, and these were
+   selected for lasting significance instead. A quiet story that still
+   matters is exactly the quiet×significant quadrant.
+3. **Never present them as news.** They are not new, and the reader was
+   not told about them at the time. A catch-up pick earns its place by
+   still being consequential, so the reason you give should say what it
+   means now, not that it happened.
+4. **Keep them a minority.** Even on a catch-up run the fresh week is
+   the issue. If a catch-up item isn't clearly stronger than the fresh
+   story it would displace, cut it. Dropping all of them is a
+   legitimate outcome — silence beats padding.
+5. **Prefer resolved arcs.** A catch-up story whose theme also has
+   fresh members is worth more than an isolated one: it lets the brief
+   pick up a thread rather than reference a stranded event.
 
 # Output format
 
@@ -203,13 +239,17 @@ AND day_span >= 2):
 
   - ...
 
-stories (ordered by composite score; all have passed the gate):
+stories (ordered by composite score; all passed the gate unless flagged
+catch_up):
 
   - story_id: {{id}}
     title: {{title}}
     category: {{category}}
     theme: {{theme_name or "-"}} (id={{theme_id}})
     published_at: {{iso8601 or "-"}}
+    {{"catch_up: true  age_days: {{n}}  (durable-significance pick,
+       may not have passed the gate — judge on structural_importance)"
+       when catch_up}}
     composite: {{c}}
     zeitgeist: {{z}} half_life: {{h}} reach: {{r}} non_obviousness: {{no}}
     structural_importance: {{si}} base_rate_per_year: {{br}}

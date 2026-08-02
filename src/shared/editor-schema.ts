@@ -30,6 +30,14 @@ export const EditorInputSchema = z.object({
       theme_id: z.number().nullable(),
       theme_name: z.string().nullable(),
       published_at: z.string().nullable(), // ISO 8601; enables arc chronology
+      // Catch-up pick (editor v0.5): older than the normal freshness
+      // window, selected on structural_importance × half_life rather
+      // than the gate — so unlike every other pool member it may have
+      // passed_gate = false. Its zeitgeist score is a stale
+      // point-in-time reading and should not drive the decision.
+      catch_up: z.boolean().default(false),
+      // Whole days since published_at (or ingested_at when undated).
+      age_days: z.number().default(0),
       composite: z.number(),
       zeitgeist: z.number(),
       half_life: z.number(),

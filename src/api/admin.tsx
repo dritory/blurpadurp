@@ -97,6 +97,7 @@ import {
   AdminGlossTerms,
 } from "../views/admin-gloss-terms.tsx";
 import { validateTitleRegex } from "../shared/title-noise.ts";
+import { AdminRelease, type ReleaseData } from "../views/admin-release.tsx";
 import {
   runCheckAndStore,
   runCheckOnMarkdown,
@@ -126,6 +127,7 @@ import {
   loadPathFiltersData,
   loadTitleFiltersData,
   loadGlossTermsData,
+  loadReleaseData,
   loadSchedulerData,
   loadStoriesData,
   loadStoryDrilldown,
@@ -157,8 +159,95 @@ import {
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
 
+// Queue a stage for the next scheduler tick, with an optional jsonb
+// payload (mig 067). UPSERT rather than DO NOTHING: `stage` is the
+// primary key, which usefully caps the queue at one pending run per
+// stage, but with args in play a second request carrying *different*
+// parameters must replace the first rather than be silently dropped.
+async function queueStageRun(stage: string, args: unknown): Promise<void> {
+  const payload = args === null ? null : (JSON.stringify(args) as never);
+  await db
+    .insertInto("pipeline_force_run")
+    .values({ stage, args: payload })
+    .onConflict((oc) =>
+      oc.column("stage").doUpdateSet({ args: payload, requested_at: new Date() }),
+    )
+    .execute();
+}
+
 export function registerAdminRoutes(app: Hono): void {
   app.get("/admin", (c) => c.redirect("/admin/issues", 302));
+
+  app.get("/admin/release", async (c) => {
+    const q = c.req.query();
+    let flash: ReleaseData["flash"] = null;
+    if (q.queued === "plain")
+      flash = { kind: "ok", msg: "Normal compose queued — fresh week only." };
+    else if (q.queued === "ranked")
+      flash = {
+        kind: "ok",
+        msg: "Catch-up compose queued with the top-ranked backlog items.",
+      };
+    else if (q.queued === "selected")
+      flash = {
+        kind: "ok",
+        msg: `Catch-up compose queued with ${q.n ?? "0"} selected item(s).`,
+      };
+    else if (q.error === "draft_open")
+      flash = {
+        kind: "err",
+        msg: "An open draft blocks compose — publish or discard it first.",
+      };
+    else if (q.error === "no_selection")
+      flash = {
+        kind: "err",
+        msg: "No stories selected. Tick some, or use one of the other two buttons.",
+      };
+    return c.html(<AdminRelease data={await loadReleaseData(flash)} />);
+  });
+
+  // Queue a compose run from the console. Three modes: 'plain' (fresh
+  // week only), 'ranked' (fresh week + top-N backlog by durable
+  // significance), 'selected' (fresh week + exactly these story ids).
+  //
+  // Queues rather than runs: compose can take minutes and the web
+  // machine idle-stops out from under long work, which is why manual
+  // triggers have always gone through pipeline_force_run (mig 043).
+  app.post("/admin/release/compose", async (c) => {
+    const body = await c.req.parseBody({ all: true });
+    const mode = String(body.mode ?? "plain");
+
+    // Refuse early rather than letting the operator queue a run that
+    // compose will silently skip — that indistinguishability is the
+    // whole reason this page exists.
+    const openDraft = await db
+      .selectFrom("issue")
+      .select("id")
+      .where("is_draft", "=", true)
+      .executeTakeFirst();
+    if (openDraft !== undefined) {
+      return c.redirect("/admin/release?error=draft_open", 303);
+    }
+
+    if (mode === "plain") {
+      await queueStageRun("compose", null);
+      return c.redirect("/admin/release?queued=plain", 303);
+    }
+    if (mode === "ranked") {
+      await queueStageRun("compose", { retro: true });
+      return c.redirect("/admin/release?queued=ranked", 303);
+    }
+
+    const raw = body.story_id;
+    const ids = (Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [])
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    if (ids.length === 0) {
+      return c.redirect("/admin/release?error=no_selection", 303);
+    }
+    await queueStageRun("compose", { retro: { storyIds: ids } });
+    return c.redirect(`/admin/release?queued=selected&n=${ids.length}`, 303);
+  });
 
   app.get("/admin/issues", async (c) => {
     const issues = await loadAdminIssues();
@@ -635,11 +724,7 @@ export function registerAdminRoutes(app: Hono): void {
   app.post("/admin/run/:stage", async (c) => {
     const stage = c.req.param("stage");
     if (getSchedulerStage(stage) === undefined) return c.text("unknown stage", 404);
-    await db
-      .insertInto("pipeline_force_run")
-      .values({ stage })
-      .onConflict((oc) => oc.column("stage").doNothing())
-      .execute();
+    await queueStageRun(stage, null);
     return c.redirect(`/admin/scheduler?triggered=${encodeURIComponent(stage)}`, 303);
   });
 

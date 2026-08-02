@@ -306,6 +306,9 @@ export interface Database {
   pipeline_force_run: {
     stage: string;
     requested_at: Generated<Date>;
+    // Optional stage parameters (mig 067) — e.g. compose's
+    // {"retro": {"storyIds": [...]}}. NULL means a plain run.
+    args: Jsonb | null;
   };
 
   url_path_filter: {

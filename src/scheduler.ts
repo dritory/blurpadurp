@@ -15,7 +15,7 @@ import { sql } from "kysely";
 import { db } from "./db/index.ts";
 import { ingest } from "./pipeline/ingest.ts";
 import { score } from "./pipeline/score.ts";
-import { compose } from "./pipeline/compose.ts";
+import { compose, type RetroOptions } from "./pipeline/compose.ts";
 import { autopublish } from "./pipeline/autopublish.ts";
 import { dispatch } from "./pipeline/dispatch.ts";
 import { retention } from "./pipeline/retention.ts";
@@ -29,7 +29,10 @@ const TICK_INTERVAL_MS = 60 * 60_000;
 
 export interface StageJob {
   stage: string;
-  run: () => Promise<void>;
+  // `args` carries the jsonb payload from pipeline_force_run (mig 067)
+  // for manually triggered runs, and is undefined on the cron path.
+  // Stages that take no parameters simply ignore it.
+  run: (args?: unknown) => Promise<void>;
 }
 
 // Order matters within a single tick: ingest first (downstream sees
@@ -40,11 +43,28 @@ export interface StageJob {
 const STAGES: StageJob[] = [
   { stage: "ingest", run: ingest },
   { stage: "score", run: score },
-  { stage: "compose", run: compose },
+  { stage: "compose", run: (args) => compose(parseRetroArgs(args)) },
   { stage: "autopublish", run: autopublish },
   { stage: "dispatch", run: dispatch },
   { stage: "retention", run: retention },
 ];
+
+// Decode compose's force-run payload. Shape: {"retro": true} for a
+// ranked catch-up run, or {"retro": {"storyIds": [1,2,3]}} for an
+// operator-chosen set from /admin/release. Anything else means a normal
+// run — a malformed payload must not silently become a catch-up.
+export function parseRetroArgs(args: unknown): RetroOptions | undefined {
+  if (args === null || typeof args !== "object") return undefined;
+  const retro = (args as { retro?: unknown }).retro;
+  if (retro === true) return {};
+  if (retro === null || typeof retro !== "object") return undefined;
+  const ids = (retro as { storyIds?: unknown }).storyIds;
+  if (!Array.isArray(ids)) return {};
+  const storyIds = ids
+    .map((v) => Number(v))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return { storyIds };
+}
 
 export function getStage(name: string): StageJob | undefined {
   return STAGES.find((s) => s.stage === name);
@@ -64,6 +84,8 @@ interface StageState {
   last_success_at: Date | null;
   cron_dow: number | null;
   cron_hour: number | null;
+  // Payload of the pending force-run row, if any (mig 067).
+  forced_args: unknown;
 }
 
 // Is an anchored stage due? Anchored stages (mig 066) fire on a fixed
@@ -109,6 +131,7 @@ async function loadState(): Promise<StageState[]> {
     last_success_at: Date | null;
     cron_dow: number | null;
     cron_hour: number | null;
+    forced_args: unknown;
   }>`
     SELECT
       s.stage,
@@ -119,6 +142,9 @@ async function loadState(): Promise<StageState[]> {
       EXISTS (
         SELECT 1 FROM pipeline_force_run f WHERE f.stage = s.stage
       ) AS forced,
+      (
+        SELECT f.args FROM pipeline_force_run f WHERE f.stage = s.stage
+      ) AS forced_args,
       (
         SELECT pr.completed_at
         FROM pipeline_run pr
@@ -176,13 +202,13 @@ export async function runTick(): Promise<void> {
   // the DB again. If nothing is due and nothing is forced, exit
   // without further queries — the DB then idle-suspends on Neon
   // within the timeout window.
-  const ready: Array<{ job: StageJob; forced: boolean }> = [];
+  const ready: Array<{ job: StageJob; forced: boolean; args?: unknown }> = [];
   for (const job of STAGES) {
     const s = byStage.get(job.stage);
     if (s === undefined) continue;
     if (!s.enabled) continue;
     if (s.forced) {
-      ready.push({ job, forced: true });
+      ready.push({ job, forced: true, args: s.forced_args });
       continue;
     }
     // Anchored stages ignore interval_sec entirely — the calendar slot
@@ -214,7 +240,7 @@ export async function runTick(): Promise<void> {
   console.log(
     `[scheduler] tick @ ${new Date().toISOString()} — ${ready.length} stage(s) firing`,
   );
-  for (const { job, forced } of ready) {
+  for (const { job, forced, args } of ready) {
     // Delete the force-run row before firing so a crash mid-run does
     // not auto-retry on the next tick. Operator re-queues by clicking
     // "Run now" again. Cron path is unaffected.
@@ -227,7 +253,7 @@ export async function runTick(): Promise<void> {
     console.log(
       `[scheduler] ${job.stage}: firing (${forced ? "manual" : "cron"})`,
     );
-    await runWithBookkeeping(job, forced ? "manual" : "cron");
+    await runWithBookkeeping(job, forced ? "manual" : "cron", args);
   }
   console.log(`[scheduler] tick done`);
 }
@@ -238,6 +264,7 @@ export async function runTick(): Promise<void> {
 export async function runWithBookkeeping(
   job: StageJob,
   triggeredBy: TriggerSource,
+  args?: unknown,
 ): Promise<void> {
   const t0 = Date.now();
   const inserted = await db
@@ -250,7 +277,7 @@ export async function runWithBookkeeping(
     .returning("id")
     .executeTakeFirstOrThrow();
   try {
-    await job.run();
+    await job.run(args);
     await db
       .updateTable("pipeline_run")
       .set({

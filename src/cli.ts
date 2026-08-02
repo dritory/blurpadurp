@@ -42,9 +42,24 @@ async function run(sub: Sub, args: string[]): Promise<void> {
     case "score":
       await (await import("./pipeline/score.ts")).score();
       return;
-    case "compose":
-      await (await import("./pipeline/compose.ts")).compose();
+    case "compose": {
+      // `compose --retro` adds the durable-significance backlog pool.
+      // Optional comma-separated ids pick an explicit set:
+      //   compose --retro 1201,1244,1310
+      const retroFlag = args.includes("--retro");
+      const idArg = args[args.indexOf("--retro") + 1];
+      const ids =
+        retroFlag && idArg !== undefined && !idArg.startsWith("--")
+          ? idArg
+              .split(",")
+              .map((s) => Number(s.trim()))
+              .filter((n) => Number.isInteger(n) && n > 0)
+          : undefined;
+      await (await import("./pipeline/compose.ts")).compose(
+        retroFlag ? (ids !== undefined ? { storyIds: ids } : {}) : undefined,
+      );
       return;
+    }
     case "autopublish":
       await (await import("./pipeline/autopublish.ts")).autopublish();
       return;

@@ -127,6 +127,13 @@ would catch this automatically — not built yet.
 **Symptom:** Weeks pass with no brief. Nothing errors. `/admin/scheduler`
 shows compose "succeeding" or simply never firing.
 
+**Start here: `/admin/release`.** It lists every current blocker (open
+draft, held lock, cadence gap, next anchored compose) and counts the
+unpublished backlog by age band, flagging the bands that are already
+past the 7-day compose window and will never ship through a normal run.
+That page exists specifically for this failure; the rest of this entry
+is the underlying mechanism.
+
 **Quick diagnosis:** Open `/admin/issues` and look for an open draft.
 `runCompose` bails while *any* `is_draft` row exists — it logs
 `[compose] open draft #N exists — publish or discard it first, skipping`
@@ -150,6 +157,25 @@ If the draft is simply stale (weeks old), **discard** rather than
 publish. Discarding deletes the issue row and returns its stories to the
 pool (they were never marked `published_to_reader`); publishing would
 mark three-week-old stories as used and burn them.
+
+**Recovering a backlog after a gap.** Once the blocking draft is gone,
+`/admin/release` shows what's strandable. A normal compose only ever
+sees the last 7 days, so anything older ages out unread. To recover it,
+queue a **catch-up run** from that page:
+
+- *Compose with selected* — you tick the specific stories. Preferred:
+  deciding which quiet items still deserve air is editorial judgment.
+- *Compose with top N by rank* — takes the highest
+  `structural_importance × half_life` items automatically.
+- *Compose fresh week only* — a plain run, ignoring the backlog.
+
+Catch-up candidates are ranked on durable significance and the gate is
+deliberately ignored, so gate-failing stories can and should appear —
+those are the quiet×significant picks. The fresh week is still selected
+normally and still dominates the issue; the editor may cut every
+catch-up item, which is a legitimate outcome. A catch-up run also
+bypasses `compose.min_publish_gap_hours`, since it's an explicit
+operator action rather than the cadence firing.
 
 **Root cause:** Pre-066, nothing bounded how long a draft could sit.
 Now the autopublish sweep does. If a draft is stuck *despite* the sweep,

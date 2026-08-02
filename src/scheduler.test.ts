@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { anchoredStageDue, nextAnchoredRun } from "./scheduler.ts";
+import {
+  anchoredStageDue,
+  nextAnchoredRun,
+  parseRetroArgs,
+} from "./scheduler.ts";
 
 // The calendar anchor (mig 066) exists because interval scheduling let
 // the draft day drift: "604800s since last success" moved forward by
@@ -123,5 +127,59 @@ describe("nextAnchoredRun", () => {
     expect(
       anchoredStageDue({ cron_dow: 6, cron_hour: 6, last_success_at: ranAt }, next),
     ).toBe(true);
+  });
+});
+
+// parseRetroArgs decides whether a queued compose is a catch-up run.
+// A catch-up run reaches past the freshness window and drops the gate,
+// so a malformed or unrecognised payload must fall back to a NORMAL
+// run — never silently widen the pool.
+describe("parseRetroArgs", () => {
+  test("{retro: true} → ranked catch-up (no explicit ids)", () => {
+    expect(parseRetroArgs({ retro: true })).toEqual({});
+  });
+
+  test("explicit story ids pass through", () => {
+    expect(parseRetroArgs({ retro: { storyIds: [3, 1, 2] } })).toEqual({
+      storyIds: [3, 1, 2],
+    });
+  });
+
+  test("numeric strings are coerced (form posts arrive as text)", () => {
+    expect(parseRetroArgs({ retro: { storyIds: ["10", "11"] } })).toEqual({
+      storyIds: [10, 11],
+    });
+  });
+
+  test("junk ids are dropped, not passed to SQL", () => {
+    expect(
+      parseRetroArgs({ retro: { storyIds: [5, "abc", -1, 0, 2.5, null, 7] } }),
+    ).toEqual({ storyIds: [5, 7] });
+  });
+
+  // An empty selection is still a catch-up run — loadRetroRows returns
+  // no rows for it, which degrades to a normal pool rather than
+  // silently reaching for the top-ranked backlog the operator didn't
+  // pick.
+  test("an empty id list stays an empty selection", () => {
+    expect(parseRetroArgs({ retro: { storyIds: [] } })).toEqual({
+      storyIds: [],
+    });
+  });
+
+  test("a retro object with no storyIds key means ranked", () => {
+    expect(parseRetroArgs({ retro: {} })).toEqual({});
+  });
+
+  test.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["an empty object", {}],
+    ["retro: false", { retro: false }],
+    ["retro: a string", { retro: "yes" }],
+    ["a bare number", 7],
+    ["an unrelated payload", { somethingElse: 1 }],
+  ])("%s → a normal run", (_label, input) => {
+    expect(parseRetroArgs(input)).toBeUndefined();
   });
 });
