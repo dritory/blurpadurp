@@ -108,12 +108,36 @@ export async function publishDraft(issueId: number): Promise<boolean> {
 }
 
 export async function discardDraft(issueId: number): Promise<boolean> {
-  const result = await db
-    .deleteFrom("issue")
-    .where("id", "=", issueId)
-    .where("is_draft", "=", true)
-    .executeTakeFirst();
-  return Number(result.numDeletedRows ?? 0) > 0;
+  // dispatch_log.issue_id REFERENCES issue(id) with no ON DELETE CASCADE
+  // (unlike issue_pick / issue_annotation). A draft that's been emailed
+  // to reviewers therefore has dispatch_log rows, and deleting the issue
+  // would hit the FK. Drop those rows first, in the same transaction —
+  // they log sends for an issue that never shipped, so there's nothing
+  // worth keeping. (Published issues are never deleted, so this only
+  // ever touches draft-send rows.)
+  return db.transaction().execute(async (tx) => {
+    // Drop send-log rows first (the FK points this way), but only for a
+    // genuine draft — the EXISTS guard keeps a non-draft id from
+    // clearing a published issue's audit log.
+    await tx
+      .deleteFrom("dispatch_log")
+      .where("issue_id", "=", issueId)
+      .where(({ exists, selectFrom }) =>
+        exists(
+          selectFrom("issue")
+            .select("id")
+            .where("id", "=", issueId)
+            .where("is_draft", "=", true),
+        ),
+      )
+      .execute();
+    const result = await tx
+      .deleteFrom("issue")
+      .where("id", "=", issueId)
+      .where("is_draft", "=", true)
+      .executeTakeFirst();
+    return Number(result.numDeletedRows ?? 0) > 0;
+  });
 }
 
 export type RecomposeResult =

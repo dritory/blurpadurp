@@ -2577,6 +2577,10 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     autoPublish: {
       enabled: await getConfigBool("compose.auto_publish_enabled", true),
       hours: await getConfigNumber("compose.auto_publish_hours", 24),
+      maxAgeHours: await getConfigNumber(
+        "compose.auto_publish_max_age_hours",
+        72,
+      ),
     },
     autoFix: (iss.auto_fix_jsonb as EditorReviewData["autoFix"]) ?? null,
     annotations: annotations.map((a) => ({
@@ -2923,7 +2927,41 @@ export function parseReviewFlash(
     return { kind: "err", msg: "Reviewer name can't be empty." };
   if (q.error === "not_draft_share")
     return { kind: "err", msg: "Preview links are only for drafts." };
+  if (q.resent === "1") return parseResentFlash(q);
+  if (q.error === "resend_failed")
+    return { kind: "err", msg: "Re-send failed — check server logs." };
   return null;
+}
+
+// Resolve the outcome of a manual draft re-send into a flash message.
+// Distinguishes "no reviewers configured", "everyone already had it",
+// "sent to N", and partial-failure.
+function parseResentFlash(
+  q: Record<string, string>,
+): { kind: "ok"; msg: string } | { kind: "err"; msg: string } {
+  const total = Number(q.resent_total ?? 0);
+  const sent = Number(q.resent_n ?? 0);
+  const failed = Number(q.resent_failed ?? 0);
+  const targeted = Number(q.resent_targeted ?? 0);
+  if (total === 0)
+    return {
+      kind: "err",
+      msg: "No reviewers configured — add one on the Reviewers page first.",
+    };
+  if (targeted === 0)
+    return {
+      kind: "ok",
+      msg: "All reviewers already have this draft — nothing to re-send.",
+    };
+  if (failed > 0)
+    return {
+      kind: "err",
+      msg: `Re-sent to ${sent} reviewer(s); ${failed} failed — check server logs.`,
+    };
+  return {
+    kind: "ok",
+    msg: `Re-sent the draft to ${sent} reviewer(s).`,
+  };
 }
 
 // ============================================================

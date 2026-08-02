@@ -141,10 +141,21 @@ and returns success. One forgotten draft therefore blocks every compose
 behind it, and the failure is invisible unless you read the logs. This is
 what silently ate three weeks of briefs before mig 066.
 
+**Deploying onto an existing stuck draft is safe.** Migrations run
+automatically (`release_command = "bun run migrate"`), and the sweep
+will not mail a draft older than `compose.auto_publish_max_age_hours`
+(72h) — it holds it and notifies instead. So you don't have to race the
+first tick to stop an old draft going out; deploy, then discard at your
+leisure.
+
 **Immediate:** Check the auto-publish banner at the top of
 `/admin/review/<id>`. It says one of:
 
 - *Publishes automatically at …* — nothing to do, it will clear itself.
+- *Too stale to auto-publish: N days old* — past the ceiling. The sweep
+  will hold it, never send it. Discard is almost always right; publish
+  by hand only if you truly want a stale brief mailed. Clearing the hold
+  achieves nothing — the next sweep re-holds it for the same reason.
 - *Auto-publish will hold this draft: N un-glossed terms remain* — the
   checker couldn't fix it in its allotted passes. Fix the gloss by hand
   and publish, or publish anyway if the findings are false positives.
@@ -157,6 +168,28 @@ If the draft is simply stale (weeks old), **discard** rather than
 publish. Discarding deletes the issue row and returns its stories to the
 pool (they were never marked `published_to_reader`); publishing would
 mark three-week-old stories as used and burn them.
+
+**If discard fails with a foreign-key error** — `update or delete on
+table "issue" violates foreign key constraint
+"dispatch_log_issue_id_fkey"` — the draft has already been emailed to
+reviewers. `dispatch_log.issue_id` has no `ON DELETE CASCADE`, unlike
+`issue_pick` / `issue_annotation`. `discardDraft` clears the draft's
+send-log rows inside its transaction, so an up-to-date deploy handles
+this. On an older deploy the manual equivalent is:
+
+```sql
+BEGIN;
+DELETE FROM dispatch_log
+ WHERE issue_id = <id>
+   AND EXISTS (SELECT id FROM issue WHERE id = <id> AND is_draft = true);
+DELETE FROM issue WHERE id = <id> AND is_draft = true;
+COMMIT;
+```
+
+The `EXISTS` guard is load-bearing: without it a mistyped id would wipe
+a *published* issue's send log. Losing a draft's rows is fine — they
+record sends for an issue that never shipped, and bounce suppression
+lives on `email_subscription.unsubscribed_at`, not here.
 
 **Recovering a backlog after a gap.** Once the blocking draft is gone,
 `/admin/release` shows what's strandable. A normal compose only ever

@@ -98,6 +98,7 @@ import {
 } from "../views/admin-gloss-terms.tsx";
 import { validateTitleRegex } from "../shared/title-noise.ts";
 import { AdminRelease, type ReleaseData } from "../views/admin-release.tsx";
+import { resendDraftToReviewers } from "../pipeline/dispatch.ts";
 import {
   runCheckAndStore,
   runCheckOnMarkdown,
@@ -550,6 +551,35 @@ export function registerAdminRoutes(app: Hono): void {
       shared: "1",
       share_token: token,
       share_name: reviewerName,
+    });
+    return c.redirect(`/admin/review/${id}?${params.toString()}#share`, 303);
+  });
+
+  // Manual re-send of the draft-preview email to reviewers who haven't
+  // already received this draft (new reviewers + prior failed sends).
+  // The hourly sweep sends each draft once; this is the operator's
+  // override for "I added a reviewer" / "a send bounced" / "I just
+  // re-composed and want it back out now".
+  app.post("/admin/review/:id/resend-draft", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    let res: Awaited<ReturnType<typeof resendDraftToReviewers>>;
+    try {
+      res = await resendDraftToReviewers(id);
+    } catch (err) {
+      console.error("[resend-draft]", err);
+      return c.redirect(`/admin/review/${id}?error=resend_failed#share`, 303);
+    }
+    if (!res.ok) {
+      const code = res.reason === "not_draft" ? "not_draft_share" : "not_found";
+      return c.redirect(`/admin/review/${id}?error=${code}#share`, 303);
+    }
+    const params = new URLSearchParams({
+      resent: "1",
+      resent_total: String(res.totalReviewers),
+      resent_n: String(res.sent),
+      resent_failed: String(res.failed),
+      resent_targeted: String(res.targeted),
     });
     return c.redirect(`/admin/review/${id}?${params.toString()}#share`, 303);
   });
