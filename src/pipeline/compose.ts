@@ -306,7 +306,10 @@ export async function produceDraft(
     .sort((a, b) => a.rank - b.rank);
   const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
 
-  const builtItems = buildComposerItems(normalizedPicks, byId);
+  const catchUpIds = new Set(
+    pool.filter((p) => p.catchUp === true).map((p) => Number(p.row.story_id)),
+  );
+  const builtItems = buildComposerItems(normalizedPicks, byId, catchUpIds);
   if (builtItems.length === 0) {
     console.log("[compose] editor returned no valid picks — aborting");
     return null;
@@ -605,6 +608,9 @@ async function loadRetroRows(opts: RetroOptions): Promise<PoolRow[]> {
 function buildComposerItems(
   normalizedPicks: ReturnType<typeof normalizePick>[],
   byId: Map<number, PoolRow>,
+  // Story ids that came from the catch-up pool. Empty on a normal run,
+  // so every story renders exactly as it did before v0.10.
+  catchUpIds: ReadonlySet<number> = new Set(),
 ): BuiltItem[] {
   const builtItems: BuiltItem[] = [];
   for (const p of normalizedPicks) {
@@ -645,6 +651,8 @@ function buildComposerItems(
             scorer_one_liner: out.summary,
             retrodiction_12mo: out.retrodiction,
             published_at: r.published_at?.toISOString() ?? null,
+            catch_up: catchUpIds.has(Number(r.story_id)),
+            age_days: ageDays(r.published_at),
           };
         }),
       },
