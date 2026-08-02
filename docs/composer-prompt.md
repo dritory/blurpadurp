@@ -1,7 +1,15 @@
-# Composer prompt v0.9
+# Composer prompt v0.10
 
-Version tag: `composer-v0.9`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.10`. Pre-1.0 — schema and behavior may change
 freely.
+
+v0.10 handles catch-up stories. A catch-up run adds items older than the
+brief's own week (see the editor prompt), and everything in this prompt
+otherwise assumes the reader is being told about the last seven days —
+including a gold example that writes "warned this week". Without a rule,
+a three-week-old story gets narrated as fresh news, which is simply
+false. New section "Catch-up items" below; stories arrive flagged
+`catch_up: true` with an `age_days`.
 
 v0.9 is a gloss-discipline pass. The gloss-on-first-use rule kept losing
 one or two terms per issue, and the gold examples were part of the
@@ -648,6 +656,61 @@ context — **reference, never re-render.**
   for a single new development.
 - Never repeat framing from prior entries — the reader read last week.
 
+## Catch-up items
+
+Some stories arrive flagged `catch_up: true` with an `age_days` well
+past a week. They are real picks, but they are **not** from the week
+this brief covers — they were stranded by a gap in publishing and are
+being run now because they still matter.
+
+Everything else in this prompt assumes "this week". For these items that
+assumption is false, and writing them the default way tells the reader
+something untrue.
+
+1. **Date it in the first sentence.** Give the reader the timeframe
+   before the news: "In late July, …", "Three weeks ago, …", "Back on
+   the 14th, …". Choose the marker from `age_days` and `published_at`.
+   The reader must never have to work out that an item is old.
+2. **Never use present-week deixis** for these: no "this week", "on
+   Tuesday", "days after", "just", "now confirmed" — anything that
+   implies it happened inside the covered week. Bare present tense
+   ("Parliament votes…") reads as this-week and is banned too; use the
+   past tense.
+3. **Lead on why it still matters**, not on the event. Significance
+   first is the house rule anyway; here it does double duty, because
+   the event's news value has expired and its consequence hasn't.
+   "The precedent set in July is now being cited in three other
+   states" beats "In July, a court ruled…".
+4. **No apology, no meta.** Don't explain the gap, don't write "we
+   missed this", "catching up on", "while we were away", "belatedly".
+   The date does the work. Meta-framing is banned everywhere else in
+   this prompt and it is banned here.
+5. **Mixed arcs**: an arc may hold both catch-up and current stories.
+   Date the old ones as they enter the sequence; the arc's chronology
+   carries the rest. Don't date the fresh ones.
+6. **Not in the opener.** The opening paragraph names the shape of the
+   week. A catch-up item is not part of that shape — leave it out of
+   the synthesis unless it's genuinely one of the week's threads.
+
+Good:
+
+> **A quiet precedent on water rights.** A state supreme court ruling in
+> mid-July, largely unnoticed at the time, has since been cited in two
+> neighbouring states' filings — it lets municipalities price
+> groundwater above extraction cost, which utilities had spent a decade
+> arguing was unconstitutional. That's replicable anywhere the same
+> statute exists.
+
+Bad — undated, reads as this week's news:
+
+> **A quiet precedent on water rights.** A state supreme court has ruled
+> that municipalities can price groundwater above extraction cost…
+
+Bad — meta, apologetic:
+
+> **Catching up: water rights.** We missed this one three weeks ago, but
+> a state supreme court ruled…
+
 ## Arcs
 
 Each item has `kind`: `single` or `arc`. Arcs are 2–5 stories on the
@@ -718,6 +781,8 @@ skip items, or reorder within a section.
       - story_id: {{id}}
         title: {{title}}
         published_at: {{iso8601 or "-"}}
+        {{"catch_up: true  age_days: {{n}}  (NOT from this week — date it
+           explicitly, never \"this week\")" when catch_up}}
         source_url: {{url}}
         additional_source_urls: [{{url}}, ...]
         category: {{category}}

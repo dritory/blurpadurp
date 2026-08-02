@@ -150,7 +150,7 @@ async function loadSystemPrompt(path: string): Promise<string> {
   return body;
 }
 
-function renderUserMessage(input: ComposerInput): string {
+export function renderUserMessage(input: ComposerInput): string {
   const lines: string[] = [];
   lines.push(`week_of: ${input.week_of}`, "");
 
@@ -229,6 +229,13 @@ function renderItemSection(
       lines.push(`      - story_id: ${s.story_id}`);
       lines.push(`        title: ${s.title}`);
       lines.push(`        published_at: ${s.published_at ?? "-"}`);
+      // Emitted only for catch-up stories, so a normal run's prompt is
+      // byte-identical to v0.9's and its cache entries still hit.
+      if (s.catch_up) {
+        lines.push(
+          `        catch_up: true  age_days: ${s.age_days}  (NOT from this week — date it explicitly, never "this week")`,
+        );
+      }
       if (s.source_url !== null) {
         lines.push(`        source_url: ${s.source_url}`);
       }

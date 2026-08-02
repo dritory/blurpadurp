@@ -25,6 +25,18 @@ const ItemStorySchema = z.object({
   scorer_one_liner: z.string(),
   retrodiction_12mo: z.string(),
   published_at: z.string().nullable(),
+  // Catch-up story: older than the brief's own week, pulled in by a
+  // catch-up run because it would otherwise never be published.
+  //
+  // The composer MUST date these explicitly instead of using the
+  // issue's default "this week" framing — the prose is written for a
+  // weekly, so an undated three-week-old item reads as fresh news and
+  // misleads the reader. See composer-prompt.md "Catch-up items".
+  catch_up: z.boolean().default(false),
+  // Whole days between published_at and the compose run, so the
+  // composer can pick the right time marker ("three weeks ago",
+  // "in late July") rather than guessing from the date alone.
+  age_days: z.number().default(0),
 });
 
 // An item is one paragraph the composer writes: single story or arc

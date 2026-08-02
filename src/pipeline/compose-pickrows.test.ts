@@ -23,6 +23,8 @@ function story(id: number): ComposerItem["stories"][number] {
     scorer_one_liner: "",
     retrodiction_12mo: "",
     published_at: null,
+    catch_up: false,
+    age_days: 0,
   };
 }
 
