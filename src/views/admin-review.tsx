@@ -222,7 +222,7 @@ export interface EditorReviewData {
   };
   // Deadline + kill-switch from config, so the banner can state the
   // actual time this draft goes out rather than a hardcoded "24h".
-  autoPublish: { enabled: boolean; hours: number };
+  autoPublish: { enabled: boolean; hours: number; maxAgeHours: number };
   // Outcome of the automatic check→fix→re-check loop (auto-fix.ts), or
   // null if the sweep hasn't reached this draft yet.
   autoFix: AutoFixLog | null;
@@ -280,13 +280,30 @@ const AutoPublishBanner: FC<{ data: EditorReviewData }> = ({ data }) => {
   const remaining = autoFix?.final_findings?.length ?? 0;
   const blocked = autoFix !== null && !isCleanAutoFix(autoFix);
 
+  // Past the ceiling the sweep holds rather than publishes, so the
+  // banner must not promise a publish time it won't honour.
+  const ageDays =
+    issue.draftedAt === null
+      ? null
+      : Math.floor(
+          (Date.now() - issue.draftedAt.getTime()) / (24 * 3600_000),
+        );
+  const tooStale =
+    issue.draftedAt !== null &&
+    Date.now() - issue.draftedAt.getTime() > autoPublish.maxAgeHours * 3600_000;
+
   let tone: string;
   let msg: string;
   if (issue.hold) {
     tone = "held";
-    msg = blocked
-      ? `Held — the checker still reports ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} after ${autoFix?.passes.length ?? 0} automatic fix ${autoFix?.passes.length === 1 ? "pass" : "passes"}. It will not send until you clear the hold.`
-      : "Held — exempt from auto-publish until you release it.";
+    msg = tooStale
+      ? `Held — ${ageDays} days old, past the ${autoPublish.maxAgeHours}h auto-publish ceiling. Discard is usually right: it returns the stories to the pool. Clearing the hold won't help — the next sweep holds it again.`
+      : blocked
+        ? `Held — the checker still reports ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} after ${autoFix?.passes.length ?? 0} automatic fix ${autoFix?.passes.length === 1 ? "pass" : "passes"}. It will not send until you clear the hold.`
+        : "Held — exempt from auto-publish until you release it.";
+  } else if (autoPublish.enabled && tooStale) {
+    tone = "warn";
+    msg = `Too stale to auto-publish: ${ageDays} days old, past the ${autoPublish.maxAgeHours}h ceiling. The next sweep will hold it rather than send it. Discard returns its stories to the pool for the next issue.`;
   } else if (!autoPublish.enabled) {
     tone = "manual";
     msg = "Auto-publish is off. This draft sends only when you publish it.";

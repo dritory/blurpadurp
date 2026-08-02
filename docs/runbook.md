@@ -141,10 +141,21 @@ and returns success. One forgotten draft therefore blocks every compose
 behind it, and the failure is invisible unless you read the logs. This is
 what silently ate three weeks of briefs before mig 066.
 
+**Deploying onto an existing stuck draft is safe.** Migrations run
+automatically (`release_command = "bun run migrate"`), and the sweep
+will not mail a draft older than `compose.auto_publish_max_age_hours`
+(72h) — it holds it and notifies instead. So you don't have to race the
+first tick to stop an old draft going out; deploy, then discard at your
+leisure.
+
 **Immediate:** Check the auto-publish banner at the top of
 `/admin/review/<id>`. It says one of:
 
 - *Publishes automatically at …* — nothing to do, it will clear itself.
+- *Too stale to auto-publish: N days old* — past the ceiling. The sweep
+  will hold it, never send it. Discard is almost always right; publish
+  by hand only if you truly want a stale brief mailed. Clearing the hold
+  achieves nothing — the next sweep re-holds it for the same reason.
 - *Auto-publish will hold this draft: N un-glossed terms remain* — the
   checker couldn't fix it in its allotted passes. Fix the gloss by hand
   and publish, or publish anyway if the findings are false positives.

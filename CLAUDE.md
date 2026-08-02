@@ -77,7 +77,11 @@ is how the drift hid last time.
   drafts past `compose.auto_publish_hours` (24h). A draft that reaches
   its deadline still failing the checker is **held** (`issue.hold`) and
   the operator notified — email is irreversible, so a late brief beats
-  a bad one. This stage is also why the open-draft stall can't recur:
+  a bad one. There is also a **staleness ceiling**
+  (`compose.auto_publish_max_age_hours`, 72h, mig 068): past it a draft
+  is held rather than sent, whatever the checker says. A brief is a
+  snapshot of its week, so a stale one ships the wrong lead *and* burns
+  every story it holds. `autopublishDecision` is the pure predicate. This stage is also why the open-draft stall can't recur:
   `runCompose` bails while any draft exists, so one forgotten draft
   used to silently block every compose behind it.
 - **dispatch** is live (`src/pipeline/dispatch.ts`). Email send via
