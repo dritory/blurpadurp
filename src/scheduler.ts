@@ -16,6 +16,7 @@ import { db } from "./db/index.ts";
 import { ingest } from "./pipeline/ingest.ts";
 import { score } from "./pipeline/score.ts";
 import { compose } from "./pipeline/compose.ts";
+import { autopublish } from "./pipeline/autopublish.ts";
 import { dispatch } from "./pipeline/dispatch.ts";
 import { retention } from "./pipeline/retention.ts";
 
@@ -33,11 +34,14 @@ export interface StageJob {
 
 // Order matters within a single tick: ingest first (downstream sees
 // fresh data), retention last (don't prune rows another stage may
-// still want).
+// still want). autopublish sits between compose and dispatch so a
+// draft that comes due is published in time for the same tick's
+// dispatch sweep to mail it, rather than waiting a further hour.
 const STAGES: StageJob[] = [
   { stage: "ingest", run: ingest },
   { stage: "score", run: score },
   { stage: "compose", run: compose },
+  { stage: "autopublish", run: autopublish },
   { stage: "dispatch", run: dispatch },
   { stage: "retention", run: retention },
 ];
@@ -58,6 +62,35 @@ interface StageState {
   enabled: boolean;
   forced: boolean;
   last_success_at: Date | null;
+  cron_dow: number | null;
+  cron_hour: number | null;
+}
+
+// Is an anchored stage due? Anchored stages (mig 066) fire on a fixed
+// UTC weekday at/after a fixed UTC hour, at most once that day.
+//
+// This replaces interval drift for compose. "604800s since last
+// success" moved the draft day forward by the run duration plus up to
+// an hour of tick granularity every week, and any manual trigger
+// re-anchored it permanently — which is why drafts arrived on
+// arbitrary days.
+//
+// No TICK_INTERVAL_MS lookahead here: firing an anchored stage early
+// would land it on the wrong day, which is the whole thing we're
+// fixing. Late-by-under-an-hour is fine, early-by-a-day is not.
+export function anchoredStageDue(
+  s: Pick<StageState, "cron_dow" | "cron_hour" | "last_success_at">,
+  now: Date,
+): boolean {
+  if (s.cron_dow === null || s.cron_hour === null) return false;
+  if (now.getUTCDay() !== s.cron_dow) return false;
+  if (now.getUTCHours() < s.cron_hour) return false;
+  // Already ran today? Compare UTC calendar dates rather than a 24h
+  // window, so a run at 06:05 doesn't leave the stage eligible again
+  // at 06:00 sharp the following week.
+  const last = s.last_success_at;
+  if (last === null) return true;
+  return last.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10);
 }
 
 // One combined query for the full scheduler state — schedule rows,
@@ -74,11 +107,15 @@ async function loadState(): Promise<StageState[]> {
     enabled: boolean;
     forced: boolean;
     last_success_at: Date | null;
+    cron_dow: number | null;
+    cron_hour: number | null;
   }>`
     SELECT
       s.stage,
       s.interval_sec,
       s.enabled,
+      s.cron_dow,
+      s.cron_hour,
       EXISTS (
         SELECT 1 FROM pipeline_force_run f WHERE f.stage = s.stage
       ) AS forced,
@@ -92,6 +129,43 @@ async function loadState(): Promise<StageState[]> {
     FROM pipeline_schedule s
   `.execute(db);
   return result.rows;
+}
+
+// Next UTC datetime an anchored stage will fire. The display-side twin
+// of anchoredStageDue — kept in this file so the two can't drift apart.
+// Used by /admin/scheduler, which would otherwise project "last success
+// + interval_sec" and print a date the scheduler will never act on.
+export function nextAnchoredRun(
+  dow: number,
+  hour: number,
+  lastSuccessAt: Date | null,
+  now: Date,
+): Date {
+  const ranToday =
+    lastSuccessAt !== null &&
+    lastSuccessAt.toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+
+  const candidate = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      hour,
+      0,
+      0,
+      0,
+    ),
+  );
+  // Today is the next slot only on the right weekday and only if the
+  // stage hasn't already taken its turn — whether the hour has arrived
+  // (due now) or is still ahead.
+  if (now.getUTCDay() === dow && !ranToday) return candidate;
+
+  let daysAhead = (dow - now.getUTCDay() + 7) % 7;
+  // Same weekday, but today is spoken for → it's a week out.
+  if (daysAhead === 0) daysAhead = 7;
+  candidate.setUTCDate(candidate.getUTCDate() + daysAhead);
+  return candidate;
 }
 
 export async function runTick(): Promise<void> {
@@ -109,6 +183,15 @@ export async function runTick(): Promise<void> {
     if (!s.enabled) continue;
     if (s.forced) {
       ready.push({ job, forced: true });
+      continue;
+    }
+    // Anchored stages ignore interval_sec entirely — the calendar slot
+    // is the schedule. Note this also means an anchored stage that has
+    // never run does NOT fire immediately; it waits for its slot.
+    if (s.cron_dow !== null && s.cron_hour !== null) {
+      if (anchoredStageDue(s, new Date())) {
+        ready.push({ job, forced: false });
+      }
       continue;
     }
     if (s.last_success_at === null) {

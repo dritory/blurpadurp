@@ -97,9 +97,11 @@ import {
   AdminGlossTerms,
 } from "../views/admin-gloss-terms.tsx";
 import { validateTitleRegex } from "../shared/title-noise.ts";
-import { lintGloss } from "../shared/gloss-lint.ts";
-import { loadGlossTerms } from "../shared/gloss-store.ts";
-import { runChecker, CHECKER_MODEL, CHECKER_VERSION } from "../ai/checker.ts";
+import {
+  runCheckAndStore,
+  runCheckOnMarkdown,
+  findingsToNotes,
+} from "../shared/auto-fix.ts";
 import type {
   CheckResult,
   CheckFinding,
@@ -154,62 +156,6 @@ import {
   parseReviewFlash,
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
-
-// Run the checker over arbitrary markdown (no DB). Returns the result or
-// "failed" on error (already logged). Used both for the stored check and
-// to re-check an unsaved fix candidate before it's applied.
-async function runCheckOnMarkdown(
-  markdown: string,
-): Promise<CheckResult | "failed"> {
-  try {
-    const terms = await loadGlossTerms();
-    const glossCandidates = lintGloss(markdown, terms);
-    const findings = await runChecker({ markdown, glossCandidates });
-    return {
-      checked_at: new Date().toISOString(),
-      model_id: CHECKER_MODEL,
-      prompt_version: CHECKER_VERSION,
-      findings,
-    };
-  } catch (err) {
-    console.error("[checker]", err);
-    return "failed";
-  }
-}
-
-// Run the checker over an issue's current brief and persist the result.
-// Returns the stored CheckResult, null if the issue doesn't exist, or
-// "failed" on error.
-async function runCheckAndStore(
-  issueId: number,
-): Promise<CheckResult | null | "failed"> {
-  const iss = await db
-    .selectFrom("issue")
-    .select("composed_markdown")
-    .where("id", "=", issueId)
-    .executeTakeFirst();
-  if (iss === undefined) return null;
-  const result = await runCheckOnMarkdown(iss.composed_markdown);
-  if (result === "failed") return "failed";
-  await db
-    .updateTable("issue")
-    .set({ check_jsonb: JSON.stringify(result) as never })
-    .where("id", "=", issueId)
-    .execute();
-  return result;
-}
-
-// Turn gloss findings into targeted composer revision notes for a
-// fix-recompose. Non-gloss tasks are skipped (they have no recompose
-// remedy yet).
-function findingsToNotes(findings: CheckFinding[]): string[] {
-  return findings
-    .filter((f) => f.task === "gloss")
-    .map((f) => {
-      const base = `"${f.term}" is used un-glossed on first use ("${f.excerpt}") — gloss it briefly on first use`;
-      return f.suggestion ? `${base}, e.g. ${f.suggestion}.` : `${base}.`;
-    });
-}
 
 export function registerAdminRoutes(app: Hono): void {
   app.get("/admin", (c) => c.redirect("/admin/issues", 302));
@@ -266,6 +212,29 @@ export function registerAdminRoutes(app: Hono): void {
     const ok = await discardDraft(id);
     if (!ok) return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
     return c.redirect("/admin/issues?discarded=1", 303);
+  });
+
+  // Park a draft (or release it) against the auto-publish sweep. Without
+  // this, discarding would be the only way to stop a draft you want to
+  // sit on — and the sweep sets the same flag itself when a draft hits
+  // its deadline still failing the checker, so clearing it here is the
+  // "I've looked at it, try again" action.
+  app.post("/admin/review/:id/hold", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    const body = await c.req.parseBody();
+    const hold = String(body.hold ?? "") === "1";
+    const updated = await db
+      .updateTable("issue")
+      .set({ hold })
+      .where("id", "=", id)
+      .where("is_draft", "=", true)
+      .returning("id")
+      .executeTakeFirst();
+    if (updated === undefined) {
+      return c.redirect(`/admin/review/${id}?error=not_draft`, 303);
+    }
+    return c.redirect(`/admin/review/${id}?${hold ? "held" : "released"}=1`, 303);
   });
 
   app.post("/admin/review/:id/edit", async (c) => {

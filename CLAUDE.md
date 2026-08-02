@@ -24,12 +24,21 @@ unless a feature genuinely needs it). Architecture in
 ## Pipeline shape
 
 ```
-ingest → score → editor → compose → dispatch → retention
+ingest → score → editor → compose → autopublish → dispatch → retention
 ```
 
-Five scheduled stages, run hourly by `scheduler.ts` against the
+Six scheduled stages, run hourly by `scheduler.ts` against the
 `pipeline_schedule` table (mig 039). Each acquires a DB mutex
 (`pipeline_lock`, mig 024) so manual + cron triggers can't collide.
+
+Most stages fire on `interval_sec` since their last success. **compose
+is different**: it's anchored to a calendar slot (`cron_dow` +
+`cron_hour`, mig 066) — Saturday 06:00 UTC — because interval
+scheduling let the draft day drift a little every week and re-anchored
+permanently on any manual trigger. For an anchored stage `interval_sec`
+is ignored entirely. Keep `anchoredStageDue` and `nextAnchoredRun`
+(both in `scheduler.ts`) in agreement; a "next due" the scheduler skips
+is how the drift hid last time.
 
 - **ingest** pulls from connectors (`src/connectors/*.ts`). RSS (16
   newsroom feeds), Reddit r/OutOfTheLoop, GDELT, and Wikipedia (ITN +
@@ -52,6 +61,15 @@ Five scheduled stages, run hourly by `scheduler.ts` against the
 - **compose** partitions picks into four fixed sections server-side,
   then runs the composer model to write prose
   (`docs/composer-prompt.md`).
+- **autopublish** (`src/pipeline/autopublish.ts`) runs hourly and does
+  two things: auto-fixes any open draft that hasn't been through the
+  checker yet (so the draft you open is already glossed), and publishes
+  drafts past `compose.auto_publish_hours` (24h). A draft that reaches
+  its deadline still failing the checker is **held** (`issue.hold`) and
+  the operator notified — email is irreversible, so a late brief beats
+  a bad one. This stage is also why the open-draft stall can't recur:
+  `runCompose` bails while any draft exists, so one forgotten draft
+  used to silently block every compose behind it.
 - **dispatch** is live (`src/pipeline/dispatch.ts`). Email send via
   Resend; per-(issue, subscription) at-most-once enforced by the
   `dispatch_log` unique constraint. Web-push is stubbed. The Resend
@@ -161,7 +179,8 @@ medium**. This shapes partition choices:
 
 | Failure | Where fixed | File |
 |---|---|---|
-| Composer leaves an acronym/jargon un-glossed on first use (slips past the prompt one or two per issue) | Two advisory layers on `/admin/review`, both non-blocking: (1) deterministic linter — acronym regex + curated `gloss_term` list (mig 062), zero-cost recall floor, hit-bumped at compose, managed at `/admin/gloss-terms`; (2) on-demand `checker` (Haiku, task-tagged so future review tasks bolt on) the operator triggers per draft — catches the un-listed long tail + judges gloss adequacy, grounded on the deterministic findings, persisted on `issue.check_jsonb` (mig 064). On a draft, "Propose fix" feeds findings back as composer `revision_notes` and re-composes into a **non-destructive candidate** (`issue.fix_candidate_jsonb`, mig 065) — re-checked and previewed inline; the live draft changes only on explicit Accept (Discard drops it). Any re-compose/edit nulls the stale result + pending candidate | `src/shared/gloss-lint.ts`, `src/ai/checker.ts` |
+| Composer leaves an acronym/jargon un-glossed on first use (slips past the prompt one or two per issue) | Two advisory layers on `/admin/review`, both non-blocking: (1) deterministic linter — acronym regex + curated `gloss_term` list (mig 062), zero-cost recall floor, hit-bumped at compose, managed at `/admin/gloss-terms`; (2) on-demand `checker` (Haiku, task-tagged so future review tasks bolt on) the operator triggers per draft — catches the un-listed long tail + judges gloss adequacy, grounded on the deterministic findings, persisted on `issue.check_jsonb` (mig 064). On a draft, "Propose fix" feeds findings back as composer `revision_notes` and re-composes into a **non-destructive candidate** (`issue.fix_candidate_jsonb`, mig 065) — re-checked and previewed inline; the live draft changes only on explicit Accept (Discard drops it). Any re-compose/edit nulls the stale result + pending candidate. **As of mig 066 this runs automatically** — the autopublish sweep calls `autoFixDraft` on any draft with no `auto_fix_jsonb`, applying up to `compose.auto_fix_max_passes` (2) check→fix→re-check rounds directly, with the pre-fix prose kept on `issue.auto_fix_jsonb` for before/after. A pass is accepted only if it strictly *reduces* the finding count, so a thrashing composer can't make the brief worse on the way to its deadline. The manual propose→preview→accept path is unchanged and still there | `src/shared/gloss-lint.ts`, `src/ai/checker.ts`, `src/shared/auto-fix.ts` |
+| One forgotten draft silently stalls the whole pipeline (`runCompose` bails while any `is_draft` row exists, so every later compose no-ops with only a log line — this ate three weeks of briefs once, and a blocked pipeline looked exactly like a quiet one) | The autopublish sweep: a draft that can't sit forever can't block forever. Backed by the `/admin/review` banner, which states the actual publish time for an open draft instead of leaving the deadline implicit | `src/pipeline/autopublish.ts`, `src/views/admin-review.tsx` |
 | Same story appears in consecutive issues | `persistIssue` flips `published_to_reader = true` | `src/pipeline/compose.ts` |
 | Shrug items recur across runs | Shrug IDs included in the published-set | `src/pipeline/compose.ts` |
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |

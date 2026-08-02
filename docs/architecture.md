@@ -32,6 +32,12 @@ editor         log + discard
 compose        (renders four functional sections — Conversation /
    ↓            Worth knowing / Worth watching / Worth a shrug;
 persist issue   see docs/concept.md#section-scheme)
+   │            Anchored to Saturday 06:00 UTC (mig 066), not an
+   │            interval — see CLAUDE.md "Pipeline shape".
+   ↓
+autopublish    (hourly; auto-glosses any unchecked draft, then
+   ↓            publishes drafts past compose.auto_publish_hours.
+   ↓            Still-failing drafts are held + the operator notified.)
            ↓
 Dispatch layer (runs hourly)
   For each opted-in subscription:
@@ -223,7 +229,9 @@ distillation to a surrogate model is an option later.
 ## Infrastructure notes
 
 - Single Postgres instance with `pgvector` for embeddings.
-- Pipeline runs on a schedule (default: weekly composition; hourly dispatch).
+- Pipeline runs on a schedule (default: composition anchored to Saturday
+  06:00 UTC; hourly autopublish + dispatch). A draft left alone publishes
+  itself 24h after compose, so the weekly release needs no operator.
 - Cadence, thresholds, and override multiplier are config-driven.
 - Model IDs are pinned; upgrades go through shadow-mode validation.
 - Front end: SSR or static, PWA-enabled. No native app v1.

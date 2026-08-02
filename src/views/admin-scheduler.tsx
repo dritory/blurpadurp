@@ -26,6 +26,18 @@ export interface SchedulerStageRow {
   forceQueued: boolean;
   progressDone: number | null;
   progressTotal: number | null;
+  // Calendar anchor (mig 066). When set, interval_sec is ignored and
+  // the stage fires on this UTC weekday/hour instead.
+  cronDow: number | null;
+  cronHour: number | null;
+}
+
+const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export function fmtAnchor(dow: number | null, hour: number | null): string {
+  if (dow === null || hour === null) return "";
+  const name = DOW_NAMES[dow] ?? `dow${dow}`;
+  return `${name} ${String(hour).padStart(2, "0")}:00 UTC`;
 }
 
 export interface SchedulerData {
@@ -142,7 +154,16 @@ export const AdminScheduler: FC<{ d: SchedulerData }> = ({ d }) => (
                     step="60"
                   />
                   <button type="submit">save</button>
-                  <span class="muted">{fmtDuration(r.intervalSec)}</span>
+                  {r.cronDow !== null ? (
+                    // The interval is inert for an anchored stage —
+                    // say so rather than showing a cadence that isn't
+                    // the one in effect.
+                    <span class="muted">
+                      ignored — anchored to {fmtAnchor(r.cronDow, r.cronHour)}
+                    </span>
+                  ) : (
+                    <span class="muted">{fmtDuration(r.intervalSec)}</span>
+                  )}
                 </form>
               </td>
               <td>

@@ -8,7 +8,12 @@ import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
-import type { CheckResult, FixCandidate } from "../shared/check-schema.ts";
+import type {
+  AutoFixLog,
+  CheckResult,
+  FixCandidate,
+} from "../shared/check-schema.ts";
+import { isCleanAutoFix } from "../shared/check-schema.ts";
 
 export interface Annotation {
   id: number;
@@ -210,7 +215,17 @@ export interface EditorReviewData {
     composedHtml: string;
     title: string | null;
     composedMarkdown: string;
+    // Auto-publish state (mig 066). draftedAt is the clock the sweep
+    // runs off; hold parks the draft against it.
+    draftedAt: Date | null;
+    hold: boolean;
   };
+  // Deadline + kill-switch from config, so the banner can state the
+  // actual time this draft goes out rather than a hardcoded "24h".
+  autoPublish: { enabled: boolean; hours: number };
+  // Outcome of the automatic check→fix→re-check loop (auto-fix.ts), or
+  // null if the sweep hasn't reached this draft yet.
+  autoFix: AutoFixLog | null;
   annotations: Annotation[];
   editor: {
     picks: Array<
@@ -248,6 +263,54 @@ export interface EditorReviewData {
   // or null. When set, the panel previews it with Accept/Discard.
   fixCandidate: FixCandidate | null;
 }
+
+// Auto-publish status for an open draft: when it goes out on its own,
+// or why it won't. The point is that an unattended draft has a visible
+// deadline — the three-week stall happened because a blocked pipeline
+// looked exactly like a quiet one.
+const AutoPublishBanner: FC<{ data: EditorReviewData }> = ({ data }) => {
+  const { issue, autoPublish, autoFix } = data;
+  if (!issue.isDraft) return null;
+
+  const due =
+    issue.draftedAt === null
+      ? null
+      : new Date(issue.draftedAt.getTime() + autoPublish.hours * 3600_000);
+
+  const remaining = autoFix?.final_findings?.length ?? 0;
+  const blocked = autoFix !== null && !isCleanAutoFix(autoFix);
+
+  let tone: string;
+  let msg: string;
+  if (issue.hold) {
+    tone = "held";
+    msg = blocked
+      ? `Held — the checker still reports ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} after ${autoFix?.passes.length ?? 0} automatic fix ${autoFix?.passes.length === 1 ? "pass" : "passes"}. It will not send until you clear the hold.`
+      : "Held — exempt from auto-publish until you release it.";
+  } else if (!autoPublish.enabled) {
+    tone = "manual";
+    msg = "Auto-publish is off. This draft sends only when you publish it.";
+  } else if (blocked) {
+    tone = "warn";
+    msg = `Auto-publish will hold this draft: ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} remain after its automatic fix passes. Fix or publish manually.`;
+  } else if (due === null) {
+    tone = "manual";
+    msg = "No draft timestamp — auto-publish will skip this one.";
+  } else {
+    tone = "armed";
+    msg = `Publishes automatically at ${due.toUTCString()}${autoFix === null ? " (checker hasn't run yet)" : " — checker clean"}.`;
+  }
+
+  return (
+    <div class={`autopub autopub-${tone}`}>
+      <span>{msg}</span>
+      <form method="post" action={`/admin/review/${issue.id}/hold`}>
+        <input type="hidden" name="hold" value={issue.hold ? "0" : "1"} />
+        <button type="submit">{issue.hold ? "Release hold" : "Hold"}</button>
+      </form>
+    </div>
+  );
+};
 
 // Render a first-use sentence with the flagged term emphasized, so the
 // operator can see the context at a glance.
@@ -532,6 +595,16 @@ export const AdminReview: FC<{
           .action-bar button.publish:hover { background: #1e3b1e; }
           .action-bar button.discard { color: #8a2a2a; border-color: #d4a4a4; }
           .action-bar button.discard:hover { background: #fbeeee; border-color: #8a2a2a; }
+          .autopub { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                     margin: 0 0 12px; padding: 9px 12px; border-radius: 3px; font-size: 13px;
+                     border: 1px solid; }
+          .autopub form { margin: 0; }
+          .autopub button { font-size: 12px; padding: 4px 10px; border-radius: 3px; cursor: pointer;
+                            background: #fff; border: 1px solid #a0a0a0; white-space: nowrap; }
+          .autopub-armed  { background: #eef4ee; border-color: #b8d0b8; color: #2b4f2b; }
+          .autopub-warn   { background: #fdf6e8; border-color: #e0c98a; color: #7a5a12; }
+          .autopub-held   { background: #fbeeee; border-color: #d4a4a4; color: #8a2a2a; }
+          .autopub-manual { background: #f4f4f4; border-color: #cfcfcf; color: #555; }
           .draft-banner { background: #fff5d1; border: 1px solid #d4b84a; color: #6a5200; padding: 10px 14px; margin: 0 0 16px; font-family: var(--sans); font-size: 14px; }
           .draft-banner strong { font-weight: 700; }
           .flash { padding: 10px 14px; margin: 0 0 16px; font-family: var(--sans); font-size: 14px; border: 1px solid var(--rule); }
@@ -715,6 +788,7 @@ export const AdminReview: FC<{
     {flash !== null ? (
       <div class={`flash ${flash.kind}`}>{flash.msg}</div>
     ) : null}
+    <AutoPublishBanner data={data} />
     <nav class="action-bar" aria-label="Actions">
       {data.issue.isDraft ? (
         <>

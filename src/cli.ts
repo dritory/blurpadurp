@@ -10,6 +10,7 @@ const SUBCOMMANDS = [
   "ingest",
   "score",
   "compose",
+  "autopublish",
   "dispatch",
   "urgent",
   "reembed",
@@ -43,6 +44,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       return;
     case "compose":
       await (await import("./pipeline/compose.ts")).compose();
+      return;
+    case "autopublish":
+      await (await import("./pipeline/autopublish.ts")).autopublish();
       return;
     case "dispatch":
       await (await import("./pipeline/dispatch.ts")).dispatch();

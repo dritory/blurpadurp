@@ -14,6 +14,7 @@ import { loadRawPrompt } from "../shared/prompts.ts";
 import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
 import { loadGlossTerms } from "../shared/gloss-store.ts";
+import { getConfigBool, getConfigNumber } from "../shared/config-store.ts";
 import type {
   ConfigRow,
 } from "../views/admin-config.tsx";
@@ -100,6 +101,7 @@ import type {
 } from "../views/admin-scheduler.tsx";
 import {
   listStages as listSchedulerStages,
+  nextAnchoredRun,
 } from "../scheduler.ts";
 import type {
   EditorSandboxData,
@@ -734,7 +736,7 @@ export async function loadSchedulerData(
   const stages = listSchedulerStages();
   const scheduleRows = await db
     .selectFrom("pipeline_schedule")
-    .select(["stage", "interval_sec", "enabled"])
+    .select(["stage", "interval_sec", "enabled", "cron_dow", "cron_hour"])
     .execute();
   const scheduleMap = new Map(scheduleRows.map((r) => [r.stage, r]));
 
@@ -789,8 +791,19 @@ export async function loadSchedulerData(
         (lastAttemptRow.started_at !== null &&
           lastAttemptRow.started_at > lastSuccessAt));
 
-    const nextDueAt =
-      cfg !== undefined && lastSuccessAt !== null
+    // Anchored stages (mig 066) ignore interval_sec, so projecting
+    // "last success + interval" would print a date the scheduler will
+    // never act on.
+    const anchored =
+      cfg !== undefined && cfg.cron_dow !== null && cfg.cron_hour !== null;
+    const nextDueAt = anchored
+      ? nextAnchoredRun(
+          cfg.cron_dow as number,
+          cfg.cron_hour as number,
+          lastSuccessAt,
+          new Date(now),
+        )
+      : cfg !== undefined && lastSuccessAt !== null
         ? new Date(lastSuccessAt.getTime() + intervalSec * 1000)
         : cfg !== undefined
           ? new Date(now)
@@ -800,6 +813,8 @@ export async function loadSchedulerData(
       stage: job.stage,
       intervalSec,
       enabled,
+      cronDow: cfg?.cron_dow ?? null,
+      cronHour: cfg?.cron_hour ?? null,
       lastSuccessAt,
       lastSuccessAgeSec:
         lastSuccessAt !== null
@@ -2487,6 +2502,9 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       "shrug_candidates_jsonb",
       "check_jsonb",
       "fix_candidate_jsonb",
+      "drafted_at",
+      "hold",
+      "auto_fix_jsonb",
     ])
     .where("id", "=", id)
     .executeTakeFirst();
@@ -2547,7 +2565,14 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
       composedHtml: iss.composed_html,
       composedMarkdown: iss.composed_markdown,
       title: iss.title,
+      draftedAt: iss.drafted_at,
+      hold: iss.hold,
     },
+    autoPublish: {
+      enabled: await getConfigBool("compose.auto_publish_enabled", true),
+      hours: await getConfigNumber("compose.auto_publish_hours", 24),
+    },
+    autoFix: (iss.auto_fix_jsonb as EditorReviewData["autoFix"]) ?? null,
     annotations: annotations.map((a) => ({
       id: Number(a.id),
       slot: a.slot,
@@ -2841,6 +2866,16 @@ export function parseReviewFlash(
     return {
       kind: "ok",
       msg: "No fixable gloss findings — nothing to propose.",
+    };
+  if (q.held === "1")
+    return {
+      kind: "ok",
+      msg: "Draft held — it will not auto-publish until you release it.",
+    };
+  if (q.released === "1")
+    return {
+      kind: "ok",
+      msg: "Hold cleared — the next sweep will auto-publish this draft once its deadline passes and its check is clean.",
     };
   if (q.error === "check_failed")
     return { kind: "err", msg: "Checker failed — check server logs." };
