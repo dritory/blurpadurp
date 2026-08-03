@@ -13,12 +13,23 @@ export interface GlossTermRow {
   term: string;
   note: string | null;
   hits: number;
+  isIgnored: boolean;
   createdAt: Date;
 }
 
 export interface GlossTermsData {
+  // WATCH list: names to flag when they appear bare.
   rows: GlossTermRow[];
-  flash: { added?: string; removed?: string; error?: string } | null;
+  // IGNORE list (mig 070): names neither checker layer may flag. Same
+  // table, opposite sign — the operator's answer to a regex that keeps
+  // crying wolf about BBC.
+  ignored: GlossTermRow[];
+  flash: {
+    added?: string;
+    removed?: string;
+    watched?: string;
+    error?: string;
+  } | null;
 }
 
 const STYLES = `
@@ -63,6 +74,12 @@ export const AdminGlossTerms: FC<{ d: GlossTermsData }> = ({ d }) => (
     ) : null}
     {d.flash?.removed ? (
       <div class="gt-flash">Removed <code>{d.flash.removed}</code>.</div>
+    ) : null}
+    {d.flash?.watched ? (
+      <div class="gt-flash">
+        <code>{d.flash.watched}</code> is watched again — it will be flagged
+        when it appears bare.
+      </div>
     ) : null}
     {d.flash?.error ? <div class="gt-flash error">{d.flash.error}</div> : null}
 
@@ -127,6 +144,62 @@ export const AdminGlossTerms: FC<{ d: GlossTermsData }> = ({ d }) => (
             <tr>
               <td colspan={5} class="muted">
                 No gloss terms yet.
+              </td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top: 28px;">Ignore list</h3>
+    <p style="color: var(--ink-soft); font-family: var(--sans); font-size: 13px; max-width: 680px;">
+      The opposite list: terms <strong>neither</strong> checker layer may
+      flag. The acronym regex over-fires on ubiquitous names —{" "}
+      <code>BBC</code>, <code>IBM</code> — and a recall floor that cries
+      wolf gets ignored wholesale, which costs more than the recall buys.
+      Add terms here with the <em>ignore</em> button on the{" "}
+      <a href="/admin/issues">draft review</a> panel. Acronyms that are
+      bare by rule (US, UK, EU, NATO…) are already hard-coded and don't
+      need a row.
+    </p>
+    <div class="adm-scroll">
+      <table class="gt">
+        <thead>
+          <tr>
+            <th>Term</th>
+            <th>Note</th>
+            <th>Added</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {d.ignored.map((r) => (
+            <tr>
+              <td class="gt-term">{r.term}</td>
+              <td class="muted">{r.note ?? ""}</td>
+              <td class="muted">{r.createdAt.toISOString().slice(0, 10)}</td>
+              <td class="gt-actions">
+                <form method="post" action="/admin/gloss-terms/watch">
+                  <input type="hidden" name="term" value={r.term} />
+                  <button type="submit">watch again</button>
+                </form>
+                <form
+                  method="post"
+                  action="/admin/gloss-terms/delete"
+                  data-confirm={`Delete term ${r.term}?`}
+                >
+                  <input type="hidden" name="term" value={r.term} />
+                  <button type="submit" class="danger">
+                    delete
+                  </button>
+                </form>
+              </td>
+            </tr>
+          ))}
+          {d.ignored.length === 0 ? (
+            <tr>
+              <td colspan={4} class="muted">
+                Nothing ignored.
               </td>
             </tr>
           ) : null}

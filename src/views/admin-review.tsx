@@ -222,7 +222,14 @@ export interface EditorReviewData {
   };
   // Deadline + kill-switch from config, so the banner can state the
   // actual time this draft goes out rather than a hardcoded "24h".
-  autoPublish: { enabled: boolean; hours: number; maxAgeHours: number };
+  autoPublish: {
+    enabled: boolean;
+    hours: number;
+    maxAgeHours: number;
+    // mig 071: false means a leftover gloss finding no longer blocks the
+    // send, so the banner must not promise a hold it won't perform.
+    requiresClean: boolean;
+  };
   // Outcome of the automatic check→fix→re-check loop (auto-fix.ts), or
   // null if the sweep hasn't reached this draft yet.
   autoFix: AutoFixLog | null;
@@ -259,6 +266,11 @@ export interface EditorReviewData {
   // Last on-demand checker result (checker.ts), task-tagged, or null if
   // the operator hasn't run one for this issue yet.
   checkResult: CheckResult | null;
+  // False when checkResult was computed from different prose than the
+  // brief now on the page (or from prose we can't identify, i.e. a
+  // pre-mig-070 result). A stale verdict is worse than no verdict:
+  // it looks authoritative.
+  checkCurrent: boolean;
   // A pending, non-destructive fix proposal (issue.fix_candidate_jsonb),
   // or null. When set, the panel previews it with Accept/Discard.
   fixCandidate: FixCandidate | null;
@@ -307,9 +319,15 @@ const AutoPublishBanner: FC<{ data: EditorReviewData }> = ({ data }) => {
   } else if (!autoPublish.enabled) {
     tone = "manual";
     msg = "Auto-publish is off. This draft sends only when you publish it.";
-  } else if (blocked) {
+  } else if (blocked && autoPublish.requiresClean) {
     tone = "warn";
     msg = `Auto-publish will hold this draft: ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} remain after its automatic fix passes. Fix or publish manually.`;
+  } else if (blocked && due !== null) {
+    // Not a blocker as of mig 071 — a gloss nit no longer parks the
+    // brief. Still worth stating, so a knowingly-imperfect send isn't a
+    // surprise, and the fixer keeps retrying until the deadline.
+    tone = "warn";
+    msg = `Publishes automatically at ${due.toUTCString()} — with ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} outstanding after ${autoFix?.attempts ?? autoFix?.passes.length ?? 0} fix ${(autoFix?.attempts ?? 0) === 1 ? "attempt" : "attempts"}. The fixer retries each hour until then; fix by hand or Hold if it matters.`;
   } else if (due === null) {
     tone = "manual";
     msg = "No draft timestamp — auto-publish will skip this one.";
@@ -376,6 +394,11 @@ const GLOSS_STYLES = `
   .fix-actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
   .fix-accept { background: #2b6b2b; color: #fff; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; font-weight: 600; }
   .fix-discard { background: none; border: 1px solid #b0b0b0; padding: 5px 12px; border-radius: 3px; cursor: pointer; }
+  .gloss-stale { background: #f7eccf; border-left: 3px solid #b58b00; padding: 6px 10px; margin: 0 0 8px; color: #6b551c; }
+  .gloss-panel li form { display: inline; margin-left: 8px; }
+  .gloss-ignore-btn { font: inherit; font-family: var(--sans); font-size: 11px; padding: 1px 7px; border: 1px solid var(--rule); background: #fff; color: var(--ink-soft); cursor: pointer; }
+  .gloss-ignore-btn:hover { border-color: var(--ink); color: var(--ink); }
+  .gloss-overruled { color: var(--ink-soft); }
 `;
 
 // The pending, non-destructive fix proposal: the re-composed prose plus
@@ -390,7 +413,7 @@ const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
     <div class="fix-proposal" id="fix-proposal">
       <h4>Proposed fix — not applied yet</h4>
       <div class="fix-meta">
-        re-composed {candidate.model_id} ·{" "}
+        attempt {candidate.attempt ?? 1} · re-composed {candidate.model_id} ·{" "}
         {candidate.created_at.slice(0, 16).replace("T", " ")} UTC · fed{" "}
         {candidate.notes.length} note{candidate.notes.length === 1 ? "" : "s"}{" "}
         back to the composer
@@ -440,6 +463,26 @@ const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
   );
 };
 
+// One-click "stop telling me about this term" — posts to the gloss-term
+// ignore list and returns to the panel. The trip to another page is why
+// BBC/IBM were still firing weeks after being noticed.
+const IgnoreTermButton: FC<{ term: string; issueId: number }> = ({
+  term,
+  issueId,
+}) => (
+  <form method="post" action="/admin/gloss-terms/ignore">
+    <input type="hidden" name="term" value={term} />
+    <input type="hidden" name="back" value={`/admin/review/${issueId}#gloss`} />
+    <button
+      type="submit"
+      class="gloss-ignore-btn"
+      title={`Never flag "${term}" again`}
+    >
+      ignore
+    </button>
+  </form>
+);
+
 // Advisory checker panel. Two layers, both non-blocking:
 //   - deterministic linter (gloss-lint.ts): zero-cost recall floor, runs
 //     on every page load. Catches all-caps acronyms + the curated jargon
@@ -452,15 +495,57 @@ const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
 const CheckPanel: FC<{
   findings: GlossFinding[];
   checkResult: CheckResult | null;
+  checkCurrent: boolean;
   fixCandidate: FixCandidate | null;
+  autoFix: AutoFixLog | null;
   issueId: number;
   isDraft: boolean;
-}> = ({ findings, checkResult, fixCandidate, issueId, isDraft }) => {
-  const flagged = findings.filter((f) => !f.glossed);
+}> = ({
+  findings,
+  checkResult,
+  checkCurrent,
+  fixCandidate,
+  autoFix,
+  issueId,
+  isDraft,
+}) => {
   const glossed = findings.filter((f) => f.glossed);
   const llm = checkResult?.findings ?? [];
+
+  // RECONCILE THE TWO LAYERS. The regex floor over-fires by design and
+  // the AI pass exists partly to overrule it, but the panel used to show
+  // both verdicts with equal weight — so a term the checker had cleared
+  // went on shouting forever. Once a CURRENT check exists, a regex flag
+  // it didn't reproduce is settled, not open.
+  const llmTerms = new Set(llm.map((f) => f.term.toLowerCase()));
+  const dismissedTerms = new Set(
+    (checkResult?.dismissed ?? []).map((d) => d.term.toLowerCase()),
+  );
+  const dismissReason = new Map(
+    (checkResult?.dismissed ?? []).map((d) => [
+      d.term.toLowerCase(),
+      d.reason,
+    ]),
+  );
+  const rawFlagged = findings.filter((f) => !f.glossed);
+  // A regex flag is overruled when a current AI check looked at the same
+  // prose and either explicitly dismissed the term or simply didn't
+  // report it. Without a current check nothing is overruled — an absent
+  // opinion is not a clearance.
+  const overruled = checkCurrent
+    ? rawFlagged.filter((f) => !llmTerms.has(f.term.toLowerCase()))
+    : [];
+  const flagged = checkCurrent
+    ? rawFlagged.filter((f) => llmTerms.has(f.term.toLowerCase()))
+    : rawFlagged;
+
   const anyFlag = flagged.length > 0 || llm.length > 0;
-  const canPropose = isDraft && llm.length > 0;
+  // The fix path can run off either layer's findings, so offer it
+  // whenever there is anything outstanding — not only when the LLM
+  // spoke. (The route re-checks current prose before composing, so a
+  // regex-only flag still gets an AI verdict before it reaches the
+  // composer as a revision note.)
+  const canPropose = isDraft && (llm.length > 0 || flagged.length > 0);
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
@@ -482,6 +567,7 @@ const CheckPanel: FC<{
                   <span class="gloss-term">{f.term}</span>
                   <span class="gloss-kind">{f.kind}</span>
                   {f.note ? <span class="gloss-note"> — {f.note}</span> : null}
+                  <IgnoreTermButton term={f.term} issueId={issueId} />
                   <span class="gloss-ctx">
                     “{highlightTerm(f.firstUseSentence, f.term)}”
                   </span>
@@ -492,8 +578,48 @@ const CheckPanel: FC<{
         ) : (
           <h3 class="gloss-ok">
             ✓ Regex check — no un-glossed acronyms or listed jargon
+            {overruled.length > 0 ? " that the AI checker agrees with" : ""}
           </h3>
         )}
+        {!checkCurrent && checkResult !== null ? (
+          <p class="gloss-stale">
+            The AI result below was computed from different prose than
+            what's on this page — the brief has changed since. Re-check
+            before trusting it.
+          </p>
+        ) : null}
+        {overruled.length > 0 ? (
+          <details>
+            <summary class="gloss-overruled">
+              {overruled.length} regex flag
+              {overruled.length === 1 ? "" : "s"} overruled by the AI checker
+            </summary>
+            <ul>
+              {overruled.map((f) => (
+                <li>
+                  <span class="gloss-term">{f.term}</span>
+                  <span class="gloss-kind">{f.kind}</span>
+                  <span class="gloss-note">
+                    {" "}
+                    — {dismissReason.get(f.term.toLowerCase()) ||
+                      (dismissedTerms.has(f.term.toLowerCase())
+                        ? "dismissed"
+                        : "not reported by the checker")}
+                  </span>
+                  <IgnoreTermButton term={f.term} issueId={issueId} />
+                  <span class="gloss-ctx">
+                    “{highlightTerm(f.firstUseSentence, f.term)}”
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p class="gloss-note">
+              Recurring false alarm? “ignore” adds the term to the{" "}
+              <a href="/admin/gloss-terms">gloss-term</a> ignore list and
+              neither layer will raise it again.
+            </p>
+          </details>
+        ) : null}
         {glossed.length > 0 ? (
           <details>
             <summary>
@@ -542,7 +668,34 @@ const CheckPanel: FC<{
                 </button>
               </form>
             ) : null}
+            {isDraft ? (
+              <form
+                method="post"
+                action={`/admin/review/${issueId}/auto-fix`}
+                data-confirm="Re-run the automatic check→fix→re-check loop and apply the best result directly to this draft? Costs up to two composer calls."
+              >
+                <button type="submit" class="gloss-check-btn">
+                  {autoFix ? "Re-run auto-fix" : "Run auto-fix"}
+                </button>
+              </form>
+            ) : null}
           </div>
+          {autoFix !== null ? (
+            <p class="gloss-note">
+              Last auto-fix: <strong>{autoFix.outcome}</strong> after{" "}
+              {autoFix.passes.length} pass
+              {autoFix.passes.length === 1 ? "" : "es"}
+              {autoFix.passes.length > 0
+                ? ` (${autoFix.passes
+                    .map(
+                      (pa) =>
+                        `#${pa.pass} ${pa.findings_before.length}→${pa.findings_after.length}${pa.improved ? "" : ", not adopted"}`,
+                    )
+                    .join("; ")})`
+                : ""}
+              . {autoFix.final_findings.length} left outstanding.
+            </p>
+          ) : null}
           {checkResult === null ? (
             <p class="gloss-note">
               The regex floor (above) can't see un-listed specialist names
@@ -991,7 +1144,9 @@ export const AdminReview: FC<{
     <CheckPanel
       findings={data.glossFindings}
       checkResult={data.checkResult}
+      checkCurrent={data.checkCurrent}
       fixCandidate={data.fixCandidate}
+      autoFix={data.autoFix}
       issueId={data.issue.id}
       isDraft={data.issue.isDraft}
     />

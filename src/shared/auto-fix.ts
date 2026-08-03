@@ -16,9 +16,10 @@
 import { db } from "../db/index.ts";
 import { runChecker, CHECKER_MODEL, CHECKER_VERSION } from "../ai/checker.ts";
 import { lintGloss } from "./gloss-lint.ts";
-import { loadGlossTerms } from "./gloss-store.ts";
+import { loadGlossLists } from "./gloss-store.ts";
 import { getConfigBool, getConfigNumber } from "./config-store.ts";
 import { composeDraftFromInput } from "../pipeline/draft.ts";
+import { markdownSha } from "./check-schema.ts";
 import type {
   AutoFixLog,
   AutoFixPass,
@@ -35,14 +36,20 @@ export async function runCheckOnMarkdown(
   markdown: string,
 ): Promise<CheckResult | "failed"> {
   try {
-    const terms = await loadGlossTerms();
-    const glossCandidates = lintGloss(markdown, terms);
-    const findings = await runChecker({ markdown, glossCandidates });
+    const lists = await loadGlossLists();
+    const glossCandidates = lintGloss(markdown, lists.jargon, lists.ignored);
+    const run = await runChecker({
+      markdown,
+      glossCandidates,
+      ignoredTerms: lists.ignored,
+    });
     return {
       checked_at: new Date().toISOString(),
       model_id: CHECKER_MODEL,
       prompt_version: CHECKER_VERSION,
-      findings,
+      findings: run.findings,
+      dismissed: run.dismissed,
+      markdown_sha: markdownSha(markdown),
     };
   } catch (err) {
     console.error("[checker]", err);
@@ -75,13 +82,30 @@ export async function runCheckAndStore(
 // Turn gloss findings into targeted composer revision notes for a
 // fix-recompose. Non-gloss tasks are skipped (they have no recompose
 // remedy yet).
-export function findingsToNotes(findings: CheckFinding[]): string[] {
-  return findings
+//
+// `attempt` (1-based) is appended as a note when it's not the first try.
+// This is not decoration. The composer is cached on a hash of its
+// rendered input (src/ai/composer.ts), so re-running a fix from the same
+// findings returned the identical brief straight out of ai_call_log —
+// the operator clicked "Re-generate fix", nothing changed, and the panel
+// looked broken. Naming the attempt both breaks the hash and tells the
+// composer something true and useful: the last try didn't land.
+export function findingsToNotes(
+  findings: CheckFinding[],
+  attempt = 1,
+): string[] {
+  const notes = findings
     .filter((f) => f.task === "gloss")
     .map((f) => {
       const base = `"${f.term}" is used un-glossed on first use ("${f.excerpt}") — gloss it briefly on first use`;
       return f.suggestion ? `${base}, e.g. ${f.suggestion}.` : `${base}.`;
     });
+  if (notes.length > 0 && attempt > 1) {
+    notes.push(
+      `This is revision attempt ${attempt}: attempt ${attempt - 1} left the terms above still un-glossed. Address each one explicitly this time, and do not introduce new un-glossed acronyms or specialist names while doing it.`,
+    );
+  }
+  return notes;
 }
 
 export type AutoFixResult = AutoFixLog & { clean: boolean };
@@ -118,7 +142,12 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
 
   const iss = await db
     .selectFrom("issue")
-    .select(["is_draft", "composed_markdown", "composer_input_jsonb"])
+    .select([
+      "is_draft",
+      "composed_markdown",
+      "composer_input_jsonb",
+      "auto_fix_jsonb",
+    ])
     .where("id", "=", issueId)
     .executeTakeFirst();
   if (iss === undefined || !iss.is_draft) {
@@ -131,112 +160,133 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
   }
 
   const passes: AutoFixPass[] = [];
-  let current = await runCheckOnMarkdown(iss.composed_markdown);
-  if (current === "failed") {
+  const initial = await runCheckOnMarkdown(iss.composed_markdown);
+  if (initial === "failed") {
     return await persist(issueId, {
       passes,
       final_findings: [],
       outcome: "failed",
+      attempts: (iss.auto_fix_jsonb as AutoFixLog | null)?.attempts ?? 0,
     }, false);
   }
 
-  let markdown = iss.composed_markdown;
+  // BEST-SO-FAR, not last-accepted. A "fix" is a FULL recompose, so one
+  // unlucky roll that trades two gaps for two others used to end the run
+  // on the original prose — the shape of "the fixer ran and more terms
+  // remain". Now: keep the lowest-finding-count prose, compose FROM it,
+  // and spend the remaining passes. Adoption still requires a strict
+  // improvement, so the draft can never get worse.
+  // Attempts already spent on this draft by earlier sweeps. Numbering
+  // continues from there so retry seven doesn't replay attempt one out
+  // of the composer cache.
+  const priorAttempts =
+    (iss.auto_fix_jsonb as AutoFixLog | null)?.attempts ?? 0;
+
+  type Composed = Awaited<ReturnType<typeof composeDraftFromInput>>;
+  let bestOut: Composed | null = null; // null === the draft's own prose
+  let bestCheck: CheckResult = initial;
+  let bestMarkdown = iss.composed_markdown;
+  // Set only when the loop stopped for a reason other than running out
+  // of passes or finding nothing left to fix.
+  let stopped: AutoFixLog["outcome"] | null = null;
+
+  let attempts = priorAttempts;
 
   for (let pass = 1; pass <= maxPasses; pass++) {
-    const findings = current.findings;
+    const findings = bestCheck.findings;
     if (findings.length === 0) break;
 
-    const notes = findingsToNotes(findings);
+    // The attempt number goes into the notes deliberately: it breaks the
+    // composer's input-hash cache (without it pass 2 replays pass 1
+    // byte-for-byte out of ai_call_log) and it tells the model something
+    // true -- the previous attempt did not land.
+    const notes = findingsToNotes(findings, attempts + 1);
     if (notes.length === 0) {
       // Findings exist but none are gloss problems a recompose can
-      // address. Stopping is correct — looping would burn composer
-      // calls without a remedy — but the draft is NOT clean.
-      return await persist(issueId, {
-        passes,
-        final_findings: findings,
-        outcome: "nothing_to_fix",
-      }, false);
+      // address. Stopping is correct -- looping would burn composer
+      // calls without a remedy -- but the draft is NOT clean.
+      stopped = "nothing_to_fix";
+      break;
     }
 
     if (iss.composer_input_jsonb === null) {
-      // No stored composer input → nothing to recompose from.
-      return await persist(issueId, {
-        passes,
-        final_findings: findings,
-        outcome: "failed",
-      }, false);
+      // No stored composer input -> nothing to recompose from.
+      stopped = "failed";
+      break;
     }
 
+    attempts += 1;
     let recheck: CheckResult | "failed";
-    let out: Awaited<ReturnType<typeof composeDraftFromInput>>;
+    let out: Composed;
     try {
       out = await composeDraftFromInput(iss.composer_input_jsonb, notes);
       recheck = await runCheckOnMarkdown(out.markdown);
     } catch (err) {
       console.error(`[auto-fix] issue ${issueId} pass ${pass}:`, err);
-      return await persist(issueId, {
-        passes,
-        final_findings: findings,
-        outcome: "failed",
-      }, false);
+      stopped = "failed";
+      break;
     }
     if (recheck === "failed") {
-      return await persist(issueId, {
-        passes,
-        final_findings: findings,
-        outcome: "failed",
-      }, false);
+      stopped = "failed";
+      break;
     }
 
-    // Guard against a recompose that trades one gap for another. We
-    // accept a pass only if it strictly reduced the finding count;
-    // otherwise keep the earlier prose and stop, so a thrashing
-    // composer can't make the brief worse on its way to the deadline.
-    const improved = recheck.findings.length < findings.length;
+    // Adopt only a strict improvement, so a thrashing composer can't
+    // make the brief worse on its way to the deadline.
+    const improved = recheck.findings.length < bestCheck.findings.length;
     passes.push({
       pass,
       at: new Date().toISOString(),
       notes,
-      findings_before: findings,
-      markdown_before: markdown,
+      findings_before: bestCheck.findings,
+      markdown_before: bestMarkdown,
       findings_after: recheck.findings,
       improved,
     });
-
-    if (!improved) {
-      return await persist(issueId, {
-        passes,
-        final_findings: findings,
-        outcome: "exhausted",
-      }, false);
+    if (improved) {
+      bestOut = out;
+      bestCheck = recheck;
+      bestMarkdown = out.markdown;
     }
-
-    await db
-      .updateTable("issue")
-      .set({
-        title: out.title,
-        composed_markdown: out.markdown,
-        composed_html: out.html,
-        composer_prompt_version: out.promptVersion,
-        composer_model_id: out.modelId,
-        check_jsonb: JSON.stringify(recheck) as never,
-        // A freshly auto-fixed draft supersedes any manual proposal.
-        fix_candidate_jsonb: null,
-      })
-      .where("id", "=", issueId)
-      .where("is_draft", "=", true)
-      .execute();
-
-    markdown = out.markdown;
-    current = recheck;
   }
 
-  const finalFindings = current.findings;
-  return await persist(issueId, {
-    passes,
-    final_findings: finalFindings,
-    outcome: finalFindings.length === 0 ? "clean" : "exhausted",
-  }, finalFindings.length === 0);
+  // One write at the end, of the best prose seen — writing per-pass would
+  // leave a version the loop had moved past if the process died mid-run.
+  // The check result is stored even when nothing was adopted: the checker
+  // DID run, and "checker hasn't run yet" over judged prose is how an
+  // operator stops trusting the panel.
+  await db
+    .updateTable("issue")
+    .set({
+      ...(bestOut !== null
+        ? {
+            title: bestOut.title,
+            composed_markdown: bestOut.markdown,
+            composed_html: bestOut.html,
+            composer_prompt_version: bestOut.promptVersion,
+            composer_model_id: bestOut.modelId,
+            // A freshly auto-fixed draft supersedes any manual proposal.
+            fix_candidate_jsonb: null,
+          }
+        : {}),
+      check_jsonb: JSON.stringify(bestCheck) as never,
+    })
+    .where("id", "=", issueId)
+    .where("is_draft", "=", true)
+    .execute();
+
+  const finalFindings = bestCheck.findings;
+  const clean = stopped === null && finalFindings.length === 0;
+  return await persist(
+    issueId,
+    {
+      passes,
+      final_findings: finalFindings,
+      outcome: stopped ?? (clean ? "clean" : "exhausted"),
+      attempts,
+    },
+    clean,
+  );
 }
 
 async function persist(

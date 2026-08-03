@@ -28,11 +28,13 @@ import { autoFixDraft } from "../shared/auto-fix.ts";
 import { notifyAdmin } from "../shared/admin-notify.ts";
 import { getConfigBool, getConfigNumber } from "../shared/config-store.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
-import { isCleanAutoFix } from "../shared/check-schema.ts";
+import { isCleanAutoFix, shouldRetryAutoFix } from "../shared/check-schema.ts";
 import { PUBLIC_URL } from "../api/config.ts";
 import { publishDraft } from "./draft.ts";
 
 const DEFAULT_AUTO_PUBLISH_HOURS = 24;
+// Lifetime recompose attempts per draft across all sweeps (mig 071).
+const DEFAULT_AUTO_FIX_MAX_ATTEMPTS = 6;
 // Ceiling, not a deadline: above this a draft is held instead of sent.
 // Comfortably clear of the 24h deadline so an ordinary late sweep (a
 // machine down for a day) still publishes normally.
@@ -70,6 +72,22 @@ async function runAutopublish(): Promise<void> {
       DEFAULT_AUTO_PUBLISH_MAX_AGE_HOURS,
     )) * 3600_000;
 
+  const maxAttempts = Math.floor(
+    await getConfigNumber(
+      "compose.auto_fix_max_attempts",
+      DEFAULT_AUTO_FIX_MAX_ATTEMPTS,
+    ),
+  );
+  // Does an un-glossed term still block the send? Default OFF as of mig
+  // 071. Holding is right for a brief that is WRONG (see the staleness
+  // ceiling below) and wrong for one that is merely unpolished: the cost
+  // of a hold is the whole issue going out late, or not at all until
+  // someone notices, over six missing words.
+  const requiresClean = await getConfigBool(
+    "compose.auto_publish_requires_clean",
+    false,
+  );
+
   for (const draft of drafts) {
     // drafted_at is NULL only for pre-mig-066 rows that were already
     // published, which this query excludes — but treat NULL as
@@ -105,12 +123,16 @@ async function runAutopublish(): Promise<void> {
       continue;
     }
 
-    // Pass 1: fix. A draft with no auto_fix_jsonb has never been through
-    // the loop — do it now, whatever its age, so the operator sees
-    // glossed prose long before the deadline. Already-processed drafts
-    // are left alone; re-running would burn a composer call per hour.
+    // Pass 1: fix. Runs whatever the draft's age, so the operator sees
+    // glossed prose long before the deadline — and RE-runs on later
+    // sweeps while the draft is still dirty. A fix is a full recompose,
+    // so any single run is partly luck; the version that ran once and
+    // then idled for 23 hours is why "the fixer ran" and "the fixer
+    // worked" came apart. Bounded by the lifetime attempt cap, which is
+    // what keeps an unfixable draft from spending a composer call an
+    // hour forever.
     let clean: boolean;
-    if (draft.auto_fix_jsonb === null) {
+    if (shouldRetryAutoFix(draft.auto_fix_jsonb, maxAttempts)) {
       const result = await autoFixDraft(draft.id);
       clean = result.clean;
     } else {
@@ -122,7 +144,7 @@ async function runAutopublish(): Promise<void> {
     // Pass 2: publish, if the deadline has passed.
     if (decision !== "due") continue;
 
-    if (!clean) {
+    if (!clean && requiresClean) {
       await holdDraft(draft.id, draft.title, { reason: "unclean" });
       continue;
     }
@@ -131,6 +153,13 @@ async function runAutopublish(): Promise<void> {
     console.log(
       `[autopublish] draft ${draft.id}: ${published ? "published" : "publish failed (not a draft?)"}`,
     );
+    // Shipped imperfect. Not a hold — the brief went out — but the
+    // operator should know, because a term that survives six recomposes
+    // is usually one the composer prompt or the gloss lists should
+    // learn about rather than something to hand-fix every week.
+    if (published && !clean) {
+      await notifyUnclean(draft.id, draft.title, draft.auto_fix_jsonb);
+    }
   }
 }
 
@@ -164,6 +193,34 @@ export function autopublishDecision(o: {
   if (o.enabled && o.ageMs > o.maxAgeMs) return "hold_stale";
   if (o.ageMs < o.deadlineMs) return "wait";
   return "due";
+}
+
+// Published-but-dirty notice. Deliberately not a hold: see mig 071.
+async function notifyUnclean(
+  id: number,
+  title: string | null,
+  log: unknown,
+): Promise<void> {
+  const remaining =
+    (log as { final_findings?: unknown[] } | null)?.final_findings?.length ?? 0;
+  const attempts = (log as { attempts?: number } | null)?.attempts ?? 0;
+  const name = title ?? `Draft #${id}`;
+  const url = `${PUBLIC_URL}/admin/review/${id}`;
+  const body =
+    `${name} was published on schedule with ${remaining} term` +
+    `${remaining === 1 ? "" : "s"} the checker still flags as un-glossed, ` +
+    `after ${attempts} automatic fix attempt${attempts === 1 ? "" : "s"}.\n\n` +
+    `Nothing to do about this issue — it has shipped. But a term that ` +
+    `survives that many recomposes usually wants a durable fix: add it to ` +
+    `the gloss lists, put it on the ignore list if the flag is wrong, or ` +
+    `tighten the composer prompt.`;
+  await notifyAdmin({
+    subject: `Published with ${remaining} gloss finding${remaining === 1 ? "" : "s"}: "${name}"`,
+    text: `${body}\n\n${url}\n`,
+    html: `<p>${escapeHtml(body).replace(/\n\n/g, "</p><p>")}</p><p><a href="${url}">Open the issue</a></p>`,
+    dedupeKey: `autopublish-unclean-${id}`,
+    cooldownMs: 24 * 3600_000,
+  });
 }
 
 export type HoldReason =

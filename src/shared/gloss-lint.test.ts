@@ -7,8 +7,12 @@ const JARGON: JargonTerm[] = [
   { term: "tirzepatide", note: "weight-loss drug" },
 ];
 
-function flagged(text: string, jargon: JargonTerm[] = JARGON): string[] {
-  return lintGloss(text, jargon)
+function flagged(
+  text: string,
+  jargon: JargonTerm[] = JARGON,
+  ignored: string[] = [],
+): string[] {
+  return lintGloss(text, jargon, ignored)
     .filter((f) => !f.glossed)
     .map((f) => f.term);
 }
@@ -100,5 +104,51 @@ describe("URL handling", () => {
       "The deal closed. ( [reuters.com](https://reuters.com/WORLD/ABC) )";
     // No prose acronyms; the URL path must not produce a finding.
     expect(lintGloss(text, []).map((f) => f.term)).toEqual([]);
+  });
+});
+
+describe("citation link labels", () => {
+  // The single biggest source of weekly false alarms: every issue cites
+  // its sources as markdown links, and an acronym in a link LABEL is a
+  // source credit, not prose. Nobody glosses a byline.
+  test("an acronym only ever used as a source credit is not flagged", () => {
+    const text = "The tribunal ruled on Tuesday. ([BBC](https://bbc.co.uk/x))";
+    expect(lintGloss(text, []).map((f) => f.term)).toEqual([]);
+  });
+
+  test("but the same acronym used in prose still is", () => {
+    const text =
+      "The VRA was gutted this week. ([VRA explainer](https://ex.com/a))";
+    expect(flagged(text)).toContain("VRA");
+  });
+
+  test("a label occurrence doesn't consume the term's first use", () => {
+    // The link comes FIRST. If the label counted as the first use, the
+    // bare prose use after it would be treated as a correct later use
+    // and never flagged — a silent miss, the expensive direction.
+    const text =
+      "([IRGC report](https://ex.com/a)) The IRGC mobilised overnight.";
+    expect(flagged(text)).toContain("IRGC");
+  });
+});
+
+describe("ignore list", () => {
+  test("an ignored acronym is not reported at all", () => {
+    const out = lintGloss("IBM said the outage lasted an hour.", [], ["IBM"]);
+    expect(out).toEqual([]);
+  });
+
+  test("ignoring is case-insensitive", () => {
+    expect(lintGloss("BBC said so.", [], ["bbc"])).toEqual([]);
+  });
+
+  test("an ignored jargon term is not reported either", () => {
+    expect(lintGloss("Brent is at $126.", JARGON, ["brent"])).toEqual([]);
+  });
+
+  test("ignoring one term doesn't suppress its neighbours", () => {
+    const f = flagged("IBM sued, and the VRA case resumed.", JARGON, ["IBM"]);
+    expect(f).not.toContain("IBM");
+    expect(f).toContain("VRA");
   });
 });

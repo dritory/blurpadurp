@@ -100,6 +100,7 @@ import { validateTitleRegex } from "../shared/title-noise.ts";
 import { AdminRelease, type ReleaseData } from "../views/admin-release.tsx";
 import { resendDraftToReviewers } from "../pipeline/dispatch.ts";
 import {
+  autoFixDraft,
   runCheckAndStore,
   runCheckOnMarkdown,
   findingsToNotes,
@@ -109,6 +110,7 @@ import type {
   CheckFinding,
   FixCandidate,
 } from "../shared/check-schema.ts";
+import { isCheckCurrent, markdownSha } from "../shared/check-schema.ts";
 import {
   AdminScheduler,
 } from "../views/admin-scheduler.tsx";
@@ -343,10 +345,14 @@ export function registerAdminRoutes(app: Hono): void {
         title,
         composed_html: composedHtml,
         composed_markdown: composedMarkdown,
-        // Brief edited by hand — any stored checker result + pending fix
-        // proposal are now stale.
+        // Brief edited by hand — the stored checker result, the pending
+        // fix proposal and the auto-fix verdict are all stale. Clearing
+        // auto_fix_jsonb also re-arms the hourly sweep, which otherwise
+        // publishes the edited prose against a verdict on prose that no
+        // longer exists.
         check_jsonb: null,
         fix_candidate_jsonb: null,
+        auto_fix_jsonb: null,
       })
       .where("id", "=", id)
       .where("is_draft", "=", true)
@@ -385,7 +391,13 @@ export function registerAdminRoutes(app: Hono): void {
     if (!Number.isFinite(id) || id <= 0) return c.notFound();
     const iss = await db
       .selectFrom("issue")
-      .select(["is_draft", "check_jsonb", "composer_input_jsonb"])
+      .select([
+        "is_draft",
+        "check_jsonb",
+        "composed_markdown",
+        "composer_input_jsonb",
+        "fix_candidate_jsonb",
+      ])
       .where("id", "=", id)
       .executeTakeFirst();
     if (iss === undefined) {
@@ -397,17 +409,28 @@ export function registerAdminRoutes(app: Hono): void {
     if (iss.composer_input_jsonb === null) {
       return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
     }
-    // Prefer stored findings; if none stored yet, run a check first.
-    let findings: CheckFinding[] =
-      (iss.check_jsonb as CheckResult | null)?.findings ?? [];
-    if (findings.length === 0) {
+    // Use the stored findings only if they are about the prose we're
+    // about to recompose. A stale result (recompose, hand edit, or a
+    // pre-mig-070 row with no stamp) would feed the composer notes about
+    // terms that are no longer there — and then the panel wouldn't move,
+    // which is exactly how "running the fix again changes nothing"
+    // looked from the outside.
+    const stored = iss.check_jsonb as CheckResult | null;
+    const current = isCheckCurrent(stored, markdownSha(iss.composed_markdown));
+    let findings: CheckFinding[] = current ? (stored?.findings ?? []) : [];
+    if (!current || findings.length === 0) {
       const fresh = await runCheckAndStore(id);
       if (fresh === null || fresh === "failed") {
         return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
       }
       findings = fresh.findings;
     }
-    const notes = findingsToNotes(findings);
+    // Each re-generate is a NEW attempt. The number is rendered into the
+    // revision notes, which is what stops the composer's input-hash
+    // cache from handing back the identical brief every time.
+    const attempt =
+      ((iss.fix_candidate_jsonb as FixCandidate | null)?.attempt ?? 0) + 1;
+    const notes = findingsToNotes(findings, attempt);
     if (notes.length === 0) {
       // Findings exist but none are gloss problems we can recompose away.
       return c.redirect(`/admin/review/${id}?nothing_to_fix=1#gloss`, 303);
@@ -421,6 +444,7 @@ export function registerAdminRoutes(app: Hono): void {
       }
       candidate = {
         created_at: new Date().toISOString(),
+        attempt,
         notes,
         title: out.title,
         composed_markdown: out.markdown,
@@ -467,11 +491,41 @@ export function registerAdminRoutes(app: Hono): void {
         composer_model_id: cand.model_id,
         check_jsonb: JSON.stringify(cand.check) as never,
         fix_candidate_jsonb: null,
+        // New prose, so the sweep's stored verdict no longer describes
+        // this draft. Clearing it re-arms auto-fix; if the candidate's
+        // own re-check was clean that costs nothing (the checker call
+        // hashes to the same input and comes back from cache).
+        auto_fix_jsonb: null,
       })
       .where("id", "=", id)
       .where("is_draft", "=", true)
       .execute();
     return c.redirect(`/admin/review/${id}?fixed=1#gloss`, 303);
+  });
+
+  // Re-run the automatic check -> fix -> re-check loop by hand. The
+  // hourly sweep only auto-fixes a draft that has never been through the
+  // loop (re-running it every hour would burn a composer call an hour),
+  // which left the operator with no way to say "try again" after a run
+  // came back exhausted. This is that button. Applies the best result
+  // directly to the draft, same as the sweep.
+  app.post("/admin/review/:id/auto-fix", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    let result: Awaited<ReturnType<typeof autoFixDraft>>;
+    try {
+      result = await autoFixDraft(id);
+    } catch (err) {
+      console.error("[auto-fix route]", err);
+      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
+    }
+    if (result.outcome === "failed") {
+      return c.redirect(`/admin/review/${id}?error=fix_failed#gloss`, 303);
+    }
+    return c.redirect(
+      `/admin/review/${id}?auto_fixed=${encodeURIComponent(result.outcome)}#gloss`,
+      303,
+    );
   });
 
   // Drop a pending fix proposal — draft untouched.
@@ -1188,8 +1242,13 @@ export function registerAdminRoutes(app: Hono): void {
   app.get("/admin/gloss-terms", async (c) => {
     const q = c.req.query();
     const flash =
-      q.added || q.removed || q.error
-        ? { added: q.added, removed: q.removed, error: q.error }
+      q.added || q.removed || q.watched || q.error
+        ? {
+            added: q.added,
+            removed: q.removed,
+            watched: q.watched,
+            error: q.error,
+          }
         : null;
     const data = await loadGlossTermsData(flash);
     return c.html(<AdminGlossTerms d={data} />);
@@ -1234,6 +1293,50 @@ export function registerAdminRoutes(app: Hono): void {
     }
     return c.redirect(
       "/admin/gloss-terms?added=" + encodeURIComponent(term),
+      303,
+    );
+  });
+
+  // Add a term to the IGNORE list (mig 070) — "stop flagging this".
+  // Reachable straight from the review panel's per-term "ignore" button,
+  // which is the whole point: a false alarm the operator has to leave
+  // the page to silence doesn't get silenced. Unlike /add this accepts
+  // all-caps terms, since the acronym detector is what's over-firing.
+  app.post("/admin/gloss-terms/ignore", async (c) => {
+    const body = await c.req.parseBody();
+    const term = String(body.term ?? "").trim().replace(/\s+/g, " ");
+    // Only ever an in-app path, never an absolute URL — a caller-supplied
+    // redirect target is an open-redirect otherwise.
+    const raw = String(body.back ?? "");
+    const back = /^\/[A-Za-z0-9/_#:?=&.-]*$/.test(raw) ? raw : "/admin/gloss-terms";
+    if (term.length === 0 || term.length > 60) {
+      return c.redirect(
+        "/admin/gloss-terms?error=" +
+          encodeURIComponent("term must be 1–60 chars"),
+        303,
+      );
+    }
+    await db
+      .insertInto("gloss_term")
+      .values({ term, note: "ignored from the review panel", is_ignored: true })
+      .onConflict((oc) =>
+        oc.column("term").doUpdateSet({ is_ignored: true }),
+      )
+      .execute();
+    return c.redirect(back, 303);
+  });
+
+  // Flip a term back to WATCHED — the undo for the button above.
+  app.post("/admin/gloss-terms/watch", async (c) => {
+    const body = await c.req.parseBody();
+    const term = String(body.term ?? "");
+    await db
+      .updateTable("gloss_term")
+      .set({ is_ignored: false })
+      .where("term", "=", term)
+      .execute();
+    return c.redirect(
+      "/admin/gloss-terms?watched=" + encodeURIComponent(term),
       303,
     );
   });
