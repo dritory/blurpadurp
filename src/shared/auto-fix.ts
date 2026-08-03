@@ -6,12 +6,13 @@
 // here when the pipeline needed them too — a scheduled stage must not
 // import the HTTP route module.
 //
-// The manual and automatic paths differ only in what they do with a
-// recomposed brief. Manual stashes it on fix_candidate_jsonb for a human
-// to accept; automatic writes it to the draft and records the prior
-// version on auto_fix_jsonb. Both re-check the new prose before treating
-// it as an improvement — a fix pass that introduces a *new* un-glossed
-// term must not be mistaken for progress.
+// One path as of mig 072: the fix is composed, re-checked and applied
+// directly. The propose -> preview -> accept gate is gone — it added no
+// judgment the loop wasn't already applying (a pass that doesn't strictly
+// reduce the finding count is refused), and once the sweep started
+// retrying hourly it raced its own proposals. Reviewability lives after
+// the change instead: auto_fix_jsonb keeps the composer's original prose
+// so /admin/review can render the before/after.
 
 import { db } from "../db/index.ts";
 import { runChecker, CHECKER_MODEL, CHECKER_VERSION } from "../ai/checker.ts";
@@ -115,9 +116,9 @@ export type AutoFixResult = AutoFixLog & { clean: boolean };
 // Up to `compose.auto_fix_max_passes` rounds; each pass re-checks before
 // the next decision.
 //
-// Applies fixes DIRECTLY to the draft (this is the no-gate path the
-// operator asked for) but keeps the pre-fix prose in auto_fix_jsonb, so
-// nothing becomes unreviewable — /admin/review renders the before/after.
+// Applies fixes DIRECTLY to the draft but keeps the composer's original
+// prose in auto_fix_jsonb, so nothing becomes unreviewable —
+// /admin/review renders the before/after.
 //
 // Only ever touches rows that are still drafts. Never throws: a checker
 // or composer failure leaves the draft as-is and reports outcome
@@ -179,8 +180,14 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
   // Attempts already spent on this draft by earlier sweeps. Numbering
   // continues from there so retry seven doesn't replay attempt one out
   // of the composer cache.
-  const priorAttempts =
-    (iss.auto_fix_jsonb as AutoFixLog | null)?.attempts ?? 0;
+  const prior = iss.auto_fix_jsonb as AutoFixLog | null;
+  const priorAttempts = prior?.attempts ?? 0;
+  // The composer's own prose, captured on the first run that had
+  // something to fix and never overwritten — the anchor for the
+  // before/after. Later sweeps must not re-capture: by then the "before"
+  // is already machine-written.
+  const originalMarkdown = prior?.original_markdown ?? iss.composed_markdown;
+  const originalFindings = prior?.original_findings ?? initial.findings;
 
   type Composed = Awaited<ReturnType<typeof composeDraftFromInput>>;
   let bestOut: Composed | null = null; // null === the draft's own prose
@@ -265,8 +272,6 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
             composed_html: bestOut.html,
             composer_prompt_version: bestOut.promptVersion,
             composer_model_id: bestOut.modelId,
-            // A freshly auto-fixed draft supersedes any manual proposal.
-            fix_candidate_jsonb: null,
           }
         : {}),
       check_jsonb: JSON.stringify(bestCheck) as never,
@@ -284,6 +289,13 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
       final_findings: finalFindings,
       outcome: stopped ?? (clean ? "clean" : "exhausted"),
       attempts,
+      // Only meaningful once a pass has actually rewritten something.
+      ...(attempts > 0
+        ? {
+            original_markdown: originalMarkdown,
+            original_findings: originalFindings,
+          }
+        : {}),
     },
     clean,
   );

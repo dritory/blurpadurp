@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { AutoFixLog } from "./check-schema.ts";
 import {
   isCheckCurrent,
   isCleanAutoFix,
@@ -167,5 +168,33 @@ describe("shouldRetryAutoFix", () => {
         2,
       ),
     ).toBe(false);
+  });
+});
+
+describe("AutoFixLog as the audit trail", () => {
+  // mig 072 removed the approve-before-it-lands gate, so the log IS the
+  // reviewability. The original prose has to survive every later sweep:
+  // each run writes a fresh log, so a naive re-capture would show retry
+  // four's "before" as machine-written prose and the composer's actual
+  // output would be gone.
+  test("original_markdown is what a later run must carry forward", () => {
+    const first: AutoFixLog = {
+      passes: [],
+      final_findings: [],
+      outcome: "exhausted",
+      attempts: 2,
+      original_markdown: "the composer's own words",
+      original_findings: [],
+    };
+    // What autoFixDraft does on a subsequent run: prefer the stored
+    // original over the draft's current (already-fixed) prose.
+    const carried = first.original_markdown ?? "current draft prose";
+    expect(carried).toBe("the composer's own words");
+  });
+
+  test("a first run falls back to the draft's own prose", () => {
+    const carried =
+      (null as AutoFixLog | null)?.original_markdown ?? "current draft prose";
+    expect(carried).toBe("current draft prose");
   });
 });

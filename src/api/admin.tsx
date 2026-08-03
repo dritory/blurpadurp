@@ -8,7 +8,6 @@ import { resolve } from "node:path";
 
 import { db } from "../db/index.ts";
 import {
-  composeDraftFromInput,
   discardDraft,
   publishDraft,
   recomposeDraft,
@@ -99,18 +98,7 @@ import {
 import { validateTitleRegex } from "../shared/title-noise.ts";
 import { AdminRelease, type ReleaseData } from "../views/admin-release.tsx";
 import { resendDraftToReviewers } from "../pipeline/dispatch.ts";
-import {
-  autoFixDraft,
-  runCheckAndStore,
-  runCheckOnMarkdown,
-  findingsToNotes,
-} from "../shared/auto-fix.ts";
-import type {
-  CheckResult,
-  CheckFinding,
-  FixCandidate,
-} from "../shared/check-schema.ts";
-import { isCheckCurrent, markdownSha } from "../shared/check-schema.ts";
+import { autoFixDraft, runCheckAndStore } from "../shared/auto-fix.ts";
 import {
   AdminScheduler,
 } from "../views/admin-scheduler.tsx";
@@ -345,13 +333,11 @@ export function registerAdminRoutes(app: Hono): void {
         title,
         composed_html: composedHtml,
         composed_markdown: composedMarkdown,
-        // Brief edited by hand — the stored checker result, the pending
-        // fix proposal and the auto-fix verdict are all stale. Clearing
-        // auto_fix_jsonb also re-arms the hourly sweep, which otherwise
-        // publishes the edited prose against a verdict on prose that no
-        // longer exists.
+        // Brief edited by hand — the stored checker result and the
+        // auto-fix verdict are both stale. Clearing auto_fix_jsonb also
+        // re-arms the hourly sweep, which would otherwise publish the
+        // edited prose against a verdict on prose that no longer exists.
         check_jsonb: null,
-        fix_candidate_jsonb: null,
         auto_fix_jsonb: null,
       })
       .where("id", "=", id)
@@ -381,128 +367,6 @@ export function registerAdminRoutes(app: Hono): void {
     return c.redirect(`/admin/review/${id}?checked=1#gloss`, 303);
   });
 
-  // The reject→fix round, NON-DESTRUCTIVELY: feed the current checker
-  // findings back into a targeted re-compose (drafts only), re-check the
-  // candidate prose, and stash it as a PROPOSAL on fix_candidate_jsonb.
-  // The live draft is untouched — the reviewer previews and then Accepts
-  // or Discards (routes below). Click again to re-generate the proposal.
-  app.post("/admin/review/:id/check-fix", async (c) => {
-    const id = Number(c.req.param("id"));
-    if (!Number.isFinite(id) || id <= 0) return c.notFound();
-    const iss = await db
-      .selectFrom("issue")
-      .select([
-        "is_draft",
-        "check_jsonb",
-        "composed_markdown",
-        "composer_input_jsonb",
-        "fix_candidate_jsonb",
-      ])
-      .where("id", "=", id)
-      .executeTakeFirst();
-    if (iss === undefined) {
-      return c.redirect(`/admin/review/${id}?error=not_found`, 303);
-    }
-    if (!iss.is_draft) {
-      return c.redirect(`/admin/review/${id}?error=fix_not_draft`, 303);
-    }
-    if (iss.composer_input_jsonb === null) {
-      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
-    }
-    // Use the stored findings only if they are about the prose we're
-    // about to recompose. A stale result (recompose, hand edit, or a
-    // pre-mig-070 row with no stamp) would feed the composer notes about
-    // terms that are no longer there — and then the panel wouldn't move,
-    // which is exactly how "running the fix again changes nothing"
-    // looked from the outside.
-    const stored = iss.check_jsonb as CheckResult | null;
-    const current = isCheckCurrent(stored, markdownSha(iss.composed_markdown));
-    let findings: CheckFinding[] = current ? (stored?.findings ?? []) : [];
-    if (!current || findings.length === 0) {
-      const fresh = await runCheckAndStore(id);
-      if (fresh === null || fresh === "failed") {
-        return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
-      }
-      findings = fresh.findings;
-    }
-    // Each re-generate is a NEW attempt. The number is rendered into the
-    // revision notes, which is what stops the composer's input-hash
-    // cache from handing back the identical brief every time.
-    const attempt =
-      ((iss.fix_candidate_jsonb as FixCandidate | null)?.attempt ?? 0) + 1;
-    const notes = findingsToNotes(findings, attempt);
-    if (notes.length === 0) {
-      // Findings exist but none are gloss problems we can recompose away.
-      return c.redirect(`/admin/review/${id}?nothing_to_fix=1#gloss`, 303);
-    }
-    let candidate: FixCandidate;
-    try {
-      const out = await composeDraftFromInput(iss.composer_input_jsonb, notes);
-      const recheck = await runCheckOnMarkdown(out.markdown);
-      if (recheck === "failed") {
-        return c.redirect(`/admin/review/${id}?error=check_failed`, 303);
-      }
-      candidate = {
-        created_at: new Date().toISOString(),
-        attempt,
-        notes,
-        title: out.title,
-        composed_markdown: out.markdown,
-        composed_html: out.html,
-        prompt_version: out.promptVersion,
-        model_id: out.modelId,
-        check: recheck,
-      };
-    } catch (err) {
-      console.error("[check-fix]", err);
-      return c.redirect(`/admin/review/${id}?error=fix_failed`, 303);
-    }
-    await db
-      .updateTable("issue")
-      .set({ fix_candidate_jsonb: JSON.stringify(candidate) as never })
-      .where("id", "=", id)
-      .where("is_draft", "=", true)
-      .execute();
-    return c.redirect(`/admin/review/${id}?fix_proposed=1#gloss`, 303);
-  });
-
-  // Apply a pending fix proposal: copy the candidate prose onto the draft
-  // and adopt its re-check as the live result. The ONLY mutation of draft
-  // prose in the fix path, and only on explicit reviewer action.
-  app.post("/admin/review/:id/check-fix-accept", async (c) => {
-    const id = Number(c.req.param("id"));
-    if (!Number.isFinite(id) || id <= 0) return c.notFound();
-    const iss = await db
-      .selectFrom("issue")
-      .select(["is_draft", "fix_candidate_jsonb"])
-      .where("id", "=", id)
-      .executeTakeFirst();
-    if (iss === undefined || !iss.is_draft || iss.fix_candidate_jsonb === null) {
-      return c.redirect(`/admin/review/${id}?error=no_proposal`, 303);
-    }
-    const cand = iss.fix_candidate_jsonb as FixCandidate;
-    await db
-      .updateTable("issue")
-      .set({
-        title: cand.title,
-        composed_markdown: cand.composed_markdown,
-        composed_html: cand.composed_html,
-        composer_prompt_version: cand.prompt_version,
-        composer_model_id: cand.model_id,
-        check_jsonb: JSON.stringify(cand.check) as never,
-        fix_candidate_jsonb: null,
-        // New prose, so the sweep's stored verdict no longer describes
-        // this draft. Clearing it re-arms auto-fix; if the candidate's
-        // own re-check was clean that costs nothing (the checker call
-        // hashes to the same input and comes back from cache).
-        auto_fix_jsonb: null,
-      })
-      .where("id", "=", id)
-      .where("is_draft", "=", true)
-      .execute();
-    return c.redirect(`/admin/review/${id}?fixed=1#gloss`, 303);
-  });
-
   // Re-run the automatic check -> fix -> re-check loop by hand. The
   // hourly sweep only auto-fixes a draft that has never been through the
   // loop (re-running it every hour would burn a composer call an hour),
@@ -526,18 +390,6 @@ export function registerAdminRoutes(app: Hono): void {
       `/admin/review/${id}?auto_fixed=${encodeURIComponent(result.outcome)}#gloss`,
       303,
     );
-  });
-
-  // Drop a pending fix proposal — draft untouched.
-  app.post("/admin/review/:id/check-fix-discard", async (c) => {
-    const id = Number(c.req.param("id"));
-    if (!Number.isFinite(id) || id <= 0) return c.notFound();
-    await db
-      .updateTable("issue")
-      .set({ fix_candidate_jsonb: null })
-      .where("id", "=", id)
-      .execute();
-    return c.redirect(`/admin/review/${id}?fix_discarded=1#gloss`, 303);
   });
 
   // Non-destructive composer replay: re-runs the composer on the

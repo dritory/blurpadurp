@@ -90,31 +90,6 @@ export function isCheckCurrent(
   );
 }
 
-// A pending, non-destructive fix proposal for a draft (issue
-// .fix_candidate_jsonb). The checker's Re-compose-to-fix path composes
-// new prose from the findings but does NOT overwrite the draft — it
-// stashes the result here for the reviewer to preview and Accept/Discard.
-export interface FixCandidate {
-  created_at: string; // ISO 8601
-  // Which attempt this is, counting from 1. Load-bearing, not
-  // bookkeeping: the composer is cached on a hash of its rendered input,
-  // so re-proposing a fix from the same findings used to return the
-  // byte-identical brief from cache — "Re-generate fix" was a guaranteed
-  // no-op. The attempt number is rendered into the revision notes, which
-  // both changes the hash and tells the composer its last try failed.
-  attempt: number;
-  // The revision notes (derived from findings) fed to the composer.
-  notes: string[];
-  title: string;
-  composed_markdown: string;
-  composed_html: string;
-  prompt_version: string;
-  model_id: string;
-  // Re-check of the candidate prose, so the panel can show what the
-  // proposal would (or wouldn't) resolve before it's applied.
-  check: CheckResult;
-}
-
 // ============================================================
 // Automatic fix loop (mig 066). Types + the cleanliness predicate live
 // here, in the dependency-free schema module, so the pipeline sweep and
@@ -148,6 +123,17 @@ export interface AutoFixLog {
   // number that busts the composer's input-hash cache, so retry number
   // seven is still a genuinely new roll. Absent on pre-mig-071 rows.
   attempts?: number;
+  // The composer's ORIGINAL prose and findings, captured on the first
+  // run and carried through every later one.
+  //
+  // This is the audit trail, and as of mig 072 it's the only one: the
+  // fix applies without a human approving it, so reviewability moved
+  // from before the change to after it. passes[].markdown_before can't
+  // serve — each sweep writes a fresh log, so by retry four its
+  // "before" is already machine-written prose. Absent on pre-mig-072
+  // rows and on drafts whose first run found nothing to fix.
+  original_markdown?: string;
+  original_findings?: CheckFinding[];
 }
 
 // Should the sweep spend another auto-fix run on this draft?
