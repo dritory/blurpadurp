@@ -10,7 +10,14 @@
 // task-specific schema inside checker.ts; CheckFinding is the generic
 // shape everything is mapped into for storage + display.
 
+import { createHash } from "node:crypto";
 import { z } from "zod";
+
+// Identity of a piece of composed prose, used to tell a stored check
+// result that is still about the current draft from one that isn't.
+export function markdownSha(markdown: string): string {
+  return createHash("sha256").update(markdown).digest("hex");
+}
 
 // Known task ids. Extend this when a new task module lands.
 export const CHECK_TASKS = ["gloss"] as const;
@@ -32,8 +39,21 @@ export const CheckFindingSchema = z.object({
 });
 export type CheckFinding = z.infer<typeof CheckFindingSchema>;
 
+// A pre-screen candidate the LLM layer looked at and decided NOT to
+// flag. Kept alongside the findings so the review page can render the
+// deterministic linter's warnings as *settled* instead of leaving two
+// layers visibly contradicting each other — the "why is it still
+// shouting about BBC?" case.
+export const CheckDismissalSchema = z.object({
+  task: z.string().default("gloss"),
+  term: z.string(),
+  reason: z.string().default(""),
+});
+export type CheckDismissal = z.infer<typeof CheckDismissalSchema>;
+
 export const CheckOutputSchema = z.object({
   findings: z.array(CheckFindingSchema),
+  dismissed: z.array(CheckDismissalSchema).default([]),
 });
 export type CheckOutput = z.infer<typeof CheckOutputSchema>;
 
@@ -44,6 +64,30 @@ export interface CheckResult {
   model_id: string;
   prompt_version: string;
   findings: CheckFinding[];
+  // Pre-screen candidates the checker overruled. Optional: rows written
+  // before mig 070 don't have it.
+  dismissed?: CheckDismissal[];
+  // SHA-256 of the markdown this result was computed from. Without it a
+  // stored result is indistinguishable from a current one, so the panel
+  // showed a clean bill of health for prose that had since been
+  // recomposed — and the fix path fed the composer stale findings.
+  // Optional for the same pre-mig-070 reason; absent means "unknown,
+  // treat as stale".
+  markdown_sha?: string;
+}
+
+// Is this stored check still about the prose in front of us?
+// An unstamped (pre-mig-070) result is treated as stale: a check whose
+// subject we can't establish has to be re-run, not trusted.
+export function isCheckCurrent(
+  result: CheckResult | null,
+  markdownSha: string,
+): boolean {
+  if (result === null) return false;
+  return (
+    typeof result.markdown_sha === "string" &&
+    result.markdown_sha === markdownSha
+  );
 }
 
 // A pending, non-destructive fix proposal for a draft (issue
@@ -52,6 +96,13 @@ export interface CheckResult {
 // stashes the result here for the reviewer to preview and Accept/Discard.
 export interface FixCandidate {
   created_at: string; // ISO 8601
+  // Which attempt this is, counting from 1. Load-bearing, not
+  // bookkeeping: the composer is cached on a hash of its rendered input,
+  // so re-proposing a fix from the same findings used to return the
+  // byte-identical brief from cache — "Re-generate fix" was a guaranteed
+  // no-op. The attempt number is rendered into the revision notes, which
+  // both changes the hash and tells the composer its last try failed.
+  attempt: number;
   // The revision notes (derived from findings) fed to the composer.
   notes: string[];
   title: string;

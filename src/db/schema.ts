@@ -331,6 +331,9 @@ export interface Database {
     term: string;
     note: string | null;
     hits: Generated<number>;
+    // mig 070 — false when the term is WATCHED (flag it when bare),
+    // true when it is IGNORED (never flag it, at either checker layer).
+    is_ignored: Generated<boolean>;
     created_at: Created;
   };
 }

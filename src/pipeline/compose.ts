@@ -25,7 +25,7 @@ import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
 import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
-import { bumpGlossHits, loadGlossTerms } from "../shared/gloss-store.ts";
+import { bumpGlossHits, loadGlossLists } from "../shared/gloss-store.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 import { routeSection } from "./compose-partition.ts";
 
@@ -174,8 +174,12 @@ async function runCompose(retro?: RetroOptions): Promise<void> {
   // re-lints read-only to render the panel. Best-effort; a lint failure
   // must not sink an otherwise-good compose.
   try {
-    const glossTerms = await loadGlossTerms();
-    const findings = lintGloss(draft.output.markdown, glossTerms);
+    const lists = await loadGlossLists();
+    const findings = lintGloss(
+      draft.output.markdown,
+      lists.jargon,
+      lists.ignored,
+    );
     const flagged = findings.filter((f) => !f.glossed);
     if (flagged.length > 0) {
       const acronyms = flagged.filter((f) => f.kind === "acronym").map((f) => f.term);

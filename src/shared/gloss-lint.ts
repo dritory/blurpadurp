@@ -13,7 +13,7 @@
 // Two detectors:
 //   - acronyms: a regex finds all-caps tokens (VRA, IRGC, ICC). The
 //     whitelist below mirrors the composer prompt's bare-acronym list
-//     (plus a couple of universally-bare extras) — keep the two in sync.
+//     (plus a few universally-bare extras) — keep the two in sync.
 //   - jargon: the caller-supplied curated list catches NON-acronym names
 //     the regex can't ("Brent", "gilt", "tirzepatide") — the case the
 //     user specifically flagged.
@@ -23,11 +23,39 @@
 // flagged. The gloss heuristic is deliberately term-proximate (not
 // whole-sentence) so that "Brent is at $126 and OPEC, the oil cartel, …"
 // still flags bare Brent even though OPEC right beside it is glossed.
+//
+// FALSE ALARMS. A recall floor that cries wolf gets ignored, which
+// costs more than the recall buys. Three suppressions, in order of how
+// specific they are:
+//   1. the hard-coded whitelist below — acronyms bare BY RULE;
+//   2. the caller-supplied ignore list (gloss_term.is_ignored, mig 070)
+//      — the operator's escape hatch for brand/org names the rule can't
+//      anticipate (BBC, IBM), editable without a deploy;
+//   3. citation link labels — an acronym that appears ONLY inside a
+//      markdown link label is attribution, not prose, and nobody
+//      glosses a source credit. "[BBC](…)" was the single largest
+//      source of weekly noise before this.
 
-// Bare-acronym whitelist. Source of truth is the composer prompt's
-// "Bare-acronym whitelist" line (docs/composer-prompt.md) — these go
-// bare and are never flagged. USA/CIA are added here as universally-bare
-// extras; if the prompt list changes, change this to match.
+// Bare-acronym whitelist: acronyms this linter never flags.
+//
+// A SUPERSET of the composer prompt's "Bare-acronym whitelist" line
+// (docs/composer-prompt.md), deliberately — the two lists answer
+// different questions and the asymmetry is the safe direction. The
+// prompt's list is what the composer may leave bare; this one is what
+// the checker won't complain about. A composer that glosses UAE anyway
+// costs six words. A checker that flags UAE every week costs the
+// operator's trust in the whole panel, and then the real findings go
+// unread too. Widen here freely; widen the prompt only with a version
+// bump (invariant 6).
+//
+// checker.ts renders this same set into its system prompt, so the LLM
+// layer cannot drift from the regex layer the way it had before.
+//
+// Scope is deliberately narrow: acronyms that are bare by RULE — states,
+// blocs, alliances, units, and the handful of agencies that read as
+// ordinary English. Brand and newsroom names belong on the operator's
+// ignore list (mig 070), not here, because which of them are "obvious"
+// shifts with the source mix and shouldn't need a deploy to change.
 export const BARE_ACRONYM_WHITELIST: ReadonlySet<string> = new Set([
   "US",
   "USA",
@@ -40,7 +68,23 @@ export const BARE_ACRONYM_WHITELIST: ReadonlySet<string> = new Set([
   "CIA",
   "NASA",
   "CEO",
+  "CFO",
   "GDP",
+  "UAE",
+  "WHO",
+  "IMF",
+  "USB",
+  "GPS",
+  "PDF",
+  "URL",
+  "FAQ",
+  "IT",
+  "PM",
+  "AM",
+  "GMT",
+  "UTC",
+  "EST",
+  "CET",
 ]);
 
 // A curated jargon term (a gloss_term row). `term` is matched
@@ -76,6 +120,29 @@ function stripUrls(text: string): string {
   return text
     .replace(/\]\((?:https?:\/\/)?[^)]*\)/g, "]")
     .replace(/https?:\/\/\S+/g, "");
+}
+
+// Character ranges covered by a markdown link LABEL — the "[…]" that
+// survives stripUrls. An acronym inside one is a source credit
+// ("[BBC](…)", "[AP](…)"), and a source credit is attribution rather
+// than prose: the reader isn't being asked to understand the term, only
+// to see where the claim came from. Glossing it would be absurd, so
+// these occurrences don't count as a "use" at all — if the acronym also
+// appears in real prose we flag it there instead, and if it never does
+// we don't flag it.
+function linkLabelSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const m of text.matchAll(/\[[^\]\n]*\]/g)) {
+    spans.push([m.index, m.index + m[0].length]);
+  }
+  return spans;
+}
+
+function inSpans(spans: Array<[number, number]>, index: number): boolean {
+  for (const [s, e] of spans) {
+    if (index >= s && index < e) return true;
+  }
+  return false;
 }
 
 // Return the sentence containing [index]. Sentences break on . ! ? at a
@@ -143,19 +210,33 @@ function isGlossedAt(text: string, start: number, end: number): boolean {
 // `text` is the composed markdown (or any prose). Findings are returned
 // in first-occurrence order; both glossed and un-glossed are returned so
 // the caller can show the full picture, but glossed=false is the signal.
-export function lintGloss(text: string, jargonTerms: JargonTerm[]): GlossFinding[] {
+//
+// `ignoredTerms` (gloss_term.is_ignored, mig 070) are never reported at
+// all — not as flagged, not as glossed. They're the operator's standing
+// "yes, I know, it's fine" and the panel shouldn't spend a line on them.
+export function lintGloss(
+  text: string,
+  jargonTerms: JargonTerm[],
+  ignoredTerms: Iterable<string> = [],
+): GlossFinding[] {
   const clean = stripUrls(text);
+  const labels = linkLabelSpans(clean);
   const findings: GlossFinding[] = [];
   const seen = new Set<string>(); // lowercased terms already recorded
+  const ignored = new Set<string>();
+  for (const t of ignoredTerms) ignored.add(t.trim().toLowerCase());
 
-  // Acronyms first, in document order.
+  // Acronyms first, in document order. An occurrence inside a citation
+  // link label is skipped rather than recorded, so a later occurrence in
+  // real prose is still the one that gets judged.
   for (const m of clean.matchAll(ACRONYM_RE)) {
     const core = m[1]!;
     if (BARE_ACRONYM_WHITELIST.has(core)) continue;
     const key = core.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (ignored.has(key) || seen.has(key)) continue;
     const start = m.index;
+    if (inSpans(labels, start)) continue;
+    seen.add(key);
     const end = m.index + m[0].length;
     findings.push({
       term: core,
@@ -173,13 +254,21 @@ export function lintGloss(text: string, jargonTerms: JargonTerm[]): GlossFinding
     const term = j.term.trim();
     if (term.length === 0) continue;
     const key = term.toLowerCase();
-    if (seen.has(key)) continue;
+    if (ignored.has(key) || seen.has(key)) continue;
     if (/^[A-Z][A-Z0-9]{1,5}$/.test(term)) continue; // pure acronym
     const re = new RegExp(
       `\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
-      "i",
+      "gi",
     );
-    const hit = re.exec(clean);
+    // Same link-label rule as acronyms: a name that only ever shows up
+    // as a source credit isn't a use.
+    let hit: RegExpExecArray | null = null;
+    for (let m = re.exec(clean); m !== null; m = re.exec(clean)) {
+      if (!inSpans(labels, m.index)) {
+        hit = m;
+        break;
+      }
+    }
     if (hit === null) continue;
     seen.add(key);
     const start = hit.index;

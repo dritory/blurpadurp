@@ -25,8 +25,15 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { getEnv } from "../shared/env.ts";
-import type { CheckFinding, CheckTask } from "../shared/check-schema.ts";
-import type { GlossFinding } from "../shared/gloss-lint.ts";
+import type {
+  CheckDismissal,
+  CheckFinding,
+  CheckTask,
+} from "../shared/check-schema.ts";
+import {
+  BARE_ACRONYM_WHITELIST,
+  type GlossFinding,
+} from "../shared/gloss-lint.ts";
 import { findCachedOutput, logAICall } from "./log.ts";
 import { checkBudget } from "./budget.ts";
 
@@ -36,13 +43,29 @@ const CLIENT = new Anthropic({ apiKey: getEnv("ANTHROPIC_API_KEY") });
 // language judgment this needs. Bump CHECKER_VERSION whenever any task
 // prompt changes so cache lookups don't serve stale verdicts.
 export const CHECKER_MODEL = "claude-haiku-4-5-20251001";
-export const CHECKER_VERSION = "checker-v1";
+// v2: whitelist rendered from BARE_ACRONYM_WHITELIST instead of being
+// re-typed by hand (the two had already drifted), operator ignore list
+// honoured, and the model told to return a verdict for every pre-screen
+// candidate rather than silently dropping the ones it disagrees with.
+export const CHECKER_VERSION = "checker-v2";
 const MAX_TOKENS = 2000;
 
 export interface CheckerInput {
   markdown: string;
   // Deterministic gloss-linter findings, used to ground the gloss task.
   glossCandidates: GlossFinding[];
+  // Operator ignore list (gloss_term.is_ignored). The linter already
+  // drops these; passing them keeps the LLM from re-introducing a term
+  // the operator has explicitly waved through.
+  ignoredTerms?: string[];
+}
+
+export interface CheckerRun {
+  findings: CheckFinding[];
+  // Pre-screen candidates the model explicitly overruled. Not a problem
+  // list — it's what the review page uses to show a regex warning as
+  // settled rather than open.
+  dismissed: CheckDismissal[];
 }
 
 // Run the requested check tasks and return merged, task-tagged findings.
@@ -50,11 +73,13 @@ export interface CheckerInput {
 export async function runChecker(
   input: CheckerInput,
   tasks: CheckTask[] = ["gloss"],
-): Promise<CheckFinding[]> {
-  const out: CheckFinding[] = [];
+): Promise<CheckerRun> {
+  const out: CheckerRun = { findings: [], dismissed: [] };
   for (const task of tasks) {
     if (task === "gloss") {
-      out.push(...(await runGlossTask(input)));
+      const run = await runGlossTask(input);
+      out.findings.push(...run.findings);
+      out.dismissed.push(...run.dismissed);
     }
   }
   return out;
@@ -62,9 +87,17 @@ export async function runChecker(
 
 // ── gloss task ──────────────────────────────────────────────────────
 
+// Rendered from the linter's whitelist rather than re-typed, so the two
+// layers cannot disagree about what goes bare. They had already drifted
+// once, which is how the same term got flagged by one layer and waved
+// through by the other on the same page.
+const WHITELIST_LINE = [...BARE_ACRONYM_WHITELIST].join(", ");
+
 const GLOSS_SYSTEM = `You are a copy-editor checking one specific rule in a news brief: every unfamiliar acronym AND every specialist name must be glossed — briefly explained — on its FIRST appearance, so a literate non-specialist reader anywhere (Berlin, São Paulo, Nairobi) can follow without pausing to look something up.
 
-These go bare and never need a gloss: US, USA, UK, EU, UN, NATO, AI, FBI, CIA, NASA, CEO, GDP, and ordinary English.
+These go bare and never need a gloss: ${WHITELIST_LINE}, and ordinary English.
+
+Source credits do not need a gloss either. A term that appears only inside a markdown link label — "[BBC](https://…)", "[AP](https://…)" — is attribution, not prose: the reader is being shown where the claim came from, not asked to understand a term. Never flag one.
 
 Everything else needs context the first time it appears:
 - acronyms a general reader may not know: VRA, IRGC, ICC, EMA, OPEC, FDA, IEA, …
@@ -76,7 +109,9 @@ You will receive:
 1. The brief (markdown).
 2. A regex pre-screen: candidate terms it found and whether it THINKS each is glossed. This pre-screen is mechanical and unreliable — it misses names it doesn't recognise and it misjudges glosses. Treat it as a starting checklist, not the truth: verify each candidate by reading the brief, and ADD any term it missed.
 
-Call the report_gloss_issues tool with ONLY the terms that are NOT adequately glossed on first use — either missing a gloss entirely (severity "missing") or glossed too thinly for a non-specialist (severity "weak"). For each, quote the first-use sentence from the brief and offer a short suggested gloss (≤6 words). If every unfamiliar term is properly glossed on first use, return an empty findings list. Do not flag whitelisted universal acronyms or ordinary words.`;
+Call the report_gloss_issues tool with ONLY the terms that are NOT adequately glossed on first use — either missing a gloss entirely (severity "missing") or glossed too thinly for a non-specialist (severity "weak"). For each, quote the first-use sentence from the brief and offer a short suggested gloss (≤6 words). If every unfamiliar term is properly glossed on first use, return an empty findings list. Do not flag whitelisted universal acronyms or ordinary words.
+
+Also fill in "dismissed": every pre-screen candidate you decided NOT to flag, with a few words on why (already glossed / universally recognised / source credit). This is what lets the review page reconcile the two layers instead of showing the operator a regex warning you have already overruled. A candidate must appear in exactly one of the two lists.`;
 
 const GLOSS_TOOL = {
   name: "report_gloss_issues",
@@ -121,6 +156,23 @@ const GLOSS_TOOL = {
           required: ["term", "first_use", "severity"],
         },
       },
+      dismissed: {
+        type: "array",
+        description:
+          "Pre-screen candidates you are NOT flagging, so the review page can show them as overruled rather than as open warnings.",
+        items: {
+          type: "object",
+          properties: {
+            term: { type: "string", description: "The candidate term." },
+            reason: {
+              type: "string",
+              description:
+                "A few words: already glossed / universally recognised / source credit / ordinary English.",
+            },
+          },
+          required: ["term"],
+        },
+      },
     },
     required: ["findings"],
   },
@@ -137,6 +189,9 @@ const GlossToolOutputSchema = z.object({
       suggestion: z.string().default(""),
     }),
   ),
+  dismissed: z
+    .array(z.object({ term: z.string(), reason: z.string().default("") }))
+    .default([]),
 });
 
 function renderGlossUserMessage(input: CheckerInput): string {
@@ -154,6 +209,15 @@ function renderGlossUserMessage(input: CheckerInput): string {
       );
     }
   }
+  const ignored = input.ignoredTerms ?? [];
+  if (ignored.length > 0) {
+    lines.push(
+      "",
+      "# Operator ignore list — never flag these, whatever you think",
+      "",
+      ignored.join(", "),
+    );
+  }
   lines.push("", "Call report_gloss_issues now.");
   return lines.join("\n");
 }
@@ -162,7 +226,7 @@ function renderGlossUserMessage(input: CheckerInput): string {
 // deterministic findings to the model as candidates to verify.
 export { renderGlossUserMessage };
 
-async function runGlossTask(input: CheckerInput): Promise<CheckFinding[]> {
+async function runGlossTask(input: CheckerInput): Promise<CheckerRun> {
   const userMessage = renderGlossUserMessage(input);
   const input_hash = createHash("sha256")
     .update(JSON.stringify({ task: "gloss", system: GLOSS_SYSTEM, userMessage }))
@@ -176,7 +240,7 @@ async function runGlossTask(input: CheckerInput): Promise<CheckFinding[]> {
   });
   if (cached !== null) {
     const validated = GlossToolOutputSchema.safeParse(cached);
-    if (validated.success) return mapGlossFindings(validated.data);
+    if (validated.success) return mapGlossRun(validated.data);
   }
 
   await checkBudget();
@@ -224,13 +288,11 @@ async function runGlossTask(input: CheckerInput): Promise<CheckFinding[]> {
       error,
     });
   }
-  return mapGlossFindings(GlossToolOutputSchema.parse(output));
+  return mapGlossRun(GlossToolOutputSchema.parse(output));
 }
 
-function mapGlossFindings(
-  out: z.infer<typeof GlossToolOutputSchema>,
-): CheckFinding[] {
-  return out.findings.map((f) => ({
+function mapGlossRun(out: z.infer<typeof GlossToolOutputSchema>): CheckerRun {
+  const findings = out.findings.map((f) => ({
     task: "gloss",
     term: f.term,
     kind: f.kind,
@@ -238,6 +300,13 @@ function mapGlossFindings(
     severity: f.severity,
     suggestion: f.suggestion,
   }));
+  // A term can't be both flagged and dismissed. If the model says both,
+  // the flag wins — under-reporting a real gap is the costlier error.
+  const flagged = new Set(findings.map((f) => f.term.toLowerCase()));
+  const dismissed = out.dismissed
+    .filter((d) => !flagged.has(d.term.toLowerCase()))
+    .map((d) => ({ task: "gloss", term: d.term, reason: d.reason }));
+  return { findings, dismissed };
 }
 
 // ── shared plumbing ─────────────────────────────────────────────────

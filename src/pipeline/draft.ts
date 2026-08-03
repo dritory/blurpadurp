@@ -252,10 +252,15 @@ async function runRecompose(
       composed_html: out.html,
       composer_prompt_version: out.promptVersion,
       composer_model_id: out.modelId,
-      // The brief changed — any stored checker result + pending fix
-      // proposal are now stale.
+      // The brief changed — any stored checker result, pending fix
+      // proposal and auto-fix verdict are now stale. Clearing
+      // auto_fix_jsonb is what re-arms the hourly sweep: it only
+      // auto-fixes a draft that has never been through the loop, so
+      // leaving a stale verdict behind meant a re-composed draft was
+      // never re-fixed AND was published against the old verdict.
       check_jsonb: null,
       fix_candidate_jsonb: null,
+      auto_fix_jsonb: null,
     })
     .where("id", "=", issueId)
     .execute();
@@ -300,10 +305,12 @@ export async function reeditDraft(issueId: number): Promise<ReeditResult> {
         editor_output_jsonb: JSON.stringify(draft.editorResult) as never,
         shrug_candidates_jsonb: JSON.stringify(draft.shrug) as never,
         composer_input_jsonb: JSON.stringify(draft.composerInput) as never,
-        // Brief replaced — any stored checker result + pending fix
-        // proposal are now stale.
+        // Brief replaced — stored checker result, pending fix proposal
+        // and auto-fix verdict are all stale; clearing the last one
+        // re-arms the hourly auto-fix sweep for the new prose.
         check_jsonb: null,
         fix_candidate_jsonb: null,
+        auto_fix_jsonb: null,
       })
       .where("id", "=", issueId)
       .execute();

@@ -13,7 +13,8 @@ import {
 import { loadRawPrompt } from "../shared/prompts.ts";
 import { extractHost, normalizeHost } from "../shared/source-blocklist.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
-import { loadGlossTerms } from "../shared/gloss-store.ts";
+import { loadGlossLists } from "../shared/gloss-store.ts";
+import { isCheckCurrent, markdownSha } from "../shared/check-schema.ts";
 import { getConfigBool, getConfigNumber } from "../shared/config-store.ts";
 import type {
   ConfigRow,
@@ -721,17 +722,20 @@ export async function loadGlossTermsData(
 ): Promise<GlossTermsData> {
   const rows = await db
     .selectFrom("gloss_term")
-    .select(["term", "note", "hits", "created_at"])
+    .select(["term", "note", "hits", "is_ignored", "created_at"])
     .orderBy("hits", "desc")
     .orderBy("term", "asc")
     .execute();
+  const mapped = rows.map((r) => ({
+    term: r.term,
+    note: r.note,
+    hits: r.hits,
+    isIgnored: r.is_ignored,
+    createdAt: r.created_at,
+  }));
   return {
-    rows: rows.map((r) => ({
-      term: r.term,
-      note: r.note,
-      hits: r.hits,
-      createdAt: r.created_at,
-    })),
+    rows: mapped.filter((r) => !r.isIgnored),
+    ignored: mapped.filter((r) => r.isIgnored),
     flash,
   };
 }
@@ -2556,8 +2560,13 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
   // Re-run the gloss-linter for the advisory panel. Read-only: the
   // compose stage already bumped gloss_term hit counts when the draft
   // was produced; here we only render the current findings.
-  const glossTerms = await loadGlossTerms();
-  const glossFindings = lintGloss(iss.composed_markdown, glossTerms);
+  const glossLists = await loadGlossLists();
+  const glossFindings = lintGloss(
+    iss.composed_markdown,
+    glossLists.jargon,
+    glossLists.ignored,
+  );
+  const check = (iss.check_jsonb as EditorReviewData["checkResult"]) ?? null;
 
   return {
     issue: {
@@ -2596,7 +2605,12 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
     storyThemes,
     shrug: (iss.shrug_candidates_jsonb as EditorReviewData["shrug"]) ?? [],
     glossFindings,
-    checkResult: (iss.check_jsonb as EditorReviewData["checkResult"]) ?? null,
+    checkResult: check,
+    // Whether the stored AI result is about the prose currently on the
+    // page. A stale result must be shown as stale: the panel used to
+    // render a months-old "clean" verdict over freshly-recomposed prose
+    // with nothing to distinguish the two.
+    checkCurrent: isCheckCurrent(check, markdownSha(iss.composed_markdown)),
     fixCandidate:
       (iss.fix_candidate_jsonb as EditorReviewData["fixCandidate"]) ?? null,
   };
@@ -2877,6 +2891,20 @@ export function parseReviewFlash(
       kind: "ok",
       msg: "No fixable gloss findings — nothing to propose.",
     };
+  if (typeof q.auto_fixed === "string" && q.auto_fixed.length > 0) {
+    const detail: Record<string, string> = {
+      clean: "the draft now checks clean.",
+      exhausted:
+        "some terms are still outstanding — see the pass log in the panel below. Running it again re-rolls the composer, since the attempt number is part of its input.",
+      nothing_to_fix:
+        "the remaining findings aren't ones a re-compose can address.",
+      disabled: "auto-fix is switched off in config.",
+    };
+    return {
+      kind: q.auto_fixed === "clean" ? "ok" : "err",
+      msg: `Auto-fix finished: ${detail[q.auto_fixed] ?? q.auto_fixed}`,
+    };
+  }
   if (q.held === "1")
     return {
       kind: "ok",

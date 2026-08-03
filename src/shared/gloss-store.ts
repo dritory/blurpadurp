@@ -7,15 +7,28 @@ import { sql } from "kysely";
 import { db } from "../db/index.ts";
 import type { JargonTerm } from "./gloss-lint.ts";
 
-// Snapshot-load every jargon term. Compose loads the full list once per
-// run; the review page loads it to re-lint for the advisory panel.
-export async function loadGlossTerms(): Promise<JargonTerm[]> {
+// The two lists the linter needs, in one round trip: names to WATCH for
+// (flag when bare) and names to IGNORE (never flag, at either layer).
+// See mig 070 — one table, split on is_ignored.
+export interface GlossLists {
+  jargon: JargonTerm[];
+  ignored: string[];
+}
+
+// Snapshot-load both lists. Compose loads them once per run; the review
+// page and every checker call load them to lint the current prose.
+export async function loadGlossLists(): Promise<GlossLists> {
   const rows = await db
     .selectFrom("gloss_term")
-    .select(["term", "note"])
+    .select(["term", "note", "is_ignored"])
     .orderBy("term", "asc")
     .execute();
-  return rows.map((r) => ({ term: r.term, note: r.note }));
+  return {
+    jargon: rows
+      .filter((r) => !r.is_ignored)
+      .map((r) => ({ term: r.term, note: r.note })),
+    ignored: rows.filter((r) => r.is_ignored).map((r) => r.term),
+  };
 }
 
 // Bump the hit counter for terms that appeared un-glossed in a composed
