@@ -114,7 +114,6 @@ export interface Database {
     is_draft: Generated<boolean>;
     published_seq: number | null;
     check_jsonb: Jsonb | null;
-    fix_candidate_jsonb: Jsonb | null;
     // Creation time of the draft, and the clock the auto-publish sweep
     // runs off. Distinct from published_at, which publishDraft
     // overwrites. NULL on rows published before mig 066.

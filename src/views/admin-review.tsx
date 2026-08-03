@@ -8,11 +8,7 @@ import { AdminCrumbs, AdminNav } from "./admin-nav.tsx";
 import { formatIssueDate } from "./issue.tsx";
 import { sanitizeBriefHtml } from "../shared/sanitize-html.ts";
 import type { GlossFinding } from "../shared/gloss-lint.ts";
-import type {
-  AutoFixLog,
-  CheckResult,
-  FixCandidate,
-} from "../shared/check-schema.ts";
+import type { AutoFixLog, CheckResult } from "../shared/check-schema.ts";
 import { isCleanAutoFix } from "../shared/check-schema.ts";
 
 export interface Annotation {
@@ -271,9 +267,6 @@ export interface EditorReviewData {
   // pre-mig-070 result). A stale verdict is worse than no verdict:
   // it looks authoritative.
   checkCurrent: boolean;
-  // A pending, non-destructive fix proposal (issue.fix_candidate_jsonb),
-  // or null. When set, the panel previews it with Accept/Discard.
-  fixCandidate: FixCandidate | null;
 }
 
 // Auto-publish status for an open draft: when it goes out on its own,
@@ -387,13 +380,13 @@ const GLOSS_STYLES = `
   .gloss-sev.missing { background: #f7d7d7; color: #8a2a2a; }
   .gloss-sev.weak { background: #f7eccf; color: #6b551c; }
   .gloss-fix { color: #2b4f2b; display: block; margin-top: 2px; }
-  .fix-proposal { border: 1px solid #b58b00; background: #fffaf0; padding: 10px 12px; margin-top: 12px; border-radius: 4px; }
-  .fix-proposal h4 { margin: 0 0 4px; font-size: 13px; }
-  .fix-proposal .fix-meta { font-size: 11px; color: #6b6b6b; }
-  .fix-preview { background: #fff; border: 1px solid #e0d9c4; border-radius: 3px; padding: 8px 12px; margin-top: 6px; max-height: 420px; overflow: auto; }
-  .fix-actions { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
-  .fix-accept { background: #2b6b2b; color: #fff; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; font-weight: 600; }
-  .fix-discard { background: none; border: 1px solid #b0b0b0; padding: 5px 12px; border-radius: 3px; cursor: pointer; }
+  .fix-audit { margin-top: 12px; border: 1px solid #e0d9c4; background: #fffaf0; padding: 8px 12px; border-radius: 4px; }
+  .fix-audit > summary { cursor: pointer; color: #6b551c; }
+  .fix-audit-body { margin-top: 8px; }
+  .fix-passes { margin: 0 0 8px; padding-left: 20px; }
+  .fix-notes { list-style: none; margin: 4px 0 8px; padding-left: 0; }
+  .fix-notes li { border-top: none; padding: 1px 0; }
+  .fix-original { background: #fff; border: 1px solid #e0d9c4; border-radius: 3px; padding: 8px 12px; margin-top: 6px; max-height: 420px; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.5; }
   .gloss-stale { background: #f7eccf; border-left: 3px solid #b58b00; padding: 6px 10px; margin: 0 0 8px; color: #6b551c; }
   .gloss-panel li form { display: inline; margin-left: 8px; }
   .gloss-ignore-btn { font: inherit; font-family: var(--sans); font-size: 11px; padding: 1px 7px; border: 1px solid var(--rule); background: #fff; color: var(--ink-soft); cursor: pointer; }
@@ -401,65 +394,62 @@ const GLOSS_STYLES = `
   .gloss-overruled { color: var(--ink-soft); }
 `;
 
-// The pending, non-destructive fix proposal: the re-composed prose plus
-// its re-check, previewed inline. The live draft is untouched until the
-// reviewer clicks Accept (Discard drops the proposal).
-const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
-  issueId,
-  candidate,
-}) => {
-  const after = candidate.check.findings;
+// What the fixer changed, after the fact.
+//
+// The propose -> preview -> accept gate is gone (mig 072): the fix
+// applies itself. That trades approval for latency, which is the right
+// trade on a hands-off schedule, but only if the change stays visible —
+// so this is the audit view. The composer's original prose against the
+// findings it carried, plus the pass log. Remedies if you dislike the
+// result are the ordinary ones: Re-compose, edit the body, Discard.
+const AutoFixAudit: FC<{ autoFix: AutoFixLog }> = ({ autoFix }) => {
+  const before = autoFix.original_findings ?? [];
+  const after = autoFix.final_findings;
+  const attempts = autoFix.attempts ?? autoFix.passes.length;
+  if (attempts === 0) return null;
   return (
-    <div class="fix-proposal" id="fix-proposal">
-      <h4>Proposed fix — not applied yet</h4>
-      <div class="fix-meta">
-        attempt {candidate.attempt ?? 1} · re-composed {candidate.model_id} ·{" "}
-        {candidate.created_at.slice(0, 16).replace("T", " ")} UTC · fed{" "}
-        {candidate.notes.length} note{candidate.notes.length === 1 ? "" : "s"}{" "}
-        back to the composer
-      </div>
-      {after.length === 0 ? (
-        <p class="gloss-ok">✓ Re-check of the proposal is clean.</p>
-      ) : (
-        <>
-          <p class="gloss-note">
-            Re-check of the proposal still flags {after.length} term
-            {after.length === 1 ? "" : "s"} — accepting won't fully resolve
-            them:
-          </p>
-          <ul>
-            {after.map((f) => (
+    <details class="fix-audit" id="fix-audit">
+      <summary>
+        Auto-fix changed this brief — {before.length} finding
+        {before.length === 1 ? "" : "s"} → {after.length}, over {attempts}{" "}
+        attempt{attempts === 1 ? "" : "s"} ({autoFix.outcome})
+      </summary>
+      <div class="fix-audit-body">
+        {autoFix.passes.length > 0 ? (
+          <ol class="fix-passes">
+            {autoFix.passes.map((pa) => (
               <li>
-                <span class="gloss-term">{f.term}</span>
-                {f.severity ? (
-                  <span class={`gloss-sev ${f.severity}`}>{f.severity}</span>
-                ) : null}
-                <span class="gloss-ctx">“{highlightTerm(f.excerpt, f.term)}”</span>
+                pass {pa.pass}: {pa.findings_before.length} →{" "}
+                {pa.findings_after.length}{" "}
+                {pa.improved ? (
+                  <span class="gloss-ok">adopted</span>
+                ) : (
+                  <span class="gloss-note">not adopted, prose kept</span>
+                )}
+                <ul class="fix-notes">
+                  {pa.notes.map((n) => (
+                    <li class="gloss-note">{n}</li>
+                  ))}
+                </ul>
               </li>
             ))}
-          </ul>
-        </>
-      )}
-      <details>
-        <summary>Preview proposed brief</summary>
-        <div
-          class="fix-preview"
-          dangerouslySetInnerHTML={{ __html: candidate.composed_html }}
-        />
-      </details>
-      <div class="fix-actions">
-        <form method="post" action={`/admin/review/${issueId}/check-fix-accept`}>
-          <button type="submit" class="fix-accept">
-            Accept fix
-          </button>
-        </form>
-        <form method="post" action={`/admin/review/${issueId}/check-fix-discard`}>
-          <button type="submit" class="fix-discard">
-            Discard
-          </button>
-        </form>
+          </ol>
+        ) : (
+          <p class="gloss-note">
+            No pass log — this record predates the current fixer, or the
+            run ended before composing.
+          </p>
+        )}
+        {autoFix.original_markdown !== undefined ? (
+          <details>
+            <summary>
+              The composer's original prose (before any automatic fix)
+            </summary>
+            <pre class="fix-original">{autoFix.original_markdown}</pre>
+          </details>
+        ) : null}
       </div>
-    </div>
+    </details>
   );
 };
 
@@ -489,14 +479,14 @@ const IgnoreTermButton: FC<{ term: string; issueId: number }> = ({
 //     list, can't regress.
 //   - on-demand checker (checker.ts): operator clicks "Check"; a focused
 //     LLM pass catches the un-listed long tail + judges gloss adequacy.
-//     On a draft, "Propose fix" feeds the findings back into a targeted
-//     re-compose and re-checks, but does NOT touch the draft — it stashes
-//     a candidate the reviewer previews and then Accepts or Discards.
+//
+// Fixing is not gated on a human as of mig 072 — the hourly sweep
+// composes, re-checks and applies. "Run auto-fix" triggers the same loop
+// now, and AutoFixAudit below shows what it changed.
 const CheckPanel: FC<{
   findings: GlossFinding[];
   checkResult: CheckResult | null;
   checkCurrent: boolean;
-  fixCandidate: FixCandidate | null;
   autoFix: AutoFixLog | null;
   issueId: number;
   isDraft: boolean;
@@ -504,7 +494,6 @@ const CheckPanel: FC<{
   findings,
   checkResult,
   checkCurrent,
-  fixCandidate,
   autoFix,
   issueId,
   isDraft,
@@ -540,12 +529,6 @@ const CheckPanel: FC<{
     : rawFlagged;
 
   const anyFlag = flagged.length > 0 || llm.length > 0;
-  // The fix path can run off either layer's findings, so offer it
-  // whenever there is anything outstanding — not only when the LLM
-  // spoke. (The route re-checks current prose before composing, so a
-  // regex-only flag still gets an AI verdict before it reaches the
-  // composer as a revision note.)
-  const canPropose = isDraft && (llm.length > 0 || flagged.length > 0);
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: GLOSS_STYLES }} />
@@ -658,16 +641,6 @@ const CheckPanel: FC<{
                 {checkResult ? "Re-check" : "Run checker"}
               </button>
             </form>
-            {canPropose ? (
-              <form
-                method="post"
-                action={`/admin/review/${issueId}/check-fix`}
-              >
-                <button type="submit" class="gloss-check-btn">
-                  {fixCandidate ? "Re-generate fix" : "Propose fix"}
-                </button>
-              </form>
-            ) : null}
             {isDraft ? (
               <form
                 method="post"
@@ -726,18 +699,17 @@ const CheckPanel: FC<{
           )}
         </div>
 
-        {fixCandidate ? (
-          <FixProposal issueId={issueId} candidate={fixCandidate} />
-        ) : null}
+        {autoFix !== null ? <AutoFixAudit autoFix={autoFix} /> : null}
 
         {anyFlag ? (
           <p class="gloss-note">
             Advisory — gloss on first use.{" "}
-            {canPropose
-              ? "“Propose fix” re-composes from these findings into a preview — the draft only changes when you Accept. Or edit by hand. "
+            {isDraft
+              ? "The hourly sweep fixes these on its own and applies the result; “Run auto-fix” does it now. Edit by hand if you'd rather. "
               : ""}
             Universal acronyms (US, UK, EU, NATO…) are skipped; add missed
-            jargon at <a href="/admin/gloss-terms">Gloss terms</a>.
+            jargon at <a href="/admin/gloss-terms">Gloss terms</a>, or
+            “ignore” a false alarm.
           </p>
         ) : null}
       </section>
@@ -1145,7 +1117,6 @@ export const AdminReview: FC<{
       findings={data.glossFindings}
       checkResult={data.checkResult}
       checkCurrent={data.checkCurrent}
-      fixCandidate={data.fixCandidate}
       autoFix={data.autoFix}
       issueId={data.issue.id}
       isDraft={data.issue.isDraft}

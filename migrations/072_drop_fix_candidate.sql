@@ -1,0 +1,33 @@
+-- Retire the propose -> preview -> accept fix path (mig 065).
+--
+-- It was built as a safety gate: the checker's fix is a full recompose,
+-- so the reviewer got to preview the new prose and Accept or Discard
+-- before it touched the draft. Two things made the gate wrong rather
+-- than merely unused.
+--
+-- It stopped working. mig 071 has the hourly sweep re-run the automatic
+-- loop while a draft is dirty, and an adopted automatic pass clears
+-- fix_candidate_jsonb (a fresh machine fix supersedes a stale manual
+-- proposal). So a proposal the operator was reading could be wiped by
+-- the next sweep, and Accept would then fail with "no proposal". A gate
+-- that races the thing it gates is worse than no gate.
+--
+-- And it gated the wrong thing. The automatic loop already refuses a
+-- pass that doesn't strictly reduce the finding count, keeps the
+-- best-of-N result, and records the pre-fix prose. The human click added
+-- no judgment the machine wasn't already applying — it added latency,
+-- and on a hands-off release schedule (mig 071) latency means the brief
+-- sits unpublished waiting for an approval nobody is coming to give.
+--
+-- So: one path, automatic, applied directly. Reviewability moves from
+-- BEFORE the change (approve it) to AFTER (see it) — auto_fix_jsonb now
+-- carries the original composer prose and its findings, and
+-- /admin/review renders the before/after. The operator's remedies for a
+-- fix they dislike are the ones they already had: Re-compose, edit the
+-- body, or Discard.
+--
+-- The column is transient scratch — a pending proposal, never a record
+-- of anything that shipped — so dropping it doesn't touch the
+-- persist-forever surface (story.raw_input / raw_output / ai_call_log).
+
+ALTER TABLE issue DROP COLUMN IF EXISTS fix_candidate_jsonb;
