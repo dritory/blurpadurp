@@ -11,9 +11,9 @@
 // list is loaded from the gloss_term table by the caller and passed in.
 //
 // Two detectors:
-//   - acronyms: a regex finds all-caps tokens (VRA, IRGC, ICC). The
-//     whitelist below mirrors the composer prompt's bare-acronym list
-//     (plus a few universally-bare extras) — keep the two in sync.
+//   - acronyms: a regex finds all-caps tokens (VRA, IRGC, ICC), minus
+//     the whitelist below (see its comment for why it's a superset of
+//     the composer prompt's list rather than a mirror of it).
 //   - jargon: the caller-supplied curated list catches NON-acronym names
 //     the regex can't ("Brent", "gilt", "tirzepatide") — the case the
 //     user specifically flagged.
@@ -24,38 +24,26 @@
 // whole-sentence) so that "Brent is at $126 and OPEC, the oil cartel, …"
 // still flags bare Brent even though OPEC right beside it is glossed.
 //
-// FALSE ALARMS. A recall floor that cries wolf gets ignored, which
-// costs more than the recall buys. Three suppressions, in order of how
-// specific they are:
-//   1. the hard-coded whitelist below — acronyms bare BY RULE;
-//   2. the caller-supplied ignore list (gloss_term.is_ignored, mig 070)
-//      — the operator's escape hatch for brand/org names the rule can't
-//      anticipate (BBC, IBM), editable without a deploy;
-//   3. citation link labels — an acronym that appears ONLY inside a
-//      markdown link label is attribution, not prose, and nobody
-//      glosses a source credit. "[BBC](…)" was the single largest
-//      source of weekly noise before this.
+// FALSE ALARMS. A recall floor that cries wolf gets ignored wholesale,
+// which costs more than the recall buys. Three suppressions: the
+// hard-coded whitelist below, the caller's ignore list
+// (gloss_term.is_ignored, mig 070), and citation link labels — an
+// acronym only ever inside a markdown link label is attribution, not
+// prose, and was the largest source of weekly noise.
 
 // Bare-acronym whitelist: acronyms this linter never flags.
 //
-// A SUPERSET of the composer prompt's "Bare-acronym whitelist" line
-// (docs/composer-prompt.md), deliberately — the two lists answer
-// different questions and the asymmetry is the safe direction. The
-// prompt's list is what the composer may leave bare; this one is what
-// the checker won't complain about. A composer that glosses UAE anyway
-// costs six words. A checker that flags UAE every week costs the
-// operator's trust in the whole panel, and then the real findings go
-// unread too. Widen here freely; widen the prompt only with a version
-// bump (invariant 6).
+// Deliberately a SUPERSET of the composer prompt's "Bare-acronym
+// whitelist" line (docs/composer-prompt.md) — the asymmetry is the safe
+// direction. Over-glossing costs six words; over-flagging costs trust in
+// the panel, and then the real findings go unread too. Widen here
+// freely; widen the prompt only with a version bump (invariant 6).
+// checker.ts renders this set into its own system prompt, so the LLM
+// layer can't drift from the regex layer the way it had before.
 //
-// checker.ts renders this same set into its system prompt, so the LLM
-// layer cannot drift from the regex layer the way it had before.
-//
-// Scope is deliberately narrow: acronyms that are bare by RULE — states,
-// blocs, alliances, units, and the handful of agencies that read as
-// ordinary English. Brand and newsroom names belong on the operator's
-// ignore list (mig 070), not here, because which of them are "obvious"
-// shifts with the source mix and shouldn't need a deploy to change.
+// Scope: acronyms bare by RULE. Brand and newsroom names go on the
+// operator's ignore list (mig 070) instead — which of those read as
+// obvious shifts with the source mix and shouldn't need a deploy.
 export const BARE_ACRONYM_WHITELIST: ReadonlySet<string> = new Set([
   "US",
   "USA",
@@ -122,14 +110,11 @@ function stripUrls(text: string): string {
     .replace(/https?:\/\/\S+/g, "");
 }
 
-// Character ranges covered by a markdown link LABEL — the "[…]" that
-// survives stripUrls. An acronym inside one is a source credit
-// ("[BBC](…)", "[AP](…)"), and a source credit is attribution rather
-// than prose: the reader isn't being asked to understand the term, only
-// to see where the claim came from. Glossing it would be absurd, so
-// these occurrences don't count as a "use" at all — if the acronym also
-// appears in real prose we flag it there instead, and if it never does
-// we don't flag it.
+// Character ranges covered by a markdown link LABEL — the "[…]" left
+// behind by stripUrls. An acronym inside one is a source credit, and
+// nobody glosses a byline, so it isn't a "use": if the term also appears
+// in real prose we judge it there instead, and if it never does we don't
+// flag it at all.
 function linkLabelSpans(text: string): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
   for (const m of text.matchAll(/\[[^\]\n]*\]/g)) {

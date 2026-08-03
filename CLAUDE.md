@@ -72,12 +72,17 @@ is how the drift hid last time.
   avoids. Catch-up items reach the editor flagged `catch_up: true`
   (editor v0.5 tells it to judge them on durability).
 - **autopublish** (`src/pipeline/autopublish.ts`) runs hourly and does
-  two things: auto-fixes any open draft that hasn't been through the
-  checker yet (so the draft you open is already glossed), and publishes
-  drafts past `compose.auto_publish_hours` (24h). A draft that reaches
-  its deadline still failing the checker is **held** (`issue.hold`) and
-  the operator notified — email is irreversible, so a late brief beats
-  a bad one. There is also a **staleness ceiling**
+  two things: auto-fixes any open draft that is still carrying gloss
+  findings (every sweep, up to `compose.auto_fix_max_attempts` lifetime
+  recompose attempts per draft — mig 071; a fix is a full recompose, so
+  retrying across the 24h window is what makes it converge), and
+  publishes drafts past `compose.auto_publish_hours` (24h). A leftover
+  gloss finding does **not** block the send as of mig 071
+  (`compose.auto_publish_requires_clean` = false): it ships and the
+  operator gets a "published with N findings" notice, because holding
+  the whole brief over six missing words costs more than the nit. Flip
+  that key to `true` to restore the hold. There is also a **staleness
+  ceiling**
   (`compose.auto_publish_max_age_hours`, 72h, mig 068): past it a draft
   is held rather than sent, whatever the checker says. A brief is a
   snapshot of its week, so a stale one ships the wrong lead *and* burns

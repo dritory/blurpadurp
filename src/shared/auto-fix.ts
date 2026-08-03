@@ -142,7 +142,12 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
 
   const iss = await db
     .selectFrom("issue")
-    .select(["is_draft", "composed_markdown", "composer_input_jsonb"])
+    .select([
+      "is_draft",
+      "composed_markdown",
+      "composer_input_jsonb",
+      "auto_fix_jsonb",
+    ])
     .where("id", "=", issueId)
     .executeTakeFirst();
   if (iss === undefined || !iss.is_draft) {
@@ -161,22 +166,22 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
       passes,
       final_findings: [],
       outcome: "failed",
+      attempts: (iss.auto_fix_jsonb as AutoFixLog | null)?.attempts ?? 0,
     }, false);
   }
 
-  // BEST-SO-FAR, not last-accepted.
-  //
-  // The old loop stopped dead the first time a pass failed to strictly
-  // reduce the finding count. But a "fix" here is a FULL recompose --
-  // the composer rewrites every paragraph, not just the flagged clause
-  // -- so one unlucky roll that trades two gaps for two others ended the
-  // entire run, leaving the original prose and an "exhausted" verdict.
-  // That is exactly the shape of "the fixer ran and more terms remain".
-  //
-  // So: keep the lowest-finding-count prose seen so far, always compose
-  // FROM it, and let the remaining passes run. A non-improving pass is
-  // simply not adopted (the draft can never get worse), and a later pass
-  // can still rescue an unlucky earlier one.
+  // BEST-SO-FAR, not last-accepted. A "fix" is a FULL recompose, so one
+  // unlucky roll that trades two gaps for two others used to end the run
+  // on the original prose — the shape of "the fixer ran and more terms
+  // remain". Now: keep the lowest-finding-count prose, compose FROM it,
+  // and spend the remaining passes. Adoption still requires a strict
+  // improvement, so the draft can never get worse.
+  // Attempts already spent on this draft by earlier sweeps. Numbering
+  // continues from there so retry seven doesn't replay attempt one out
+  // of the composer cache.
+  const priorAttempts =
+    (iss.auto_fix_jsonb as AutoFixLog | null)?.attempts ?? 0;
+
   type Composed = Awaited<ReturnType<typeof composeDraftFromInput>>;
   let bestOut: Composed | null = null; // null === the draft's own prose
   let bestCheck: CheckResult = initial;
@@ -184,6 +189,8 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
   // Set only when the loop stopped for a reason other than running out
   // of passes or finding nothing left to fix.
   let stopped: AutoFixLog["outcome"] | null = null;
+
+  let attempts = priorAttempts;
 
   for (let pass = 1; pass <= maxPasses; pass++) {
     const findings = bestCheck.findings;
@@ -193,7 +200,7 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
     // composer's input-hash cache (without it pass 2 replays pass 1
     // byte-for-byte out of ai_call_log) and it tells the model something
     // true -- the previous attempt did not land.
-    const notes = findingsToNotes(findings, pass);
+    const notes = findingsToNotes(findings, attempts + 1);
     if (notes.length === 0) {
       // Findings exist but none are gloss problems a recompose can
       // address. Stopping is correct -- looping would burn composer
@@ -208,6 +215,7 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
       break;
     }
 
+    attempts += 1;
     let recheck: CheckResult | "failed";
     let out: Composed;
     try {
@@ -242,14 +250,11 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
     }
   }
 
-  // One write at the end, of the best prose seen. Writing per-pass would
-  // leave the draft holding a version the loop had already moved past if
-  // the process died mid-run.
-  //
-  // The check result is stored even when no pass was adopted: the
-  // checker DID run, and a review page that says "checker hasn't run
-  // yet" over prose the sweep has already judged is how an operator
-  // stops trusting either layer.
+  // One write at the end, of the best prose seen — writing per-pass would
+  // leave a version the loop had moved past if the process died mid-run.
+  // The check result is stored even when nothing was adopted: the checker
+  // DID run, and "checker hasn't run yet" over judged prose is how an
+  // operator stops trusting the panel.
   await db
     .updateTable("issue")
     .set({
@@ -278,6 +283,7 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
       passes,
       final_findings: finalFindings,
       outcome: stopped ?? (clean ? "clean" : "exhausted"),
+      attempts,
     },
     clean,
   );

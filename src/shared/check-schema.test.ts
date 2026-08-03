@@ -3,6 +3,7 @@ import {
   isCheckCurrent,
   isCleanAutoFix,
   markdownSha,
+  shouldRetryAutoFix,
   type CheckResult,
 } from "./check-schema.ts";
 import { findingsToNotes } from "./auto-fix.ts";
@@ -109,5 +110,62 @@ describe("findingsToNotes", () => {
     // An empty note list must stay empty — a lone "try again" note with
     // no findings would recompose the brief for no reason.
     expect(findingsToNotes([], 3)).toEqual([]);
+  });
+});
+
+describe("shouldRetryAutoFix", () => {
+  const dirty = (attempts: number) => ({
+    outcome: "exhausted",
+    final_findings: [{ term: "IRGC" }],
+    passes: [],
+    attempts,
+  });
+
+  test("a draft the sweep has never seen gets a run", () => {
+    expect(shouldRetryAutoFix(null, 6)).toBe(true);
+  });
+
+  test("a dirty draft under the cap gets another run", () => {
+    // The point of mig 071: one run then 23 idle hours is what made
+    // "the fixer ran" and "the fixer worked" different things.
+    expect(shouldRetryAutoFix(dirty(2), 6)).toBe(true);
+  });
+
+  test("the lifetime cap stops an unfixable draft burning a call an hour", () => {
+    expect(shouldRetryAutoFix(dirty(6), 6)).toBe(false);
+    expect(shouldRetryAutoFix(dirty(9), 6)).toBe(false);
+  });
+
+  test("a clean draft is left alone", () => {
+    expect(
+      shouldRetryAutoFix(
+        { outcome: "clean", final_findings: [], passes: [], attempts: 1 },
+        6,
+      ),
+    ).toBe(false);
+  });
+
+  test("the operator kill-switch is respected", () => {
+    expect(
+      shouldRetryAutoFix({ outcome: "disabled", final_findings: [], passes: [] }, 6),
+    ).toBe(false);
+  });
+
+  test("no recompose remedy means retrying is pointless", () => {
+    expect(
+      shouldRetryAutoFix(
+        { outcome: "nothing_to_fix", final_findings: [{}], passes: [] },
+        6,
+      ),
+    ).toBe(false);
+  });
+
+  test("a pre-mig-071 log falls back to counting its passes", () => {
+    expect(
+      shouldRetryAutoFix(
+        { outcome: "exhausted", final_findings: [{}], passes: [{}, {}] },
+        2,
+      ),
+    ).toBe(false);
   });
 });

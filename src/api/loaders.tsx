@@ -2590,6 +2590,10 @@ export async function loadReview(id: number): Promise<EditorReviewData | null> {
         "compose.auto_publish_max_age_hours",
         72,
       ),
+      requiresClean: await getConfigBool(
+        "compose.auto_publish_requires_clean",
+        false,
+      ),
     },
     autoFix: (iss.auto_fix_jsonb as EditorReviewData["autoFix"]) ?? null,
     annotations: annotations.map((a) => ({

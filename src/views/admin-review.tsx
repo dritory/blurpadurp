@@ -222,7 +222,14 @@ export interface EditorReviewData {
   };
   // Deadline + kill-switch from config, so the banner can state the
   // actual time this draft goes out rather than a hardcoded "24h".
-  autoPublish: { enabled: boolean; hours: number; maxAgeHours: number };
+  autoPublish: {
+    enabled: boolean;
+    hours: number;
+    maxAgeHours: number;
+    // mig 071: false means a leftover gloss finding no longer blocks the
+    // send, so the banner must not promise a hold it won't perform.
+    requiresClean: boolean;
+  };
   // Outcome of the automatic check→fix→re-check loop (auto-fix.ts), or
   // null if the sweep hasn't reached this draft yet.
   autoFix: AutoFixLog | null;
@@ -312,9 +319,15 @@ const AutoPublishBanner: FC<{ data: EditorReviewData }> = ({ data }) => {
   } else if (!autoPublish.enabled) {
     tone = "manual";
     msg = "Auto-publish is off. This draft sends only when you publish it.";
-  } else if (blocked) {
+  } else if (blocked && autoPublish.requiresClean) {
     tone = "warn";
     msg = `Auto-publish will hold this draft: ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} remain after its automatic fix passes. Fix or publish manually.`;
+  } else if (blocked && due !== null) {
+    // Not a blocker as of mig 071 — a gloss nit no longer parks the
+    // brief. Still worth stating, so a knowingly-imperfect send isn't a
+    // surprise, and the fixer keeps retrying until the deadline.
+    tone = "warn";
+    msg = `Publishes automatically at ${due.toUTCString()} — with ${remaining} un-glossed ${remaining === 1 ? "term" : "terms"} outstanding after ${autoFix?.attempts ?? autoFix?.passes.length ?? 0} fix ${(autoFix?.attempts ?? 0) === 1 ? "attempt" : "attempts"}. The fixer retries each hour until then; fix by hand or Hold if it matters.`;
   } else if (due === null) {
     tone = "manual";
     msg = "No draft timestamp — auto-publish will skip this one.";
@@ -450,10 +463,9 @@ const FixProposal: FC<{ issueId: number; candidate: FixCandidate }> = ({
   );
 };
 
-// One-click "stop telling me about this term". Posts to the gloss-term
-// ignore list and comes back to the panel, so a recurring false alarm
-// costs the operator one click instead of a trip to another page — the
-// friction is why BBC/IBM were still firing weeks after being noticed.
+// One-click "stop telling me about this term" — posts to the gloss-term
+// ignore list and returns to the panel. The trip to another page is why
+// BBC/IBM were still firing weeks after being noticed.
 const IgnoreTermButton: FC<{ term: string; issueId: number }> = ({
   term,
   issueId,
@@ -500,12 +512,11 @@ const CheckPanel: FC<{
   const glossed = findings.filter((f) => f.glossed);
   const llm = checkResult?.findings ?? [];
 
-  // RECONCILE THE TWO LAYERS. The regex floor over-fires by design, and
-  // the AI pass exists partly to overrule it — but the panel used to
-  // render both verdicts side by side with equal weight, so a term the
-  // checker had explicitly cleared went on shouting in the regex list
-  // forever. Once a CURRENT check exists, a regex flag it didn't
-  // reproduce is settled, not open.
+  // RECONCILE THE TWO LAYERS. The regex floor over-fires by design and
+  // the AI pass exists partly to overrule it, but the panel used to show
+  // both verdicts with equal weight — so a term the checker had cleared
+  // went on shouting forever. Once a CURRENT check exists, a regex flag
+  // it didn't reproduce is settled, not open.
   const llmTerms = new Set(llm.map((f) => f.term.toLowerCase()));
   const dismissedTerms = new Set(
     (checkResult?.dismissed ?? []).map((d) => d.term.toLowerCase()),

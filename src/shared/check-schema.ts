@@ -142,6 +142,30 @@ export interface AutoFixLog {
   final_findings: CheckFinding[];
   // Why the loop stopped, for the review page and the hold notification.
   outcome: "clean" | "exhausted" | "nothing_to_fix" | "failed" | "disabled";
+  // Cumulative recompose attempts across every sweep that has touched
+  // this draft, not just the last one. Two jobs: it caps total spend
+  // (compose.auto_fix_max_attempts) and it keeps seeding the attempt
+  // number that busts the composer's input-hash cache, so retry number
+  // seven is still a genuinely new roll. Absent on pre-mig-071 rows.
+  attempts?: number;
+}
+
+// Should the sweep spend another auto-fix run on this draft?
+// Retrying is what makes the loop converge without a human: a fix is a
+// full recompose, so any single run is partly luck, and doing nothing
+// for the 23 hours between the first run and the deadline was the
+// difference between "the fixer ran" and "the fixer worked".
+export function shouldRetryAutoFix(
+  raw: unknown,
+  maxAttempts: number,
+): boolean {
+  const log = raw as AutoFixLog | null;
+  if (log === null || typeof log !== "object") return true; // never run
+  if (log.outcome === "disabled") return false;
+  // No remedy and no reason to think another roll finds one.
+  if (log.outcome === "nothing_to_fix") return false;
+  if (isCleanAutoFix(log)) return false;
+  return (log.attempts ?? log.passes?.length ?? 0) < maxAttempts;
 }
 
 // Is this draft safe to publish unattended?
