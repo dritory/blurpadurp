@@ -440,14 +440,13 @@ const AutoFixAudit: FC<{ autoFix: AutoFixLog }> = ({ autoFix }) => {
             run ended before composing.
           </p>
         )}
-        {autoFix.original_markdown !== undefined ? (
-          <details>
-            <summary>
-              The composer's original prose (before any automatic fix)
-            </summary>
-            <pre class="fix-original">{autoFix.original_markdown}</pre>
-          </details>
-        ) : null}
+        <p class="gloss-note">
+          The composer's original prose isn't copied here — it's in
+          <code> ai_call_log</code>, which keeps every call forever and
+          tiers to R2. Render it with{" "}
+          <code>bun run cli composer-replay {"<issue>"}</code>. (Storing a
+          copy on this row is what filled the storage budget; mig 073.)
+        </p>
       </div>
     </details>
   );

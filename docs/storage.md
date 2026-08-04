@@ -188,13 +188,41 @@ per-machine and wiped on restart, i.e. no cross-restart benefit until
 R2 creds are set). Steady state: Neon is woken for public traffic at
 most ~once/hour/route instead of on every crawl.
 
-### Non-invariant lever: prune unscored noise rows
+### Non-invariant lever: prune unscored noise rows — BUILT (mig 074)
 
 The biggest row population is stories that never scored (ingest/filter
 noise). They carry no persist-forever obligation (the invariant covers
-*scored* `raw_*` only), so retention can prune unscored, unreferenced
-stories past a short TTL — pure win, no R2, no invariant impact. Sized
-from the story-population query above.
+*scored* `raw_*` only), so retention prunes unscored, unreferenced
+stories past `retention.unscored_noise_days` (30). Pure win, no R2, no
+invariant impact — this is the one lever that works with the cold tier
+switched off.
+
+`pruneUnscoredNoise` is retention rule 5. Two things about it worth
+knowing before touching it:
+
+- **It covers prefilter early-rejects.** `score.ts` sets `early_reject`
+  and `first_pass_*` but leaves `scored_at` NULL, so those rows are in
+  scope. With progressive scoring on they are most of the population.
+- **The reference checks live inside the `LIMIT` subquery, not after
+  it.** Filtering after the limit starves: if the oldest 5000 unscored
+  rows are all referenced, the run deletes nothing and the next run
+  picks the same 5000. Integration-tested
+  (`test/integration/prune-unscored-noise.test.ts`), including the
+  `issue.story_ids` case — that reference is a bare `int[]` with no
+  foreign key, so no cascade protects it.
+
+**The two levers cover disjoint populations, so neither substitutes for
+the other:**
+
+| Population | Marker | Lever |
+|---|---|---|
+| Never scored (filter noise, prefilter rejects) | `scored_at IS NULL` | **delete** — retention rule 5 |
+| Scored, never published | `scored_at` set, `published_to_reader = false` | **cold tier only** — invariant 3 applies |
+
+The second row is usually the larger share of *bytes* on a long-lived
+database, and its only lever is `storage.cold_tier`, which mig 057 ships
+as **`false`**. A project that has never flipped it has never offloaded a
+payload, whatever `docs/` implies about tiering being in place.
 
 ## Invariant check
 

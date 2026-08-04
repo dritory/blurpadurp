@@ -15,9 +15,24 @@
 // 4. story.embedding nulled for stories scored more than
 //    retention.embedding_hot_days ago whose theme is dormant. See
 //    "age-out" note below.
+// 5. Unscored, unreferenced story rows older than
+//    retention.unscored_noise_days → delete. See "noise prune" below.
 //
 // Ai_call_log is left untouched — it's training-data substrate per
 // CLAUDE.md's invariant ("Don't delete ai_call_log rows").
+//
+// Noise-prune rationale (docs/storage.md, "Non-invariant lever"): every
+// ingest writes a row per item that clears the filters, ~10-15 a week are
+// ever published, and a large share are never scored at all. Those rows
+// are monotonic and they are what fills a fixed 500 MB. Invariant 3
+// covers *scored* raw_input/raw_output; a row with scored_at IS NULL has
+// no persist-forever claim, so pruning it is a pure win — no R2 needed,
+// unlike the payload tiering in step 6.
+//
+// The one thing to be careful about is references. issue.story_ids is a
+// bare int array with NO foreign key (mig 025 only constrains
+// issue_pick), so a cascade would not have caught it — the prune has to
+// check it explicitly, and does.
 //
 // Age-out rationale (docs/storage.md): an individual story's embedding
 // does real work only inside the dedup window
@@ -33,7 +48,10 @@
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
 import { coldTierEnabled } from "../shared/cold-tier.ts";
-import { getConfigNumber } from "../shared/config-store.ts";
+import {
+  getConfigNumber,
+  getConfigNumberOrNull,
+} from "../shared/config-store.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { offloadPayloads } from "./cold-migrate.ts";
 
@@ -41,6 +59,7 @@ const UNCONFIRMED_TTL_MS = 30 * 24 * 3600 * 1000;
 const UNSUBSCRIBED_ANON_TTL_MS = 90 * 24 * 3600 * 1000;
 const DISPATCH_LOG_TTL_MS = 180 * 24 * 3600 * 1000;
 const DEFAULT_EMBEDDING_HOT_DAYS = 90;
+const DEFAULT_UNSCORED_NOISE_DAYS = 30;
 const DEFAULT_COLD_TIER_AGE_DAYS = 14;
 
 export async function retention(): Promise<void> {
@@ -89,13 +108,16 @@ async function runRetention(): Promise<void> {
   // 4. Age out cold individual story embeddings (see header note).
   const embeddingsAged = await ageOutEmbeddings(now);
 
-  // 5. Offload payloads older than the cold-tier window to R2 (rows
+  // 5. Prune unscored, unreferenced noise rows (see header note).
+  const noisePruned = await pruneUnscoredNoise(now);
+
+  // 6. Offload payloads older than the cold-tier window to R2 (rows
   // stay; only the bulky jsonb moves). Inert unless storage.cold_tier
   // is on. See docs/storage.md.
   const offloaded = await offloadColdPayloads();
 
   console.log(
-    `[retention] unconfirmed_deleted=${unconfirmedDeleted} unsub_anonymized=${unsubAnonymized} dispatch_pruned=${dispatchDeleted} embeddings_aged=${embeddingsAged} offloaded_ai=${offloaded.ai} offloaded_story=${offloaded.story}`,
+    `[retention] unconfirmed_deleted=${unconfirmedDeleted} unsub_anonymized=${unsubAnonymized} dispatch_pruned=${dispatchDeleted} embeddings_aged=${embeddingsAged} noise_pruned=${noisePruned} offloaded_ai=${offloaded.ai} offloaded_story=${offloaded.story}`,
   );
 }
 
@@ -106,6 +128,70 @@ async function offloadColdPayloads(): Promise<{ ai: number; story: number }> {
     DEFAULT_COLD_TIER_AGE_DAYS,
   );
   return offloadPayloads({ olderThanDays: days });
+}
+
+// Delete unscored, unreferenced story rows past the TTL.
+//
+// The SQL is the specification, so read the predicate rather than this
+// comment: scored_at IS NULL is the invariant-3 guard and every NOT
+// EXISTS is a reference that must not be orphaned. story_factor is the
+// deliberate omission — it has ON DELETE CASCADE and carries no meaning
+// once its story is gone.
+//
+// Bounded per run. A first run on a long-lived database has a very large
+// candidate set, and an unbounded DELETE would hold locks and inflate
+// WAL (which on Neon is retained storage, not just churn) for as long as
+// it takes. Daily runs drain the backlog over a few days instead.
+const NOISE_PRUNE_LIMIT = 5000;
+
+export async function pruneUnscoredNoise(now: number): Promise<number> {
+  // getConfigNumberOrNull, NOT getConfigNumber. getConfigNumber ends in
+  // `v > 0 ? v : fallback`, so it silently converts a configured 0 into
+  // the default — which on a DELETE means an operator who sets the TTL to
+  // 0 to switch the prune OFF gets a 30-day prune instead, and the guard
+  // below is unreachable dead code. OrNull permits zero, so the guard can
+  // actually see it. (Caught by the integration test, which is the reason
+  // a destructive stage gets one.)
+  const configured = await getConfigNumberOrNull(
+    "retention.unscored_noise_days",
+  );
+  const days = configured ?? DEFAULT_UNSCORED_NOISE_DAYS;
+  // Zero or negative means off. Read literally it would mean "delete
+  // every unscored row regardless of age", which nobody types on purpose,
+  // and the safe reading of an ambiguous destructive setting is to do
+  // nothing.
+  if (!Number.isFinite(days) || days <= 0) return 0;
+  const cutoff = new Date(now - days * 24 * 3600 * 1000);
+
+  // Every filter sits INSIDE the limited subquery, so the LIMIT applies
+  // to rows that are actually deletable. Filtering after the LIMIT would
+  // starve: if the oldest 5000 unscored rows happen to be referenced, the
+  // run deletes nothing and the next run picks the same 5000 forever.
+  const result = await sql`
+    DELETE FROM story
+    WHERE id IN (
+      SELECT s.id
+      FROM story s
+      WHERE s.scored_at IS NULL
+        AND s.ingested_at < ${cutoff}
+        -- Never a published or drafted pick.
+        AND NOT EXISTS (SELECT 1 FROM issue_pick p WHERE p.story_id = s.id)
+        -- issue.story_ids is a bare int[] with no FK, so this one is on us.
+        AND NOT EXISTS (SELECT 1 FROM issue i WHERE s.id = ANY(i.story_ids))
+        -- Human calibration work outlives the score it was made against.
+        AND NOT EXISTS (SELECT 1 FROM eval_label e WHERE e.story_id = s.id)
+        AND NOT EXISTS (SELECT 1 FROM ground_truth g WHERE g.story_id = s.id)
+        -- Another story reused this row's score via dedup. That FK is ON
+        -- DELETE SET NULL, so deleting would silently erase the
+        -- provenance instead of failing loudly.
+        AND NOT EXISTS (
+          SELECT 1 FROM story o WHERE o.scored_via_story_id = s.id
+        )
+      ORDER BY s.ingested_at ASC
+      LIMIT ${NOISE_PRUNE_LIMIT}
+    )
+  `.execute(db);
+  return Number(result.numAffectedRows ?? 0);
 }
 
 async function ageOutEmbeddings(now: number): Promise<number> {

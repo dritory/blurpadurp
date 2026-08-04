@@ -160,14 +160,21 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
     };
   }
 
+  const prior = iss.auto_fix_jsonb as AutoFixLog | null;
+  // Counted BEFORE anything can fail. Every exit below carries it, so a
+  // path that returns early still moves the draft toward the cap — the
+  // bug that had failed drafts re-running hourly forever.
+  const runs = (prior?.runs ?? 0) + 1;
+
   const passes: AutoFixPass[] = [];
   const initial = await runCheckOnMarkdown(iss.composed_markdown);
   if (initial === "failed") {
     return await persist(issueId, {
       passes,
-      final_findings: [],
+      final_findings: prior?.final_findings ?? [],
       outcome: "failed",
-      attempts: (iss.auto_fix_jsonb as AutoFixLog | null)?.attempts ?? 0,
+      attempts: prior?.attempts ?? 0,
+      runs,
     }, false);
   }
 
@@ -180,14 +187,15 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
   // Attempts already spent on this draft by earlier sweeps. Numbering
   // continues from there so retry seven doesn't replay attempt one out
   // of the composer cache.
-  const prior = iss.auto_fix_jsonb as AutoFixLog | null;
   const priorAttempts = prior?.attempts ?? 0;
-  // The composer's own prose, captured on the first run that had
-  // something to fix and never overwritten — the anchor for the
-  // before/after. Later sweeps must not re-capture: by then the "before"
-  // is already machine-written.
-  const originalMarkdown = prior?.original_markdown ?? iss.composed_markdown;
+  // The composer's original findings + a hash of its prose, captured on
+  // the first run that had something to fix and never re-captured (by
+  // retry four the current prose is already machine-written). Findings
+  // only — the prose itself is in ai_call_log, and keeping a copy here
+  // is what blew the storage budget. See mig 073.
   const originalFindings = prior?.original_findings ?? initial.findings;
+  const originalSha =
+    prior?.original_markdown_sha ?? markdownSha(iss.composed_markdown);
 
   type Composed = Awaited<ReturnType<typeof composeDraftFromInput>>;
   let bestOut: Composed | null = null; // null === the draft's own prose
@@ -246,7 +254,7 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
       at: new Date().toISOString(),
       notes,
       findings_before: bestCheck.findings,
-      markdown_before: bestMarkdown,
+      markdown_before_sha: markdownSha(bestMarkdown),
       findings_after: recheck.findings,
       improved,
     });
@@ -289,11 +297,12 @@ export async function autoFixDraft(issueId: number): Promise<AutoFixResult> {
       final_findings: finalFindings,
       outcome: stopped ?? (clean ? "clean" : "exhausted"),
       attempts,
+      runs,
       // Only meaningful once a pass has actually rewritten something.
       ...(attempts > 0
         ? {
-            original_markdown: originalMarkdown,
             original_findings: originalFindings,
+            original_markdown_sha: originalSha,
           }
         : {}),
     },

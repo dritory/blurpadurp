@@ -430,6 +430,94 @@ must go, pin/upgrade `pg-connection-string` and pass an explicit `ssl`
 object that matches today's behavior (`rejectUnauthorized: false`),
 verified against the real endpoint first — not a stricter mode.
 
+### 14. Neon storage full / writes failing / publish crashes
+
+**Symptom:** Neon reports the project at its storage limit. Writes start
+failing, which surfaces as a crash anywhere that writes — most visibly
+`publishDraft`, since it runs three UPDATEs in one transaction. A read-only
+Neon looks like an application bug at the call site that happened to write
+first.
+
+**Quick diagnosis:** `/admin/status` reports per-table sizes
+(`pg_total_relation_size`). Check the top three. Then:
+
+```sql
+-- Is one issue row carrying an absurd auto-fix log?
+SELECT id, is_draft,
+       pg_column_size(auto_fix_jsonb)  AS autofix_bytes,
+       auto_fix_jsonb -> 'runs'        AS runs,
+       auto_fix_jsonb -> 'attempts'    AS attempts,
+       auto_fix_jsonb -> 'outcome'     AS outcome
+FROM issue
+WHERE auto_fix_jsonb IS NOT NULL
+ORDER BY pg_column_size(auto_fix_jsonb) DESC
+LIMIT 10;
+
+-- How much of ai_call_log is still inline rather than tiered to R2?
+SELECT payload_key IS NULL AS inline, count(*),
+       pg_size_pretty(sum(pg_column_size(input_jsonb)
+                        + pg_column_size(output_jsonb))) AS payload
+FROM ai_call_log GROUP BY 1;
+```
+
+A `runs` value in the dozens on an open draft means the auto-fix sweep was
+looping (the mig 073 bug); a large inline `ai_call_log` means cold-migrate
+has never been run.
+
+**Three independent causes. Establish which one you have before acting —
+the first is a slow leak measured in months, the other two in hours.**
+
+0. **Ordinary corpus growth, which is the usual answer.** Every ingest
+   writes a story row per item that clears the filters; ~10-15 a week are
+   ever published. If storage has been climbing steadily for weeks and
+   was already near the cap before any recent deploy, it is this, and the
+   two levers are retention rule 5 (deletes unscored noise, mig 074) and
+   `storage.cold_tier` (tiers scored payloads to R2). **Check the flag
+   first:** mig 057 ships `storage.cold_tier = false`, so a project that
+   has never flipped it has never offloaded a payload — retention calls
+   `offloadPayloads` on a schedule, but the call is inert. That single
+   config flip is usually the largest available reclaim.
+
+1. **The auto-fix sweep looping on a fat row.** mig 071 has the sweep
+   retry hourly while a draft is dirty; mig 072 put the composer's full
+   prose on `auto_fix_jsonb`. Two early-exit paths didn't increment the
+   attempt counter, so a draft that failed those checks re-ran every hour
+   forever, each run rewriting three copies of the brief. Fixed in mig 073
+   (prose out of the log, `runs` as a bound no per-path bug can defeat) —
+   but note the shape, because **on Neon a write loop is a storage leak.**
+   Reported storage includes branch history for the PITR window, so an
+   hourly rewrite of a TOASTed column is retained hourly for the whole
+   window even though the logical table never grows.
+
+2. **`cold-migrate` is CLI-only.** It is not a scheduled stage, so
+   `ai_call_log` input/output payloads accumulate inline indefinitely
+   unless someone runs it. On a long-lived project this is usually the
+   bulk of the storage.
+
+**Immediate — reclaim, in order of yield:**
+- Set `storage.cold_tier = true` at `/admin/config`, then run
+  `bun run cli cold-migrate` to drain the backlog without waiting for the
+  nightly retention pass. Needs `R2_BUCKET` + `R2_ACCESS_KEY_ID` +
+  `R2_SECRET_ACCESS_KEY`; it is a no-op without them, so check first.
+  Rows stay — only payloads move, so persist-forever holds. On a database
+  that has never tiered, this is the big one.
+- `bun run cli migrate` to apply mig 073 (strips prose from auto-fix logs)
+  and mig 074 (enables the unscored-noise prune). Then
+  `bun run cli retention` to run the prune now; it is bounded to 5000 rows
+  per pass, so a large backlog drains over several daily runs.
+- Then **shrink the Neon history window** (project → Settings → history
+  retention; free tier defaults to 7 days). Logical deletes do not reduce
+  reported storage until history rolls past them. This is the step people
+  skip and then conclude the cleanup didn't work.
+- Do **not** delete `ai_call_log` rows to free space. They are the replay
+  substrate and the drift-detection baseline (invariant 3, triage rule 2).
+  Tier them to R2 instead.
+
+**Prevention:** any hourly stage that UPDATEs a row must be bounded by a
+counter incremented *before* anything can fail, and must not write bulk
+payloads to a row it rewrites. Bulk belongs in `ai_call_log` (keyed by
+`input_hash`, cold-tierable) or R2 — see `docs/storage.md`.
+
 ---
 
 ## General triage rules

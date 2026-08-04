@@ -171,30 +171,64 @@ describe("shouldRetryAutoFix", () => {
   });
 });
 
-describe("AutoFixLog as the audit trail", () => {
-  // mig 072 removed the approve-before-it-lands gate, so the log IS the
-  // reviewability. The original prose has to survive every later sweep:
-  // each run writes a fresh log, so a naive re-capture would show retry
-  // four's "before" as machine-written prose and the composer's actual
-  // output would be gone.
-  test("original_markdown is what a later run must carry forward", () => {
-    const first: AutoFixLog = {
+describe("the run counter is the loop's hard bound", () => {
+  // The storage incident: two early-exit paths returned without
+  // incrementing `attempts`, and shouldRetryAutoFix treats
+  // outcome="failed" as retryable — so those drafts re-ran every hour
+  // forever, each run rewriting a jsonb column that (until mig 073) held
+  // three copies of the brief. Counting invocations terminates the loop
+  // even when a path forgets to count its own work.
+  test("a failed run with no attempts spent still converges", () => {
+    const stuck = (runs: number) => ({
+      outcome: "failed",
+      final_findings: [{ term: "IRGC" }],
       passes: [],
-      final_findings: [],
-      outcome: "exhausted",
-      attempts: 2,
-      original_markdown: "the composer's own words",
-      original_findings: [],
-    };
-    // What autoFixDraft does on a subsequent run: prefer the stored
-    // original over the draft's current (already-fixed) prose.
-    const carried = first.original_markdown ?? "current draft prose";
-    expect(carried).toBe("the composer's own words");
+      attempts: 0, // the bug: never incremented on this path
+      runs,
+    });
+    expect(shouldRetryAutoFix(stuck(1), 6)).toBe(true);
+    expect(shouldRetryAutoFix(stuck(5), 6)).toBe(true);
+    // Without the runs bound this would be true forever.
+    expect(shouldRetryAutoFix(stuck(6), 6)).toBe(false);
+    expect(shouldRetryAutoFix(stuck(40), 6)).toBe(false);
   });
 
-  test("a first run falls back to the draft's own prose", () => {
-    const carried =
-      (null as AutoFixLog | null)?.original_markdown ?? "current draft prose";
-    expect(carried).toBe("current draft prose");
+  test("a pre-mig-073 log with no runs field still honours the attempts cap", () => {
+    expect(
+      shouldRetryAutoFix(
+        { outcome: "exhausted", final_findings: [{}], passes: [], attempts: 6 },
+        6,
+      ),
+    ).toBe(false);
+  });
+
+  test("the audit trail keeps findings, not prose", () => {
+    // mig 073: prose lives in ai_call_log. A log carrying a full brief
+    // is the regression this pins.
+    const log: AutoFixLog = {
+      passes: [
+        {
+          pass: 1,
+          at: "2026-08-04T00:00:00.000Z",
+          notes: ["gloss IRGC"],
+          findings_before: [],
+          findings_after: [],
+          improved: true,
+          markdown_before_sha: markdownSha("prose"),
+        },
+      ],
+      final_findings: [],
+      outcome: "clean",
+      attempts: 1,
+      runs: 1,
+      original_findings: [],
+      original_markdown_sha: markdownSha("prose"),
+    };
+    const serialized = JSON.stringify(log);
+    expect(serialized).not.toContain("markdown_before\"");
+    expect(serialized).not.toContain("original_markdown\"");
+    // A whole run's record should be small enough to rewrite hourly
+    // without it mattering.
+    expect(serialized.length).toBeLessThan(2048);
   });
 });
