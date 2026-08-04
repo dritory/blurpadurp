@@ -464,7 +464,19 @@ A `runs` value in the dozens on an open draft means the auto-fix sweep was
 looping (the mig 073 bug); a large inline `ai_call_log` means cold-migrate
 has never been run.
 
-**Two independent causes, and they compound:**
+**Three independent causes. Establish which one you have before acting —
+the first is a slow leak measured in months, the other two in hours.**
+
+0. **Ordinary corpus growth, which is the usual answer.** Every ingest
+   writes a story row per item that clears the filters; ~10-15 a week are
+   ever published. If storage has been climbing steadily for weeks and
+   was already near the cap before any recent deploy, it is this, and the
+   two levers are retention rule 5 (deletes unscored noise, mig 074) and
+   `storage.cold_tier` (tiers scored payloads to R2). **Check the flag
+   first:** mig 057 ships `storage.cold_tier = false`, so a project that
+   has never flipped it has never offloaded a payload — retention calls
+   `offloadPayloads` on a schedule, but the call is inert. That single
+   config flip is usually the largest available reclaim.
 
 1. **The auto-fix sweep looping on a fat row.** mig 071 has the sweep
    retry hourly while a draft is dirty; mig 072 put the composer's full
@@ -483,11 +495,16 @@ has never been run.
    bulk of the storage.
 
 **Immediate — reclaim, in order of yield:**
-- `bun run cli migrate` to apply mig 073 (strips prose from existing logs).
-- `bun run cli cold-migrate` to push old `ai_call_log` payloads to R2.
-  Needs `R2_BUCKET` + `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY`; it is a
-  no-op without them, so check first. Rows stay — only payloads move, so
-  the persist-forever invariant holds.
+- Set `storage.cold_tier = true` at `/admin/config`, then run
+  `bun run cli cold-migrate` to drain the backlog without waiting for the
+  nightly retention pass. Needs `R2_BUCKET` + `R2_ACCESS_KEY_ID` +
+  `R2_SECRET_ACCESS_KEY`; it is a no-op without them, so check first.
+  Rows stay — only payloads move, so persist-forever holds. On a database
+  that has never tiered, this is the big one.
+- `bun run cli migrate` to apply mig 073 (strips prose from auto-fix logs)
+  and mig 074 (enables the unscored-noise prune). Then
+  `bun run cli retention` to run the prune now; it is bounded to 5000 rows
+  per pass, so a large backlog drains over several daily runs.
 - Then **shrink the Neon history window** (project → Settings → history
   retention; free tier defaults to 7 days). Logical deletes do not reduce
   reported storage until history rolls past them. This is the step people

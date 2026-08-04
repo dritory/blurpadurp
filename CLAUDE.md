@@ -96,8 +96,15 @@ is how the drift hid last time.
   auto-unsubscribes hard failures. Design + send-window logic in
   `docs/dispatch.md`.
 - **retention** runs daily — prunes unconfirmed subs, anonymizes
-  long-unsubscribed rows, trims old `dispatch_log` entries
-  (`src/pipeline/retention.ts`). GDPR storage-limitation policy.
+  long-unsubscribed rows, trims old `dispatch_log` entries, ages out cold
+  embeddings, **deletes unscored noise stories** past
+  `retention.unscored_noise_days` (mig 074), and offloads cold payloads
+  to R2 (`src/pipeline/retention.ts`). GDPR storage-limitation policy
+  plus the two storage levers. The offload step is gated on
+  `storage.cold_tier`, which mig 057 ships **false** — so on a project
+  that never flipped it, the tiering `docs/storage.md` describes has
+  never actually run. Check that before concluding storage growth is a
+  bug.
 
 Beyond the five scheduled stages, `src/pipeline/` also holds:
 `urgent.ts` (event-driven mid-cycle publish), `eval.ts` (human-label
