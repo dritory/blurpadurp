@@ -48,7 +48,10 @@
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
 import { coldTierEnabled } from "../shared/cold-tier.ts";
-import { getConfigNumber } from "../shared/config-store.ts";
+import {
+  getConfigNumber,
+  getConfigNumberOrNull,
+} from "../shared/config-store.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { offloadPayloads } from "./cold-migrate.ts";
 
@@ -142,12 +145,21 @@ async function offloadColdPayloads(): Promise<{ ai: number; story: number }> {
 const NOISE_PRUNE_LIMIT = 5000;
 
 export async function pruneUnscoredNoise(now: number): Promise<number> {
-  const days = await getConfigNumber(
+  // getConfigNumberOrNull, NOT getConfigNumber. getConfigNumber ends in
+  // `v > 0 ? v : fallback`, so it silently converts a configured 0 into
+  // the default — which on a DELETE means an operator who sets the TTL to
+  // 0 to switch the prune OFF gets a 30-day prune instead, and the guard
+  // below is unreachable dead code. OrNull permits zero, so the guard can
+  // actually see it. (Caught by the integration test, which is the reason
+  // a destructive stage gets one.)
+  const configured = await getConfigNumberOrNull(
     "retention.unscored_noise_days",
-    DEFAULT_UNSCORED_NOISE_DAYS,
   );
-  // A non-positive TTL means "delete everything unscored", which is
-  // never what someone meant to type. Treat it as off.
+  const days = configured ?? DEFAULT_UNSCORED_NOISE_DAYS;
+  // Zero or negative means off. Read literally it would mean "delete
+  // every unscored row regardless of age", which nobody types on purpose,
+  // and the safe reading of an ambiguous destructive setting is to do
+  // nothing.
   if (!Number.isFinite(days) || days <= 0) return 0;
   const cutoff = new Date(now - days * 24 * 3600 * 1000);
 

@@ -131,13 +131,36 @@ describe.skipIf(!RUN)("pruneUnscoredNoise (integration)", () => {
     expect(await survives(labeled)).toBe(true);
   });
 
-  test("a non-positive TTL is treated as off, not as delete-everything", async () => {
+  test("a zero TTL is treated as off, not as delete-everything", async () => {
+    // Regression: this read through getConfigNumber, whose contract is
+    // `v > 0 ? v : fallback` — so a configured 0 became 30 and the
+    // off-switch quietly performed a 30-day prune instead.
     const id = await insertStory({ title: "noise", ingestedAt: OLD });
     await sql`
       UPDATE config SET value = '0'::jsonb WHERE key = 'retention.unscored_noise_days'
     `.execute(db);
     expect(await pruneUnscoredNoise(NOW)).toBe(0);
     expect(await survives(id)).toBe(true);
+  });
+
+  test("a negative TTL is off too", async () => {
+    const id = await insertStory({ title: "noise", ingestedAt: OLD });
+    await sql`
+      UPDATE config SET value = '-1'::jsonb WHERE key = 'retention.unscored_noise_days'
+    `.execute(db);
+    expect(await pruneUnscoredNoise(NOW)).toBe(0);
+    expect(await survives(id)).toBe(true);
+  });
+
+  test("a missing key falls back to the 30-day default", async () => {
+    // The other half of the OrNull switch: absent must still mean 30, not
+    // "off" and not "delete everything".
+    const id = await insertStory({ title: "noise", ingestedAt: OLD });
+    await sql`
+      DELETE FROM config WHERE key = 'retention.unscored_noise_days'
+    `.execute(db);
+    expect(await pruneUnscoredNoise(NOW)).toBeGreaterThanOrEqual(1);
+    expect(await survives(id)).toBe(false);
   });
 
   test("a referenced oldest row does not starve the prune", async () => {
