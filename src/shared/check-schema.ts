@@ -103,12 +103,15 @@ export interface AutoFixPass {
   at: string; // ISO 8601
   notes: string[];
   findings_before: CheckFinding[];
-  markdown_before: string;
   // Findings still present after this pass recomposed the brief.
   findings_after: CheckFinding[];
   // False when the recompose didn't reduce the finding count — the pass
   // ran but bought nothing.
   improved: boolean;
+  // Identity, not content: which prose this pass started from. The full
+  // markdown used to live here, which put up to two extra copies of the
+  // brief in a jsonb column rewritten on every sweep — see mig 073.
+  markdown_before_sha?: string;
 }
 
 export interface AutoFixLog {
@@ -123,17 +126,23 @@ export interface AutoFixLog {
   // number that busts the composer's input-hash cache, so retry number
   // seven is still a genuinely new roll. Absent on pre-mig-071 rows.
   attempts?: number;
-  // The composer's ORIGINAL prose and findings, captured on the first
-  // run and carried through every later one.
-  //
-  // This is the audit trail, and as of mig 072 it's the only one: the
-  // fix applies without a human approving it, so reviewability moved
-  // from before the change to after it. passes[].markdown_before can't
-  // serve — each sweep writes a fresh log, so by retry four its
-  // "before" is already machine-written prose. Absent on pre-mig-072
-  // rows and on drafts whose first run found nothing to fix.
-  original_markdown?: string;
+  // Times autoFixDraft has been invoked on this draft. Distinct from
+  // attempts (recompose calls) and load-bearing for a different reason:
+  // it is the bound that no per-path accounting bug can defeat. Two
+  // early-exit paths in mig 071 returned without incrementing attempts
+  // and shouldRetryAutoFix reads outcome="failed" as retryable, so those
+  // drafts re-ran hourly forever. Counting invocations makes the loop
+  // terminate regardless of what any individual path forgets to do.
+  runs?: number;
+  // The audit trail — as of mig 072 the only one, since the fix applies
+  // without a human approving it. Findings only: the composer's original
+  // PROSE lived here too until mig 073, which is what filled the storage
+  // budget. Prose belongs in ai_call_log, which is keyed by input_hash,
+  // persisted forever by design, and has a cold-storage path to R2;
+  // `bun run cli composer-replay <issue>` renders it. The sha is kept so
+  // the panel can still say whether the brief actually changed.
   original_findings?: CheckFinding[];
+  original_markdown_sha?: string;
 }
 
 // Should the sweep spend another auto-fix run on this draft?
@@ -151,6 +160,12 @@ export function shouldRetryAutoFix(
   // No remedy and no reason to think another roll finds one.
   if (log.outcome === "nothing_to_fix") return false;
   if (isCleanAutoFix(log)) return false;
+  // TWO independent bounds, deliberately. Attempts counts recompose
+  // calls, which is the thing worth rationing — but a path that exits
+  // before spending one leaves it unincremented, and an unincremented
+  // counter compared against a cap is an infinite loop. Runs counts
+  // invocations, so the loop terminates even when a path forgets.
+  if ((log.runs ?? 0) >= maxAttempts) return false;
   return (log.attempts ?? log.passes?.length ?? 0) < maxAttempts;
 }
 
