@@ -35,10 +35,16 @@
 // how many other picks exist. Sections are fixed-size (routing is
 // rank-based — see compose-partition.ts), so a section that cannot be
 // filled under the cap gets filled over it rather than left short:
-// CONVERSATION_TOP_N is a structural constant, not something to shrink
-// on a thin week. `relaxed` records when that happened, which is the
-// signal that the week itself was monotopic rather than that the caps
-// misfired.
+// CONVERSATION_TOP_N is a structural constant, not something to shrink.
+//
+// `overCap` reports those forced placements, and it is NOT a
+// quiet-week signal — the arithmetic makes it routine. Two bounded
+// sections of five need ten picks before the tail sees anything, and
+// the editor targets 10–15, so an issue at the bottom of that range
+// runs out of other-cluster material in section two as a matter of
+// course. One or two over-cap placements is a normal week. A count that
+// approaches the issue size is the real "this week was one story"
+// signal, which is why this is a list and not a boolean.
 
 import type { NormalizedPick } from "../shared/editor-schema.ts";
 import {
@@ -81,9 +87,11 @@ export interface DiversityResult {
   /** Lead-story ids pushed into a later section than pure rank order
    *  would have given them. */
   movedDown: number[];
-  /** True when a bounded section had to be filled past the per-section
-   *  cap because no other cluster had a pick left to promote. */
-  relaxed: boolean;
+  /** Lead-story ids placed into a section whose cluster cap was already
+   *  full, because nothing else was left to fill the section with.
+   *  Routine at one or two (see the header note on the arithmetic);
+   *  meaningful when it approaches the issue size. */
+  overCap: number[];
 }
 
 /**
@@ -135,7 +143,7 @@ export function diversifyPicks(
   // as high as it legitimately can rather than at the bottom.
   const ordered: NormalizedPick[] = [];
   const queue = [...kept];
-  let relaxed = false;
+  const overCap: number[] = [];
 
   for (const size of sizes) {
     const usedInSection = new Map<string, number>();
@@ -148,9 +156,9 @@ export function diversifyPicks(
         // Every remaining pick belongs to a narrative that already owns
         // its share of this section. Sections are fixed-size, so there
         // is no "leave it short" option — take the best-ranked pick and
-        // record that the cap could not be honoured.
+        // record that the cap could not be honoured for it.
         idx = 0;
-        relaxed = true;
+        overCap.push(queue[0]!.lead_story_id);
       }
       const [p] = queue.splice(idx, 1);
       const key = keyFor(p!);
@@ -179,7 +187,7 @@ export function diversifyPicks(
     picks: ordered.map((p, i) => ({ ...p, rank: i + 1 })),
     cuts,
     movedDown,
-    relaxed,
+    overCap,
   };
 }
 

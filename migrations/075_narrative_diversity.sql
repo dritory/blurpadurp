@@ -45,12 +45,15 @@
 --    one story used to seed three opener entries, so the paragraph the
 --    reader always reads named the same news three ways.
 --
---    The caps relax automatically when the pool offers nothing else.
 --    Sections are fixed-size (routing is rank-based), so a section that
 --    can't be filled under the cap is filled over it rather than left
---    short — a week where every story really is one war still produces a
---    normally-shaped brief. The goal is to stop a narrative crowding out
---    competitors that exist, not to manufacture variety that doesn't.
+--    short. Note this is ROUTINE, not an edge case: two five-wide
+--    sections need ten picks before the tail sees anything and the
+--    editor targets 10-15, so an issue at the bottom of that range runs
+--    out of other-cluster material in section two as a matter of course.
+--    diversifyPicks reports those placements as a count for exactly that
+--    reason — one or two is a normal week, and only a count approaching
+--    the issue size means the week really was one story.
 --
 -- 2. NO MEMORY. Per theme the pipeline knew a count
 --    (n_prior_publications) and, for the composer, a timeline of story

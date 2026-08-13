@@ -9,8 +9,8 @@ import {
 
 // These lock the diversity invariant: a dominant narrative is spread
 // DOWN the brief rather than stacked at the top, and no cluster owns the
-// issue — but a genuinely monotopic week still produces a
-// normally-shaped brief.
+// issue — but the sections are still filled, since rank-based routing
+// gives no way to shrink one.
 
 function pick(rank: number, lead: number): NormalizedPick {
   return {
@@ -62,7 +62,7 @@ describe("diversifyPicks — spreading a dominant narrative", () => {
       maxPicksPerCluster: 4,
       maxPerSectionPerCluster: 1,
     });
-    expect(res.relaxed).toBe(false);
+    expect(res.overCap).toEqual([]);
 
     const c1 = res.picks.filter((p) => byHundreds(p.lead_story_id) === "c1");
     // The whole-issue cap trimmed 5 → 4, and those four are spread.
@@ -153,7 +153,7 @@ describe("diversifyPicks — spreading a dominant narrative", () => {
     });
     expect(res.picks.map((p) => p.lead_story_id)).toEqual([101, 201, 301, 401]);
     expect(res.movedDown).toEqual([]);
-    expect(res.relaxed).toBe(false);
+    expect(res.overCap).toEqual([]);
   });
 });
 
@@ -189,7 +189,31 @@ describe("diversifyPicks — whole-issue cap", () => {
   });
 });
 
-describe("diversifyPicks — relaxation", () => {
+describe("diversifyPicks — over-cap placements", () => {
+  test("an over-cap placement is routine, not a quiet-week signal", () => {
+    // Two five-wide sections need ten picks before the tail sees
+    // anything, and the editor targets 10-15. So an issue at the bottom
+    // of that range runs out of other-cluster material in section two as
+    // a matter of course — with plenty of distinct stories in play.
+    const picks = [
+      pick(1, 101),
+      pick(2, 102),
+      pick(3, 103),
+      pick(4, 104),
+      ...[201, 301, 401, 501, 601, 701].map((id, i) => pick(5 + i, id)),
+    ];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 9,
+      maxPerSectionPerCluster: 1,
+    });
+    // Seven distinct clusters, nothing remotely monotopic — and it still
+    // reports an over-cap placement. A boolean here would read as "this
+    // week was one story", which is why it's a count.
+    expect(new Set(picks.map((p) => byHundreds(p.lead_story_id))).size).toBe(7);
+    expect(res.overCap.length).toBeGreaterThan(0);
+    expect(res.overCap.length).toBeLessThan(picks.length / 2);
+  });
+
   test("a genuinely single-narrative week still fills the lead section", () => {
     // Everything is one cluster. Sections are fixed-size, so the cap
     // cannot be honoured — the conversation fills anyway rather than
@@ -206,7 +230,8 @@ describe("diversifyPicks — relaxation", () => {
       maxPicksPerCluster: 99,
       maxPerSectionPerCluster: 1,
     });
-    expect(res.relaxed).toBe(true);
+    // Nearly everything is over cap — THAT is the monotopic signal.
+    expect(res.overCap.length).toBeGreaterThan(picks.length / 2);
     expect(res.picks.slice(0, CONVERSATION_TOP_N)).toHaveLength(
       CONVERSATION_TOP_N,
     );
@@ -234,7 +259,7 @@ describe("diversifyPicks — relaxation", () => {
       maxPicksPerCluster: 99,
       maxPerSectionPerCluster: 1,
     });
-    expect(res.relaxed).toBe(true);
+    expect(res.overCap.length).toBeGreaterThan(0);
     expect(res.picks.slice(0, CONVERSATION_TOP_N).map((p) => p.lead_story_id))
       .toEqual([101, 201, 102, 103, 104]);
   });
@@ -249,7 +274,7 @@ describe("diversifyPicks — relaxation", () => {
     });
     expect(res.cuts).toHaveLength(0);
     expect(res.picks).toHaveLength(3);
-    expect(res.relaxed).toBe(false);
+    expect(res.overCap).toEqual([]);
   });
 
   test("fewer picks than lead slots is not an error", () => {
@@ -258,7 +283,7 @@ describe("diversifyPicks — relaxation", () => {
       maxPerSectionPerCluster: 1,
     });
     expect(res.picks.map((p) => p.lead_story_id)).toEqual([101, 201]);
-    expect(res.relaxed).toBe(false);
+    expect(res.overCap).toEqual([]);
   });
 
   test("empty pick list survives", () => {

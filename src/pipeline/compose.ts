@@ -365,9 +365,14 @@ export async function produceDraft(
           : ""),
     );
   }
-  if (diversity.relaxed) {
+  // Over-cap placements are routine at one or two — two five-wide
+  // sections need ten picks and the editor targets 10–15, so the second
+  // section runs out of other-cluster material as a matter of course.
+  // Only flag it when it's most of the issue, which is the shape that
+  // actually means "this week was one story".
+  if (diversity.overCap.length > normalizedPicks.length / 2) {
     console.log(
-      "[compose] diversity: per-section cap relaxed — not enough of anything else to spread with",
+      `[compose] diversity: ${diversity.overCap.length}/${normalizedPicks.length} picks placed over the per-section cap — the week really is one narrative`,
     );
   }
 
