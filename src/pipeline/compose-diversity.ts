@@ -20,11 +20,19 @@
 //      demoted rather than cut; the story still belongs in the issue,
 //      just not stacked at the top.
 //
-// Both are relaxed rather than enforced when the pool genuinely offers
-// nothing else. A week where every story really is one war should still
-// produce a normally-shaped brief — the goal is to stop a narrative
-// crowding out competitors that EXIST, not to manufacture variety that
-// doesn't. See fillsHeadFromRemainder below.
+// The lead cap is best-effort by construction. It works by promoting
+// other clusters' picks ahead of a saturated one, so its power is
+// bounded by how many other picks exist: when the pool genuinely holds
+// nothing else, the section fills with the dominant narrative anyway and
+// `relaxed` records that it happened. That is the intended behaviour —
+// the goal is to stop a narrative crowding out competitors that EXIST,
+// not to manufacture variety that doesn't, and CONVERSATION_TOP_N is a
+// structural constant rather than something to shrink on a quiet week.
+//
+// The whole-issue cap has no such escape: it cuts, and a short issue is
+// an acceptable outcome (CLAUDE.md §Invariants #1). Cut picks keep
+// published_to_reader = false, so they return to next week's pool rather
+// than being lost.
 
 import type { NormalizedPick } from "../shared/editor-schema.ts";
 import { CONVERSATION_TOP_N } from "./compose-partition.ts";
@@ -54,9 +62,10 @@ export interface DiversityResult {
   cuts: DiversityCut[];
   /** Lead-story ids that were demoted out of the conversation section. */
   demoted: number[];
-  /** True when the lead constraint had to be relaxed because no other
-   *  cluster had a pick left to promote — i.e. a genuinely monotopic
-   *  week, not a crowding failure. */
+  /** True when the lead cap could not be honoured because no other
+   *  cluster had a pick left to promote — a genuinely monotopic week
+   *  rather than a crowding failure. Worth logging: it's the signal that
+   *  the week itself was thin, not that the caps misfired. */
   relaxed: boolean;
 }
 
@@ -118,8 +127,8 @@ export function diversifyPicks(
     );
     if (idx === -1) {
       // No cluster has room: every remaining pick belongs to a narrative
-      // that already owns its share of the lead. Relax rather than ship
-      // a stunted conversation section — see the header note.
+      // that already owns its share of the lead. Nothing left to promote,
+      // so the constraint is unsatisfiable — record it and stop.
       relaxed = true;
       break;
     }
@@ -128,6 +137,12 @@ export function diversifyPicks(
     headPerCluster.set(key, (headPerCluster.get(key) ?? 0) + 1);
     head.push(p!);
   }
+  // Top up the head from what's left. This does NOT change the output
+  // order — head and remainder are concatenated below, so moving an item
+  // between them is invisible there. It exists so `head` is the true set
+  // of lead-section picks, which is what `demoted` is measured against;
+  // without it a pick that stayed in the lead would be reported as
+  // demoted out of it.
   if (relaxed) {
     while (head.length < slots && remainder.length > 0) {
       head.push(remainder.shift()!);

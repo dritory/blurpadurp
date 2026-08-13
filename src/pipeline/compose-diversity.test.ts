@@ -133,6 +133,37 @@ describe("diversifyPicks — relaxation", () => {
     ]);
   });
 
+  test("the lead cap is bounded by how many other picks exist", () => {
+    // Four picks from one cluster, two from another, five lead slots.
+    // Promotion runs out of material: the lead section ends up with
+    // three from c1 despite a cap of 2, because there is nothing else to
+    // put there. That is the documented ceiling of the mechanism, not a
+    // bug — CONVERSATION_TOP_N is structural and doesn't shrink.
+    const picks = [
+      pick(1, 101),
+      pick(2, 102),
+      pick(3, 201),
+      pick(4, 202),
+      pick(5, 103),
+      pick(6, 104),
+    ];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 99,
+      maxLeadPerCluster: 2,
+    });
+    expect(res.relaxed).toBe(true);
+    const head = res.picks.slice(0, CONVERSATION_TOP_N);
+    expect(head).toHaveLength(CONVERSATION_TOP_N);
+    expect(
+      head.filter((p) => byHundreds(p.lead_story_id) === "c1"),
+    ).toHaveLength(3);
+    // But c2 still got promoted ahead of c1's surplus, which is the part
+    // that does work: without it the lead would be four c1 picks.
+    expect(head.map((p) => p.lead_story_id)).toEqual([101, 102, 201, 202, 103]);
+    // Nothing is reported as demoted when nothing actually left the lead.
+    expect(res.demoted).toEqual([]);
+  });
+
   test("an unclustered pick is never treated as crowding", () => {
     // clusterOf returns null for stories whose theme has no centroid.
     // Two such picks must not be lumped together.
