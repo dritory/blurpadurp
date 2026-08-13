@@ -61,6 +61,7 @@ function input(stories: ComposerItem["stories"]): ComposerInput {
     shrug: [],
     synthesis_themes: [],
     theme_timelines: [],
+    recent_issues: [],
   };
 }
 

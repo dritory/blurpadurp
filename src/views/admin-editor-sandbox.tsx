@@ -23,6 +23,12 @@ export interface SandboxBucket {
   // Wikipedia entries are not in the pool itself — they ride the
   // theme system as a curation signal only.
   wikipediaCorroborated: boolean;
+  // Narrative cluster key. Buckets sharing one are arcs of the same
+  // running story — the crowding signal the pool cap acts on.
+  clusterKey: string | null;
+  // How many themes in this whole pool share that cluster. 1 means the
+  // badge would say nothing, so the view hides it.
+  clusterSize: number;
   stories: Array<{
     id: number;
     title: string;
@@ -215,6 +221,15 @@ const BucketCard: FC<{ b: SandboxBucket; below: boolean }> = ({ b, below }) => (
         )}
       </span>
       {b.category !== null ? <span class="cat">{b.category}</span> : null}
+      {b.clusterKey !== null && b.clusterSize > 1 ? (
+        <span
+          class="cat"
+          title={`One of ${b.clusterSize} themes in narrative cluster ${b.clusterKey} — arcs of the same running story, capped together in the pool`}
+          style="background:#fdf1e7;border-color:#e6c3a0;color:#8a4b12;"
+        >
+          ⧉ {b.clusterKey} ×{b.clusterSize}
+        </span>
+      ) : null}
       {b.wikipediaCorroborated ? (
         <span
           class="cat"

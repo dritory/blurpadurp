@@ -99,8 +99,56 @@ export const EditorInputSchema = z.object({
       // Default false so editor_input_jsonb persisted before v0.4
       // (without the field) still re-parses for replay.
       wikipedia_corroborated: z.boolean().default(false),
+      // Narrative cluster (editor v0.6). Themes sharing a key are arcs
+      // of one running story — the reader experiences "US–Iran
+      // escalation" and "Hormuz shipping" as the same news. Null when
+      // the theme has no centroid to measure. Defaulted so pre-v0.6
+      // editor_input_jsonb still re-parses for replay.
+      cluster_key: z.string().nullable().default(null),
+      // How many of the last few published issues already carried this
+      // theme, and what the most recent one said about it. The editor
+      // used to see only n_prior_publications — a count with no content,
+      // which cannot answer "have we already said this?".
+      recent_issue_count: z.number().default(0),
+      last_covered_date: z.string().nullable().default(null),
+      last_covered_summary: z.string().nullable().default(null),
     }),
   ),
+  // Multi-theme narrative clusters in this pool. Only clusters that
+  // actually group two or more themes appear; a cluster of one is just
+  // a theme and would be noise here.
+  narrative_clusters: z
+    .array(
+      z.object({
+        cluster_key: z.string(),
+        theme_ids: z.array(z.number()),
+        theme_names: z.array(z.string()),
+        n_stories: z.number(),
+      }),
+    )
+    .default([]),
+  // What the last few issues actually covered. Prior-issue memory was
+  // the "next likely signal" in the v0.5 notes: without it the editor
+  // re-picks the same running story week after week with no way to know
+  // it is repeating itself.
+  recent_coverage: z
+    .array(
+      z.object({
+        issue_id: z.number(),
+        published_at: z.string(), // YYYY-MM-DD
+        title: z.string().nullable(),
+        weeks_ago: z.number(),
+        items: z.array(
+          z.object({
+            theme_id: z.number().nullable(),
+            theme_name: z.string().nullable(),
+            section: z.string(),
+            summary: z.string(),
+          }),
+        ),
+      }),
+    )
+    .default([]),
 });
 export type EditorInput = z.infer<typeof EditorInputSchema>;
 

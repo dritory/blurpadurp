@@ -8,6 +8,7 @@ function row(p: {
   composite?: number;
   cat?: string | null;
   urls?: string[];
+  cluster?: string | null;
 }): PoolRowShape {
   return {
     story_id: p.id,
@@ -16,6 +17,7 @@ function row(p: {
     source_url: p.urls?.[0] ?? null,
     additional_source_urls: p.urls?.slice(1) ?? [],
     category_slug: p.cat ?? null,
+    cluster_key: p.cluster ?? null,
   };
 }
 
@@ -80,6 +82,33 @@ describe("selectEditorPool", () => {
     expect(res.included.some((b) => b.rows[0]!.row.category_slug === "science")).toBe(
       true,
     );
+  });
+
+  test("cluster fraction caps themes from one dominant narrative", () => {
+    // Four themes off one running story, each legitimately high
+    // composite, plus one unrelated theme ranked below all of them.
+    // Ranking alone admits all four and buries the fifth.
+    const rows = [
+      row({ id: 1, theme: 100, composite: 9, cluster: "c100" }),
+      row({ id: 2, theme: 200, composite: 8, cluster: "c100" }),
+      row({ id: 3, theme: 300, composite: 7, cluster: "c100" }),
+      row({ id: 4, theme: 400, composite: 6, cluster: "c100" }),
+      row({ id: 5, theme: 500, composite: 2, cluster: "c500" }),
+    ];
+    // cap = ceil(4 * 0.5) = 2 themes from cluster c100
+    const res = selectEditorPool(rows, 4, { maxClusterFraction: 0.5 });
+    expect(res.included.map((b) => b.themeId)).toEqual([100, 200, 500]);
+    expect(res.excluded.map((b) => b.themeId)).toEqual([300, 400]);
+  });
+
+  test("unclustered themes are never capped against each other", () => {
+    const rows = [
+      row({ id: 1, theme: 100, composite: 9 }),
+      row({ id: 2, theme: 200, composite: 8 }),
+      row({ id: 3, theme: 300, composite: 7 }),
+    ];
+    const res = selectEditorPool(rows, 10, { maxClusterFraction: 0.1 });
+    expect(res.included).toHaveLength(3);
   });
 
   test("story safety cap (soft) stops admitting once the pool reaches the cap", () => {

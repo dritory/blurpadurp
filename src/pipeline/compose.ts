@@ -15,6 +15,12 @@ import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { loadSystemPromptText, type PromptMode } from "../shared/prompts.ts";
 import { selectEditorPool } from "../shared/editor-pool.ts";
+import { loadThemeClusters } from "../shared/theme-cluster-store.ts";
+import type { ThemeCluster } from "../shared/theme-cluster.ts";
+import {
+  loadRecentCoverage,
+  type ThemeCoverage,
+} from "../shared/recent-coverage.ts";
 import { countTier1 } from "../shared/source-tiers.ts";
 import type {
   ComposerInput,
@@ -23,6 +29,7 @@ import type {
 } from "../shared/composer-schema.ts";
 import { normalizePick } from "../shared/editor-schema.ts";
 import type { EditorInput, EditorOutput } from "../shared/editor-schema.ts";
+import { diversifyPicks } from "./compose-diversity.ts";
 import { isLockHeld, withLock } from "../shared/pipeline-lock.ts";
 import { lintGloss } from "../shared/gloss-lint.ts";
 import { bumpGlossHits, loadGlossLists } from "../shared/gloss-store.ts";
@@ -106,6 +113,17 @@ export type ConfigMap = {
   "editor.pool_size": number;
   "editor.pool_max_themes": number;
   "editor.pool_max_category_fraction": number;
+  // Narrative clustering (see shared/theme-cluster.ts). The threshold is
+  // the cosine bar at which two themes count as one running story; the
+  // three caps are how much of the pool, the issue, and the lead section
+  // one such story may occupy.
+  "editor.cluster_threshold": number;
+  "editor.pool_max_cluster_fraction": number;
+  "compose.max_picks_per_cluster": number;
+  "compose.max_lead_per_cluster": number;
+  // How many prior published issues the editor and composer are shown,
+  // so neither re-tells the reader something they already read.
+  "compose.recent_coverage_issues": number;
   "compose.min_publish_gap_hours": number;
 };
 
@@ -263,7 +281,7 @@ export async function produceDraft(
   // grouped into the theme-first editor pool. Null = nothing to compose.
   const gate = await loadGatePool(run.cfg);
   if (gate === null) return null;
-  const { poolThemeMeta, cutoff } = gate;
+  const { poolThemeMeta, cutoff, clusterByTheme } = gate;
   let pool = gate.pool;
 
   // Step 1b (catch-up runs only): append a bounded set of older,
@@ -274,6 +292,13 @@ export async function produceDraft(
   if (retro !== undefined) {
     const retroRows = await loadRetroRows(retro);
     if (retroRows.length > 0) {
+      // Clustered against the fresh pool's map rather than re-clustered:
+      // the fresh pool's keys already drove selection, and recomputing
+      // now could rename a cluster the selection was made under. A retro
+      // item on a theme the fresh week doesn't touch gets no key and is
+      // treated as its own cluster, which for a bounded handful of
+      // catch-up items is the right conservative answer.
+      stampClusterKeys(retroRows, clusterByTheme);
       const already = new Set(pool.map((p) => Number(p.row.story_id)));
       const retroEntries: EditorPoolEntry[] = retroRows
         .filter((r) => !already.has(Number(r.story_id)))
@@ -304,11 +329,43 @@ export async function produceDraft(
     run.editor,
     pool,
     poolThemeMeta,
+    gate.clusters,
+    clusterByTheme,
+    run.cfg["compose.recent_coverage_issues"],
   );
-  const normalizedPicks = editorResult.picks
+  const rawPicks = editorResult.picks
     .map(normalizePick)
     .sort((a, b) => a.rank - b.rank);
   const byId = new Map(pool.map((p) => [Number(p.row.story_id), p.row]));
+
+  // Step 2b: diversity caps. The editor prompt has asked for topic
+  // balance since v0.1 and still shipped issues whose entire lead
+  // section was one narrative; this is the structural backstop, applied
+  // to the editor's output before partitioning. See compose-diversity.ts.
+  const diversity = diversifyPicks(
+    rawPicks,
+    (leadStoryId) => byId.get(leadStoryId)?.cluster_key ?? null,
+    {
+      maxPicksPerCluster: run.cfg["compose.max_picks_per_cluster"],
+      maxLeadPerCluster: run.cfg["compose.max_lead_per_cluster"],
+    },
+  );
+  const normalizedPicks = diversity.picks;
+  if (diversity.cuts.length > 0 || diversity.demoted.length > 0) {
+    console.log(
+      `[compose] diversity: cut ${diversity.cuts.length} over-cluster pick(s)` +
+        (diversity.cuts.length > 0
+          ? ` [${diversity.cuts.map((c) => `${c.lead_story_id}→${c.cluster_key}`).join(" ")}]`
+          : "") +
+        `, demoted ${diversity.demoted.length} out of the lead section` +
+        (diversity.demoted.length > 0 ? ` [${diversity.demoted.join(" ")}]` : ""),
+    );
+  }
+  if (diversity.relaxed) {
+    console.log(
+      "[compose] diversity: lead cap relaxed — every pick belongs to one narrative this week",
+    );
+  }
 
   const catchUpIds = new Set(
     pool.filter((p) => p.catchUp === true).map((p) => Number(p.row.story_id)),
@@ -324,7 +381,12 @@ export async function produceDraft(
 
   // Step 4: assemble the composer input (timelines, synthesis, shrug),
   // run the composer, and collect the published-set story ids.
-  const input = await buildComposerInput(sections, byId, cutoff);
+  const input = await buildComposerInput(
+    sections,
+    byId,
+    cutoff,
+    run.cfg["compose.recent_coverage_issues"],
+  );
 
   const arcCount = builtItems.filter((b) => b.item.kind === "arc").length;
   const deepArcs = input.theme_timelines.filter(
@@ -391,7 +453,11 @@ const POOL_COLUMNS = [
 
 // One row of the gate-pool query. The pool query and rowsForEditor share
 // an identical SELECT shape, so they share this type.
-type PoolRow = Awaited<ReturnType<typeof rowsForEditor>>[number];
+type PoolQueryRow = Awaited<ReturnType<typeof rowsForEditor>>[number];
+// Plus one derived column that isn't in the SELECT: the row's narrative
+// cluster, stamped by stampClusterKeys after the query. Optional so the
+// query result assigns straight to PoolRow[].
+type PoolRow = PoolQueryRow & { cluster_key?: string | null };
 type EditorPoolEntry = {
   row: PoolRow;
   tier1: number;
@@ -467,10 +533,12 @@ async function setupComposeRun(mode: PromptMode): Promise<ComposeRun> {
 async function loadGatePool(cfg: ConfigMap): Promise<{
   pool: EditorPoolEntry[];
   poolThemeMeta: Map<number, ThemeMeta>;
+  clusterByTheme: Map<number, string>;
+  clusters: Awaited<ReturnType<typeof loadThemeClusters>>["clusters"];
   cutoff: Date;
 } | null> {
   const cutoff = new Date(Date.now() - COMPOSE_STORY_MAX_AGE_MS);
-  const rows = await db
+  const rows: PoolRow[] = await db
     .selectFrom("story")
     .leftJoin("theme", "theme.id", "story.theme_id")
     .leftJoin("category", "category.id", "story.category_id")
@@ -501,12 +569,32 @@ async function loadGatePool(cfg: ConfigMap): Promise<{
   // built; downstream readers see inline jsonb either way.
   await hydrateRawOutput(rows);
 
+  // Narrative clustering runs BEFORE selection, because the cap it feeds
+  // is a selection cap: by the time the editor sees a pool with five
+  // themes off one story, the crowding is already baked in.
+  const clusterLoad = await loadThemeClusters(
+    rows
+      .map((r) => (r.theme_id !== null ? Number(r.theme_id) : null))
+      .filter((id): id is number => id !== null),
+    cfg["editor.cluster_threshold"],
+  );
+  stampClusterKeys(rows, clusterLoad.byTheme);
+  if (clusterLoad.multiThemeClusters.length > 0) {
+    console.log(
+      `[compose] narrative clusters (≥${cfg["editor.cluster_threshold"]} cosine): ` +
+        clusterLoad.multiThemeClusters
+          .map((c) => `${c.cluster_key}=[${c.theme_ids.join(",")}]`)
+          .join(" "),
+    );
+  }
+
   // Theme-first pool selection (see src/shared/editor-pool.ts). Picks
   // top themes by max-composite + tier1, includes every gate-passing
   // member of each selected theme, fills until pool_size. Shared with
   // /admin/explore/editor sandbox so tuning is visible in both places.
   const poolResult = selectEditorPool(rows, cfg["editor.pool_max_themes"], {
     maxCategoryFraction: cfg["editor.pool_max_category_fraction"],
+    maxClusterFraction: cfg["editor.pool_max_cluster_fraction"],
     maxStorySafetyCap: cfg["editor.pool_size"] * 4, // generous; primary cap is themes
   });
   const pool = poolResult.pool;
@@ -530,7 +618,27 @@ async function loadGatePool(cfg: ConfigMap): Promise<{
   ];
   const poolThemeMeta = await loadThemeMeta(poolThemeIds);
 
-  return { pool, poolThemeMeta, cutoff };
+  return {
+    pool,
+    poolThemeMeta,
+    clusterByTheme: clusterLoad.byTheme,
+    clusters: clusterLoad.clusters,
+    cutoff,
+  };
+}
+
+// Stamp the narrative cluster onto pool rows in place. Rows come
+// straight out of the query, so this is the one place the derived
+// column is attached — do it here and every consumer (pool selection,
+// editor digest, post-editor caps) reads the same value.
+function stampClusterKeys(
+  rows: PoolRow[],
+  byTheme: Map<number, string>,
+): void {
+  for (const r of rows) {
+    r.cluster_key =
+      r.theme_id !== null ? byTheme.get(Number(r.theme_id)) ?? null : null;
+  }
 }
 
 // Catch-up pool: unpublished stories BETWEEN the retro window and the
@@ -706,6 +814,7 @@ async function buildComposerInput(
   sections: ComposeSections,
   byId: Map<number, PoolRow>,
   cutoff: Date,
+  recentIssues: number,
 ): Promise<ComposerInput> {
   const { conversation, worth_knowing, worth_watching } = sections;
 
@@ -812,6 +921,24 @@ async function buildComposerInput(
         })
       : [];
 
+  const coverage = await loadRecentCoverage(recentIssues);
+  const recent_issues: ComposerInput["recent_issues"] = coverage.issues.map(
+    (issue) => ({
+      published_at: issue.published_at,
+      title: issue.title,
+      weeks_ago: issue.weeks_ago,
+      led_with: [
+        ...new Set(
+          issue.items
+            .filter((i) => i.section === "conversation")
+            .map((i) => i.theme_name)
+            .filter((n): n is string => n !== null),
+        ),
+      ],
+      already_told: issue.items.map((i) => i.summary),
+    }),
+  );
+
   return {
     week_of: new Date().toISOString().slice(0, 10),
     conversation,
@@ -820,6 +947,7 @@ async function buildComposerInput(
     shrug,
     theme_timelines,
     synthesis_themes,
+    recent_issues,
   };
 }
 
@@ -842,9 +970,13 @@ async function curateViaEditor(
   editor: ReturnType<typeof makeEditor>,
   pool: EditorPoolEntry[],
   themeMeta: Map<number, ThemeMeta>,
+  clusters: ThemeCluster[],
+  clusterByTheme: Map<number, string>,
+  recentIssues: number,
 ): Promise<{ output: EditorOutput; input: EditorInput }> {
   const storyIds = pool.map((p) => Number(p.row.story_id));
   const factorsByStory = await loadFactorsByStory(storyIds);
+  const coverage = await loadRecentCoverage(recentIssues);
 
   const editorStories: EditorInput["stories"] = pool.map((p) => {
     const out = p.row.raw_output as ScorerOutput | null;
@@ -886,11 +1018,52 @@ async function curateViaEditor(
     };
   });
 
+  // Only clusters with a theme actually in the pool are worth rendering:
+  // the cluster load covers every theme the gate query returned, and the
+  // pool is a subset of that.
+  const poolThemeIds = new Set(
+    editorStories
+      .map((s) => s.theme_id)
+      .filter((id): id is number => id !== null),
+  );
+  const storiesPerTheme = new Map<number, number>();
+  for (const s of editorStories) {
+    if (s.theme_id === null) continue;
+    storiesPerTheme.set(s.theme_id, (storiesPerTheme.get(s.theme_id) ?? 0) + 1);
+  }
+  const themeNames = new Map(
+    editorStories
+      .filter((s) => s.theme_id !== null && s.theme_name !== null)
+      .map((s) => [s.theme_id!, s.theme_name!] as const),
+  );
+  const narrative_clusters: EditorInput["narrative_clusters"] = clusters
+    .map((c) => {
+      const inPool = c.theme_ids.filter((tid) => poolThemeIds.has(tid));
+      return {
+        cluster_key: c.cluster_key,
+        theme_ids: inPool,
+        theme_names: inPool.map((tid) => themeNames.get(tid) ?? `theme #${tid}`),
+        n_stories: inPool.reduce(
+          (sum, tid) => sum + (storiesPerTheme.get(tid) ?? 0),
+          0,
+        ),
+      };
+    })
+    .filter((c) => c.theme_ids.length > 1);
+
   const input: EditorInput = {
     as_of_date: new Date().toISOString().slice(0, 10),
     pool_composition: buildPoolComposition(editorStories),
     stories: editorStories,
-    themes: buildThemesDigest(pool, editorStories, themeMeta),
+    themes: buildThemesDigest(
+      pool,
+      editorStories,
+      themeMeta,
+      clusterByTheme,
+      coverage.byTheme,
+    ),
+    narrative_clusters,
+    recent_coverage: coverage.issues,
   };
 
   const result = await editor.run(input);
@@ -956,6 +1129,8 @@ function buildThemesDigest(
   pool: EditorPoolEntry[],
   stories: EditorInput["stories"],
   themeMeta: Map<number, ThemeMeta>,
+  clusterByTheme: Map<number, string>,
+  coverageByTheme: Map<number, ThemeCoverage>,
 ): EditorInput["themes"] {
   const byId = new Map(stories.map((s) => [s.story_id, s] as const));
   const tier1ById = new Map(
@@ -1009,6 +1184,7 @@ function buildThemesDigest(
       tier1_sources_total += tier1ById.get(sid) ?? 0;
     }
     const meta = themeMeta.get(theme_id);
+    const coverage = coverageByTheme.get(theme_id);
     digest.push({
       theme_id,
       theme_name: g.theme_name,
@@ -1025,6 +1201,10 @@ function buildThemesDigest(
       trajectory: meta?.trajectory ?? "new",
       is_long_running: meta?.is_long_running ?? false,
       wikipedia_corroborated: meta?.wikipedia_corroborated ?? false,
+      cluster_key: clusterByTheme.get(theme_id) ?? null,
+      recent_issue_count: coverage?.issue_count ?? 0,
+      last_covered_date: coverage?.last_covered_date ?? null,
+      last_covered_summary: coverage?.last_covered_summary ?? null,
     });
   }
 
@@ -1469,5 +1649,22 @@ async function loadConfig(): Promise<ConfigMap> {
   map["editor.pool_max_category_fraction"] ??= 1.0;
   // Theme-count primary cap, added in migration 034. Default 20.
   map["editor.pool_max_themes"] ??= 20;
+  // Narrative clustering, added in migration 075. Defaults mirror the
+  // migration so a repo that hasn't run it still composes — with the
+  // caps active, since shipping the un-capped behaviour by default is
+  // what the migration exists to stop.
+  //
+  // 0.72 sits deliberately between the story→theme attach bar (0.70)
+  // and the theme→theme merge bar (0.85): tight enough that the pair is
+  // one narrative, loose enough that we are not merely re-deriving the
+  // merges reattach.ts already made.
+  map["editor.cluster_threshold"] ??= 0.72;
+  map["editor.pool_max_cluster_fraction"] ??= 0.25;
+  map["compose.max_picks_per_cluster"] ??= 4;
+  map["compose.max_lead_per_cluster"] ??= 2;
+  // Prior-issue memory, added in migration 075. Three issues is roughly
+  // a month of a weekly — long enough to catch "we've led with this
+  // three weeks running", short enough that the digest stays small.
+  map["compose.recent_coverage_issues"] ??= 3;
   return map as ConfigMap;
 }

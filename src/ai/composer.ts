@@ -205,6 +205,34 @@ export function renderUserMessage(input: ComposerInput): string {
       lines.push("");
     }
   }
+
+  // Issue-level memory. theme_timelines above gives per-theme history,
+  // but not "the reader got a full paragraph on this two weeks ago" —
+  // which is what stops the brief re-introducing a running thread as
+  // though it were new, and re-using last week's opener shape.
+  if (input.recent_issues.length > 0) {
+    lines.push(
+      "# recent_issues (what the reader already received, newest first. Do NOT re-explain background these issues already gave, do NOT recycle their opener framing, and if you reference one, reference it as a callback — 'the shipping ban we covered a fortnight ago' — never as news.)",
+      "",
+    );
+    for (const r of input.recent_issues) {
+      const when =
+        r.weeks_ago === 0
+          ? "this week"
+          : r.weeks_ago === 1
+            ? "1 week ago"
+            : `${r.weeks_ago} weeks ago`;
+      lines.push(`  - ${r.published_at} (${when}) "${r.title ?? "untitled"}"`);
+      if (r.led_with.length > 0) {
+        lines.push(`    led with: ${r.led_with.join(" | ")}`);
+      }
+      for (const told of r.already_told) {
+        lines.push(`      already told: ${told}`);
+      }
+      lines.push("");
+    }
+  }
+
   lines.push("Return your JSON object now.");
   return lines.join("\n");
 }

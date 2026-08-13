@@ -59,6 +59,7 @@ function input(partial: Partial<ComposerInput>): ComposerInput {
     shrug: [],
     synthesis_themes: [],
     theme_timelines: [],
+    recent_issues: [],
     ...partial,
   };
 }

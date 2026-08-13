@@ -115,6 +115,7 @@ import type {
   SandboxBucket,
 } from "../views/admin-editor-sandbox.tsx";
 import { selectEditorPool } from "../shared/editor-pool.ts";
+import { loadThemeClusters } from "../shared/theme-cluster-store.ts";
 import type { ArchiveEntry } from "../views/archive.tsx";
 import type {
   DraftPreviewData,
@@ -2110,17 +2111,17 @@ export async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .where("key", "in", [
       "editor.pool_max_themes",
       "editor.pool_max_category_fraction",
+      "editor.pool_max_cluster_fraction",
+      "editor.cluster_threshold",
     ])
     .execute();
   const cfgMap = new Map(cfgRows.map((r) => [r.key, r.value]));
-  const maxThemes =
-    typeof cfgMap.get("editor.pool_max_themes") === "number"
-      ? (cfgMap.get("editor.pool_max_themes") as number)
-      : 20;
-  const maxCategoryFraction =
-    typeof cfgMap.get("editor.pool_max_category_fraction") === "number"
-      ? (cfgMap.get("editor.pool_max_category_fraction") as number)
-      : 1.0;
+  const num = (key: string, fallback: number): number =>
+    typeof cfgMap.get(key) === "number" ? (cfgMap.get(key) as number) : fallback;
+  const maxThemes = num("editor.pool_max_themes", 20);
+  const maxCategoryFraction = num("editor.pool_max_category_fraction", 1.0);
+  const maxClusterFraction = num("editor.pool_max_cluster_fraction", 0.25);
+  const clusterThreshold = num("editor.cluster_threshold", 0.72);
 
   const rows = await db
     .selectFrom("story")
@@ -2145,7 +2146,31 @@ export async function loadEditorSandboxData(): Promise<EditorSandboxData> {
     .orderBy("story.composite", "desc")
     .execute();
 
-  const result = selectEditorPool(rows, maxThemes, { maxCategoryFraction });
+  // Narrative clusters, exactly as compose.ts computes them — the whole
+  // point of this sandbox is that it predicts the pipeline, so the
+  // cluster cap has to be applied here too or the pool it shows is one
+  // the pipeline would never build.
+  const clusterLoad = await loadThemeClusters(
+    rows
+      .map((r) => (r.theme_id !== null ? Number(r.theme_id) : null))
+      .filter((id): id is number => id !== null),
+    clusterThreshold,
+  );
+  const clusteredRows = rows.map((r) => ({
+    ...r,
+    cluster_key:
+      r.theme_id !== null
+        ? clusterLoad.byTheme.get(Number(r.theme_id)) ?? null
+        : null,
+  }));
+
+  const result = selectEditorPool(clusteredRows, maxThemes, {
+    maxCategoryFraction,
+    maxClusterFraction,
+  });
+  const clusterSizes = new Map(
+    clusterLoad.clusters.map((c) => [c.cluster_key, c.theme_ids.length]),
+  );
 
   // Wikipedia corroboration set: themes that have a Wikipedia member
   // anywhere in the database (Wikipedia stories were filtered out of
@@ -2207,6 +2232,9 @@ export async function loadEditorSandboxData(): Promise<EditorSandboxData> {
       tier1Total: b.tier1Total,
       wikipediaCorroborated:
         b.themeId !== null && wikipediaCorroborated.has(b.themeId),
+      clusterKey: b.clusterKey,
+      clusterSize:
+        b.clusterKey !== null ? (clusterSizes.get(b.clusterKey) ?? 1) : 1,
       stories: b.rows.map((e) => ({
         id: Number(e.row.story_id),
         title: e.row.title,
