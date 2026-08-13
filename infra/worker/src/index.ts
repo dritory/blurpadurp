@@ -3,7 +3,8 @@
 // Blurpadurp edge Worker. Sits on the zone route (blurpadurp.com/*) and
 // splits traffic:
 //
-//   - Static reader pages (/, /archive, /issue/<n>, /feed.xml,
+//   - Static reader pages (/, /archive, /issue/<n>, /about, /privacy,
+//     each also under the locale prefix /no/…, plus /feed.xml,
 //     /sitemap.xml, /robots.txt) AND their sub-resources (/assets/* —
 //     the brand mark, wave.js, the SVG favicon) → served straight from
 //     the R2 bucket binding `STATIC`, which the publish pipeline fills
@@ -44,22 +45,32 @@ interface StaticMatch {
   ttl: number;
 }
 
+const HTML = "text/html; charset=utf-8";
+
+// Locale URL prefixes, mirroring src/shared/i18n.ts LOCALE_PREFIX. The
+// default locale is unprefixed and keeps the bare R2 keys; every other
+// locale is served from a prefix directory of the same name, so /no/…
+// reads no/….html. Keep this list and the export's localeKey() in sync.
+const LOCALE_PREFIXES = ["/no"];
+
+// Strip a known locale prefix, returning the remaining app path and the
+// R2 key directory for it. An unknown prefix is not a locale.
+function splitLocale(pathname: string): { path: string; dir: string } {
+  for (const prefix of LOCALE_PREFIXES) {
+    if (pathname === prefix) return { path: "/", dir: `${prefix.slice(1)}/` };
+    if (pathname.startsWith(`${prefix}/`)) {
+      return { path: pathname.slice(prefix.length), dir: `${prefix.slice(1)}/` };
+    }
+  }
+  return { path: pathname, dir: "" };
+}
+
 // Map a request path for a known reader page to its R2 key. Returns null
 // for anything that isn't one of the pre-rendered pages.
 function pageTarget(pathname: string): StaticMatch | null {
+  // Locale-agnostic surfaces first: one feed, one sitemap, one
+  // robots.txt for the whole site, so they must not pick up a prefix.
   switch (pathname) {
-    case "/":
-      return { key: "home.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
-    case "/archive":
-      return { key: "archive.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
-    // /about and /privacy are linked from the footer of every reader
-    // page — without these the first click after a cached visit wakes
-    // Fly. They're effectively static, so the publish pipeline renders
-    // them into R2 alongside the rolling pages.
-    case "/about":
-      return { key: "about.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
-    case "/privacy":
-      return { key: "privacy.html", contentType: "text/html; charset=utf-8", ttl: TTL_ROLLING };
     case "/feed.xml":
       return { key: "feed.xml", contentType: "application/atom+xml; charset=utf-8", ttl: TTL_ROLLING };
     case "/sitemap.xml":
@@ -73,9 +84,25 @@ function pageTarget(pathname: string): StaticMatch | null {
     case "/favicon.ico":
       return { key: "assets/blurp.svg", contentType: "image/svg+xml", ttl: TTL_ASSET };
   }
-  const m = pathname.match(/^\/issue\/(\d+)$/);
+
+  const { path, dir } = splitLocale(pathname);
+  switch (path) {
+    case "/":
+      return { key: `${dir}home.html`, contentType: HTML, ttl: TTL_ROLLING };
+    case "/archive":
+      return { key: `${dir}archive.html`, contentType: HTML, ttl: TTL_ROLLING };
+    // /about and /privacy are linked from the footer of every reader
+    // page — without these the first click after a cached visit wakes
+    // Fly. They're effectively static, so the publish pipeline renders
+    // them into R2 alongside the rolling pages.
+    case "/about":
+      return { key: `${dir}about.html`, contentType: HTML, ttl: TTL_ROLLING };
+    case "/privacy":
+      return { key: `${dir}privacy.html`, contentType: HTML, ttl: TTL_ROLLING };
+  }
+  const m = path.match(/^\/issue\/(\d+)$/);
   if (m) {
-    return { key: `issues/${m[1]}.html`, contentType: "text/html; charset=utf-8", ttl: TTL_IMMUTABLE };
+    return { key: `${dir}issues/${m[1]}.html`, contentType: HTML, ttl: TTL_IMMUTABLE };
   }
   return null;
 }

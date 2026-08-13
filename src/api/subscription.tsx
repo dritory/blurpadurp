@@ -24,8 +24,18 @@ import {
   loadManageData,
   parseManageFlash,
   isValidTimezone,
+  subscriberLocale,
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
+import {
+  DEFAULT_LOCALE,
+  LOCALES,
+  LOCALE_PREFIX,
+  type Locale,
+  fill,
+  isLocale,
+  t,
+} from "../shared/i18n.ts";
 
 // 5 attempts burst, refill at 1 per 30s (= 120/hour sustained). Plenty
 // for a human; noisy for a script.
@@ -60,6 +70,18 @@ const SubscribeSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
 });
 
+// The language a signed-link page renders in comes from the subscriber's
+// row, not from the URL — by the time someone clicks a link in their
+// inbox there is no locale prefix left to read.
+async function localeForSubscription(id: number): Promise<Locale> {
+  const row = await db
+    .selectFrom("email_subscription")
+    .select("locale")
+    .where("id", "=", id)
+    .executeTakeFirst();
+  return subscriberLocale(row?.locale);
+}
+
 // Signed-token magic links. No login — the token IS the authorization.
 // Scaffolded ahead of dispatch: once dispatch lands, the transactional
 // emails will link here. Until then, links can be minted by hand via
@@ -68,8 +90,16 @@ const SubscribeSchema = z.object({
 app.get("/confirm/:token", async (c) => {
   const res = verifyToken(c.req.param("token"));
   if (!res.ok || res.payload.kind !== "confirm-email") {
-    return c.html(<TokenResultPage title="Link invalid" body="That link is invalid or expired. Subscribe again from the homepage." error />, 400);
+    // No subscription id to read a language off, so an invalid link
+    // answers in the default locale. Nothing else is available.
+    const d = t(DEFAULT_LOCALE).token;
+    return c.html(
+      <TokenResultPage title={d.invalidTitle} body={d.invalidConfirm} error />,
+      400,
+    );
   }
+  const locale = await localeForSubscription(res.payload.subscriptionId);
+  const s = t(locale).token;
   const row = await db
     .updateTable("email_subscription")
     .set({ confirmed_at: new Date() })
@@ -78,23 +108,37 @@ app.get("/confirm/:token", async (c) => {
     .returning("email")
     .executeTakeFirst();
   const msg = row
-    ? `Confirmed — ${row.email}. You'll hear from Blurp when there's something worth reading.`
-    : "Already confirmed. Nothing to do.";
-  return c.html(<TokenResultPage title="Confirmed" body={msg} />);
+    ? fill(s.confirmedBody, { email: row.email })
+    : s.alreadyConfirmed;
+  return c.html(
+    <TokenResultPage title={s.confirmedTitle} body={msg} locale={locale} />,
+  );
 });
 
 app.get("/unsubscribe/:token", async (c) => {
   const res = verifyToken(c.req.param("token"));
   if (!res.ok || res.payload.kind !== "unsubscribe-email") {
-    return c.html(<TokenResultPage title="Link invalid" body="That link is invalid or expired." error />, 400);
+    const d = t(DEFAULT_LOCALE).token;
+    return c.html(
+      <TokenResultPage title={d.invalidTitle} body={d.invalidGeneric} error />,
+      400,
+    );
   }
+  const locale = await localeForSubscription(res.payload.subscriptionId);
+  const s = t(locale).token;
   await db
     .updateTable("email_subscription")
     .set({ unsubscribed_at: new Date() })
     .where("id", "=", res.payload.subscriptionId)
     .where("unsubscribed_at", "is", null)
     .execute();
-  return c.html(<TokenResultPage title="Unsubscribed" body="Unsubscribed. No more issues will be sent to this address." />);
+  return c.html(
+    <TokenResultPage
+      title={s.unsubscribedTitle}
+      body={s.unsubscribedBody}
+      locale={locale}
+    />,
+  );
 });
 
 // RFC 8058 one-click unsubscribe. Mail clients POST here when the user
@@ -117,19 +161,17 @@ app.post("/unsubscribe/:token", async (c) => {
 app.get("/manage/:token", async (c) => {
   const v = verifyToken(c.req.param("token"));
   if (!v.ok || v.payload.kind !== "manage-email") {
+    const d = t(DEFAULT_LOCALE).token;
     return c.html(
-      <TokenResultPage
-        title="Link invalid"
-        body="That preferences link is invalid or expired. The next issue you receive will have a fresh one in the footer."
-        error
-      />,
+      <TokenResultPage title={d.invalidTitle} body={d.invalidManage} error />,
       400,
     );
   }
+  const locale = await localeForSubscription(v.payload.subscriptionId);
   const data = await loadManageData(
     v.payload.subscriptionId,
     c.req.param("token"),
-    parseManageFlash(c.req.query("saved"), c.req.query("error")),
+    parseManageFlash(c.req.query("saved"), c.req.query("error"), locale),
   );
   if (data === null) return c.notFound();
   return c.html(<ManagePage data={data} />);
@@ -138,12 +180,9 @@ app.get("/manage/:token", async (c) => {
 app.post("/manage/:token", async (c) => {
   const v = verifyToken(c.req.param("token"));
   if (!v.ok || v.payload.kind !== "manage-email") {
+    const d = t(DEFAULT_LOCALE).token;
     return c.html(
-      <TokenResultPage
-        title="Link invalid"
-        body="That preferences link is invalid or expired."
-        error
-      />,
+      <TokenResultPage title={d.invalidTitle} body={d.invalidGeneric} error />,
       400,
     );
   }
@@ -152,6 +191,8 @@ app.post("/manage/:token", async (c) => {
 
   // Unsubscribe shortcut.
   if (body.unsubscribe === "1") {
+    const locale = await localeForSubscription(v.payload.subscriptionId);
+    const s = t(locale).token;
     await db
       .updateTable("email_subscription")
       .set({ unsubscribed_at: new Date() })
@@ -160,8 +201,9 @@ app.post("/manage/:token", async (c) => {
       .execute();
     return c.html(
       <TokenResultPage
-        title="Unsubscribed"
-        body="Unsubscribed. No more issues will be sent to this address."
+        title={s.unsubscribedTitle}
+        body={s.unsubscribedBody}
+        locale={locale}
       />,
     );
   }
@@ -210,48 +252,59 @@ app.post("/manage/:token", async (c) => {
   return c.redirect(`/manage/${token}?saved=1`, 303);
 });
 
-app.post("/subscribe", async (c) => {
+// Registered under every locale prefix so the redirect back — and the
+// flash message on it — stays in the language the reader is reading.
+for (const routeLocale of LOCALES) {
+const subscribePath = `${LOCALE_PREFIX[routeLocale]}/subscribe`;
+app.post(subscribePath, async (c) => {
   const ip = clientIp(c.req.raw.headers, null);
   if (!subscribeLimiter.take(ip)) {
-    return c.redirect("/subscribe?error=rate_limited", 303);
+    return c.redirect(`${subscribePath}?error=rate_limited`, 303);
   }
   const body = await c.req.parseBody();
   // Honeypot: bots fill every field; humans leave this hidden one empty.
   // Silently redirect as if it succeeded — no signal to the bot.
   if (typeof body.company === "string" && body.company.length > 0) {
-    return c.redirect("/subscribe?subscribed=1", 303);
+    return c.redirect(`${subscribePath}?subscribed=1`, 303);
   }
   const parsed = SubscribeSchema.safeParse({ email: body.email });
   if (!parsed.success) {
-    return c.redirect("/subscribe?error=invalid_email", 303);
+    return c.redirect(`${subscribePath}?error=invalid_email`, 303);
   }
   const email = parsed.data.email;
+  // The form's hidden locale field, with the route's own locale as the
+  // fallback. Validated against the known set rather than trusted — it
+  // is posted data, and it lands in a CHECK-constrained column.
+  const locale: Locale = isLocale(body.locale) ? body.locale : routeLocale;
 
   // Upsert and get the row id back. ON CONFLICT DO NOTHING returns no
   // row when a conflict happens, so we follow with a SELECT for the
   // already-existing case.
   let row = await db
     .insertInto("email_subscription")
-    .values({ email })
+    .values({ email, locale })
     .onConflict((oc) => oc.column("email").doNothing())
-    .returning(["id", "confirmed_at", "last_confirmation_sent_at"])
+    .returning(["id", "confirmed_at", "last_confirmation_sent_at", "locale"])
     .executeTakeFirst();
   if (row === undefined) {
     row = await db
       .selectFrom("email_subscription")
       .where("email", "=", email)
-      .select(["id", "confirmed_at", "last_confirmation_sent_at"])
+      .select(["id", "confirmed_at", "last_confirmation_sent_at", "locale"])
       .executeTakeFirst();
   }
   if (row === undefined) {
     // Shouldn't happen — upsert failed and subsequent lookup also
     // empty. Treat as a validation failure rather than leak a 500.
-    return c.redirect("/subscribe?error=invalid_email", 303);
+    return c.redirect(`${subscribePath}?error=invalid_email`, 303);
   }
 
   if (row.confirmed_at !== null) {
     // Already confirmed — don't spam them with another confirmation.
-    return c.redirect("/subscribe?subscribed=1&already=1", 303);
+    // Their stored language is left alone: re-submitting the form is
+    // not a request to change it, and a confirmed subscriber changing
+    // language has the preferences page for that.
+    return c.redirect(`${subscribePath}?subscribed=1&already=1`, 303);
   }
 
   // Per-recipient cooldown (mig 061). Re-submitting an unconfirmed address
@@ -260,7 +313,7 @@ app.post("/subscribe", async (c) => {
   // subscribed=1 redirect — the response must never reveal whether the
   // address exists or was just throttled.
   if (withinCooldown(row.last_confirmation_sent_at, CONFIRMATION_COOLDOWN_MS)) {
-    return c.redirect("/subscribe?subscribed=1", 303);
+    return c.redirect(`${subscribePath}?subscribed=1`, 303);
   }
 
   // Global outbound-confirmation cap. Bounds blast radius from distributed
@@ -286,7 +339,7 @@ app.post("/subscribe", async (c) => {
       dedupeKey: "confirmation-send-cap",
       cooldownMs: 60 * 60_000,
     });
-    return c.redirect("/subscribe?subscribed=1", 303);
+    return c.redirect(`${subscribePath}?subscribed=1`, 303);
   }
 
   // Mint a signed /confirm/:token magic link and send it. Failure to
@@ -298,9 +351,12 @@ app.post("/subscribe", async (c) => {
     subscriptionId: Number(row.id),
   });
   const confirmUrl = `${PUBLIC_URL}/confirm/${token}`;
+  // The stored locale, not the route's — for an existing unconfirmed
+  // row that is the language they originally signed up in.
   const mail = renderConfirmationEmail({
     brandUrl: PUBLIC_URL,
     confirmUrl,
+    locale: subscriberLocale(row.locale),
   });
   // Stamp the send time before awaiting the network call so concurrent
   // resubmits of the same address can't slip past the cooldown. We stamp
@@ -322,8 +378,9 @@ app.post("/subscribe", async (c) => {
       `[subscribe] confirmation send failed for ${email}: ${res.error}`,
     );
   }
-  return c.redirect("/subscribe?subscribed=1", 303);
+  return c.redirect(`${subscribePath}?subscribed=1`, 303);
 });
+}
 
 // Resend webhook endpoint. Register in the Resend dashboard as
 // https://<host>/webhooks/resend with event types email.bounced,

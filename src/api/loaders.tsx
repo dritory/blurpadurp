@@ -116,6 +116,7 @@ import type {
 } from "../views/admin-editor-sandbox.tsx";
 import { selectEditorPool } from "../shared/editor-pool.ts";
 import { loadThemeClusters } from "../shared/theme-cluster-store.ts";
+import { DEFAULT_LOCALE, isLocale, type Locale, t } from "../shared/i18n.ts";
 import type { ArchiveEntry } from "../views/archive.tsx";
 import type {
   DraftPreviewData,
@@ -2683,6 +2684,7 @@ export async function loadManageData(
       "timezone",
       "urgent_override",
       "category_mutes",
+      "locale",
     ])
     .where("id", "=", subscriptionId)
     .executeTakeFirst();
@@ -2701,23 +2703,25 @@ export async function loadManageData(
     categoryMutes: sub.category_mutes,
     categories: cats as ManageCategory[],
     flash,
+    locale: subscriberLocale(sub.locale),
   };
+}
+
+/** The subscriber's language, defaulting anything unrecognised (or a
+ *  row written before mig 076) to English rather than failing. */
+export function subscriberLocale(value: string | null | undefined): Locale {
+  return isLocale(value) ? value : DEFAULT_LOCALE;
 }
 
 export function parseManageFlash(
   saved: string | undefined,
   error: string | undefined,
+  locale: Locale = DEFAULT_LOCALE,
 ): ManageData["flash"] {
-  if (saved) return { kind: "ok", msg: "Preferences saved." };
-  if (error === "bad_time") {
-    return { kind: "error", msg: "Delivery time must be in HH:MM format." };
-  }
-  if (error === "bad_tz") {
-    return {
-      kind: "error",
-      msg: "That timezone isn't one we recognize. Use an IANA name like Europe/Oslo.",
-    };
-  }
+  const m = t(locale).manage;
+  if (saved) return { kind: "ok", msg: m.savedFlash };
+  if (error === "bad_time") return { kind: "error", msg: m.badTimeFlash };
+  if (error === "bad_tz") return { kind: "error", msg: m.badTzFlash };
   return null;
 }
 
@@ -2808,27 +2812,20 @@ export function parseFlash(
   subscribed: string | undefined,
   error: string | undefined,
   already?: string | undefined,
+  locale: Locale = DEFAULT_LOCALE,
 ): Flash {
+  const f = t(locale).flash;
   if (subscribed && already) {
-    return {
-      kind: "ok",
-      msg: "Already confirmed. You'll hear from Blurp when there's something worth reading.",
-    };
+    return { kind: "ok", msg: f.alreadyConfirmed };
   }
   if (subscribed) {
-    return {
-      kind: "ok",
-      msg: "Check your inbox for a confirmation link. You're not on the list until you click it.",
-    };
+    return { kind: "ok", msg: f.checkInbox };
   }
   if (error === "invalid_email") {
-    return { kind: "error", msg: "That email didn't parse. Try again." };
+    return { kind: "error", msg: f.invalidEmail };
   }
   if (error === "rate_limited") {
-    return {
-      kind: "error",
-      msg: "Too many attempts. Give it a minute and try again.",
-    };
+    return { kind: "error", msg: f.rateLimited };
   }
   return null;
 }

@@ -258,6 +258,20 @@ See `docs/tuning.md`. Short version:
 - **`BLURPADURP_BLOCK_CRAWLERS=1`** flips robots.txt to Disallow-all
   — for stage-2 hidden deploys.
 
+## Locales
+
+The site chrome is English (unprefixed) + Norwegian bokmål (`/no`).
+**The brief body is not translated** — it's composer output, and every
+Norwegian page that can show one says so rather than letting the reader
+find out. Strings live in `src/shared/i18n.ts`, one typed object per
+locale, so a missing key is a compile error. Three things to know before
+touching it: locale is never negotiated from `Accept-Language` (reader
+pages sit behind an edge cache keyed on path alone, so varying by header
+hands the wrong language to whoever asks second); the R2 key map has to
+be changed in `static-export.tsx` **and** `infra/worker/src/index.ts`;
+and a subscriber's language lives on their row (mig 076) because a link
+clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
+
 ## When in doubt
 
 - Reads can be served entirely from the edge: a Cloudflare Worker
@@ -304,6 +318,7 @@ See `docs/tuning.md`. Short version:
 - Dispatch design + live behavior: `docs/dispatch.md`
 - Storage tiering + cold-storage plan: `docs/storage.md`
 - Scaling reads (edge Worker + static export to R2): `docs/scaling.md`
+- Locales (site chrome EN + NB; the brief is NOT translated): `docs/i18n.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`

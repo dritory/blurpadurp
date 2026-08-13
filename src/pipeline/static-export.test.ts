@@ -45,20 +45,46 @@ describe("renderStaticSurface", () => {
     );
     const keys = new Set(objs.map((o) => o.key));
     for (const k of [
+      // Locale-agnostic: exactly one of each, at the bare key.
+      "feed.xml",
+      "sitemap.xml",
+      "robots.txt",
+      // Default locale keeps the bare keys, so nothing at the edge moved.
       "home.html",
       "archive.html",
       "about.html",
       "privacy.html",
-      "feed.xml",
-      "sitemap.xml",
-      "robots.txt",
       "issues/1.html",
       "issues/2.html",
+      // Norwegian is namespaced under its URL prefix. These MUST match
+      // the Worker's pageTarget() mapping in infra/worker/src/index.ts.
+      "no/home.html",
+      "no/archive.html",
+      "no/about.html",
+      "no/privacy.html",
+      "no/issues/1.html",
+      "no/issues/2.html",
     ]) {
       expect(keys.has(k)).toBe(true);
     }
-    // No stray keys beyond the rolling 7 + one per issue.
-    expect(objs.length).toBe(9);
+    // 3 locale-agnostic + (4 pages + 2 issues) per locale × 2 locales.
+    expect(objs.length).toBe(15);
+    // Every key is distinct — a collision would mean one locale
+    // silently overwriting the other in R2.
+    expect(keys.size).toBe(objs.length);
+  });
+
+  test("a locale's page is in its own language, not the default", async () => {
+    const objs = byKey(await renderStaticSurface([issue(2, new Date())], 8));
+    expect(objs.get("home.html")).toContain('lang="en"');
+    expect(objs.get("no/home.html")).toContain('lang="nb"');
+    // Nav is translated…
+    expect(objs.get("no/archive.html")).toContain("Arkiv");
+    // …and links stay inside the locale rather than dumping the reader
+    // back onto the English site.
+    expect(objs.get("no/archive.html")).toContain('href="/no/issue/2"');
+    // …but the brief body is the composer's English prose either way.
+    expect(objs.get("no/issues/2.html")).toContain(`${UNIQUE}-2`);
   });
 
   test("fresh latest issue renders into home + its permalink + feed", async () => {
@@ -83,8 +109,44 @@ describe("renderStaticSurface", () => {
     const objs = await renderStaticSurface([], 8);
     const keys = new Set(objs.map((o) => o.key));
     expect(keys.has("home.html")).toBe(true);
-    expect([...keys].some((k) => k.startsWith("issues/"))).toBe(false);
-    expect(objs.length).toBe(7);
+    expect(keys.has("no/home.html")).toBe(true);
+    expect([...keys].some((k) => /(^|\/)issues\//.test(k))).toBe(false);
+    // 3 locale-agnostic + 4 pages per locale × 2 locales.
+    expect(objs.length).toBe(11);
+  });
+
+  test("the sitemap enumerates every locale of every page", async () => {
+    const objs = byKey(await renderStaticSurface([issue(2, new Date())], 8));
+    const sitemap = objs.get("sitemap.xml")!;
+    // Base URL comes from the environment and varies across the shared
+    // test process, so match on the path suffix of each <loc>.
+    const locs = [...sitemap.matchAll(/<loc>[^<]*?((?:\/[^<]*)?)<\/loc>/g)].map(
+      (m) => m[0].replace(/<\/?loc>/g, ""),
+    );
+    const paths = locs.map((l) => l.replace(/^https?:\/\/[^/]+/, "") || "/");
+    for (const path of ["/", "/archive", "/about", "/privacy", "/issue/2"]) {
+      expect(paths).toContain(path);
+      expect(paths).toContain(path === "/" ? "/no" : `/no${path}`);
+    }
+  });
+});
+
+describe("Worker key map", () => {
+  // The export writes R2 keys and the Worker reads them; nothing at
+  // runtime connects the two, so a locale added on one side and not the
+  // other means /no/* quietly proxies to Fly (or 404s) forever. The
+  // Worker isn't importable here — it's a separate build with
+  // Cloudflare-only types — so the guard reads its source.
+  test("the Worker's locale prefixes match LOCALE_PREFIX", async () => {
+    const { LOCALES, LOCALE_PREFIX } = await import("../shared/i18n.ts");
+    const src = await Bun.file("infra/worker/src/index.ts").text();
+    const m = src.match(/const LOCALE_PREFIXES = \[([^\]]*)\]/);
+    expect(m).not.toBeNull();
+    const workerPrefixes = [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+    const appPrefixes = LOCALES.map((l) => LOCALE_PREFIX[l]).filter(
+      (p) => p !== "",
+    );
+    expect(workerPrefixes.sort()).toEqual(appPrefixes.sort());
   });
 });
 
