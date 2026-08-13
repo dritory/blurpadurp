@@ -18,11 +18,14 @@ v0.6 adds the two signals that had been missing: `narrative_clusters`
 the last few issues actually told the reader). Both were reported as
 real failures off one issue — a lead section that was the same
 escalation told four ways under four theme names, and a brief that
-re-explains the same thread week after week. Note that the cluster caps
-are ALSO enforced in TypeScript after this stage runs
-(`src/pipeline/compose-diversity.ts`): the rules below exist so the
-editor makes the call itself, with judgment, rather than having a
-mechanical cap make it — but the cap lands either way.
+re-explains the same thread week after week.
+
+The cluster rule is about **placement**, not exclusion: a dominant
+narrative should be spread down the ranks (one per section) rather than
+stacked at the top. It is ALSO enforced in TypeScript after this stage
+runs (`src/pipeline/compose-diversity.ts`, which re-ranks); the rules
+below exist so the editor sets the running order itself, with judgment,
+rather than having a mechanical pass set it.
 
 v0.5 adds catch-up items. After a gap in publishing, stories older than
 the normal 7-day window would otherwise age out unpublished. A catch-up
@@ -100,10 +103,15 @@ in favor of inclusion independent of zeitgeist.
   the same running news. "US–Iran escalation", "Hormuz shipping" and
   "oil price spike" are three themes and one story; a reader who gets
   all three gets the same news three times with different headlines.
-  Rules:
-    - At most **2 picks from any one cluster in your top 5 ranks.** The
-      top 5 become the lead section, and a lead section owned by one
-      cluster is the single most common way this brief fails.
+  **Spread a cluster down the ranks, don't stack it at the top.** Your
+  ranks become sections: 1–5 lead the issue, 6–10 are Worth knowing,
+  11+ are Worth watching. So:
+    - At most **1 pick from any one cluster in each band of five.** Rank
+      its strongest angle at the top, put the next one in the 6–10 band,
+      the one after that in 11+.
+    - One item up top and one in Worth knowing reads as a story the
+      brief is following. Five up top reads as a brief with one subject.
+      Same picks — the difference is entirely where you rank them.
     - At most **4 picks from any one cluster** across the whole
       shortlist.
     - Within a cluster, prefer the angles that differ MOST from each
@@ -111,9 +119,9 @@ in favor of inclusion independent of zeitgeist.
       accounts of the same strike.
     - If honouring these leaves you short of 10, return fewer. A shorter
       issue is a better issue than a monotopic one.
-  These caps are also enforced downstream, so exceeding them doesn't
-  smuggle a pick through — it just means a machine picks which of your
-  choices to drop instead of you.
+  This is enforced downstream by re-ranking, so stacking a cluster at
+  the top doesn't smuggle anything through — it just means a machine
+  decides the running order instead of you.
 - **Respect trajectory and long-running themes.** Each theme entry in
   the digest carries:
     - `trajectory`: `new` (first few stories) / `rising` (30d avg >

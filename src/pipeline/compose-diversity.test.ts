@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { NormalizedPick } from "../shared/editor-schema.ts";
 import { diversifyPicks } from "./compose-diversity.ts";
-import { CONVERSATION_TOP_N } from "./compose-partition.ts";
+import {
+  CONVERSATION_TOP_N,
+  WORTH_KNOWING_TOP_N,
+  routeSection,
+} from "./compose-partition.ts";
 
-// These lock the diversity invariant: no single narrative cluster owns
-// the conversation section, and no cluster owns the issue — but a
-// genuinely monotopic week still produces a normally-shaped brief.
+// These lock the diversity invariant: a dominant narrative is spread
+// DOWN the brief rather than stacked at the top, and no cluster owns the
+// issue — but a genuinely monotopic week still produces a
+// normally-shaped brief.
 
 function pick(rank: number, lead: number): NormalizedPick {
   return {
@@ -17,13 +22,27 @@ function pick(rank: number, lead: number): NormalizedPick {
   };
 }
 
-// Story ids encode their cluster in the hundreds digit: 101, 102 → "a".
+// Story ids encode their cluster in the hundreds digit: 101, 102 → "c1".
 const byHundreds = (lead: number): string => `c${Math.floor(lead / 100)}`;
 
-describe("diversifyPicks — lead cap", () => {
-  test("one narrative cannot own the conversation section", () => {
+// Where a pick actually lands once compose partitions on rank. Mirrors
+// the real path: diversifyPicks re-ranks, routeSection reads the rank.
+function sectionOf(res: { picks: NormalizedPick[] }, lead: number): string {
+  const p = res.picks.find((x) => x.lead_story_id === lead);
+  if (p === undefined) return "cut";
+  return routeSection({
+    kind: "single",
+    rank: p.rank,
+    confidence: "high",
+    penaltyFactors: [],
+  });
+}
+
+describe("diversifyPicks — spreading a dominant narrative", () => {
+  test("one narrative gets one slot per section instead of owning the top", () => {
     // The reported failure: the editor ranked five Hormuz-adjacent picks
     // 1..5, so the whole lead section was one story told five ways.
+    // Wanted: one up top, one in Worth knowing, the rest further down.
     const picks = [
       pick(1, 101),
       pick(2, 102),
@@ -33,21 +52,42 @@ describe("diversifyPicks — lead cap", () => {
       pick(6, 201),
       pick(7, 301),
       pick(8, 401),
+      pick(9, 501),
+      pick(10, 601),
+      pick(11, 701),
+      pick(12, 801),
+      pick(13, 901),
     ];
     const res = diversifyPicks(picks, byHundreds, {
-      maxPicksPerCluster: 5,
-      maxLeadPerCluster: 2,
+      maxPicksPerCluster: 4,
+      maxPerSectionPerCluster: 1,
     });
-    const head = res.picks.slice(0, CONVERSATION_TOP_N);
-    const fromC1 = head.filter((p) => byHundreds(p.lead_story_id) === "c1");
-    expect(fromC1).toHaveLength(2);
     expect(res.relaxed).toBe(false);
-    // The other three lead slots went to the other clusters, in the
-    // editor's own rank order.
-    expect(head.map((p) => p.lead_story_id)).toEqual([101, 102, 201, 301, 401]);
+
+    const c1 = res.picks.filter((p) => byHundreds(p.lead_story_id) === "c1");
+    // The whole-issue cap trimmed 5 → 4, and those four are spread.
+    expect(c1).toHaveLength(4);
+    expect(sectionOf(res, 101)).toBe("conversation");
+    expect(sectionOf(res, 102)).toBe("worth_knowing");
+    expect(sectionOf(res, 103)).toBe("worth_watching");
+    expect(sectionOf(res, 104)).toBe("worth_watching");
+    expect(sectionOf(res, 105)).toBe("cut");
+
+    // Exactly one c1 item in each bounded section.
+    const inConversation = res.picks
+      .slice(0, CONVERSATION_TOP_N)
+      .filter((p) => byHundreds(p.lead_story_id) === "c1");
+    expect(inConversation).toHaveLength(1);
+    const inKnowing = res.picks
+      .slice(CONVERSATION_TOP_N, WORTH_KNOWING_TOP_N)
+      .filter((p) => byHundreds(p.lead_story_id) === "c1");
+    expect(inKnowing).toHaveLength(1);
   });
 
-  test("demoted picks land directly behind the head, not at the bottom", () => {
+  test("the cluster's best-ranked pick is the one that leads", () => {
+    // Spreading must not cost the story its position: the editor's top
+    // pick still opens the brief, it just isn't followed by four more of
+    // the same story.
     const picks = [
       pick(1, 101),
       pick(2, 102),
@@ -58,28 +98,67 @@ describe("diversifyPicks — lead cap", () => {
       pick(7, 501),
     ];
     const res = diversifyPicks(picks, byHundreds, {
-      maxPicksPerCluster: 5,
-      maxLeadPerCluster: 2,
+      maxPicksPerCluster: 9,
+      maxPerSectionPerCluster: 1,
     });
-    expect(res.demoted).toEqual([103]);
-    // 103 was rank 3; it now sits at rank 6 — top of Worth knowing,
-    // ahead of picks the editor ranked below it.
-    const rankOf103 = res.picks.find((p) => p.lead_story_id === 103)!.rank;
-    expect(rankOf103).toBe(CONVERSATION_TOP_N + 1);
+    expect(res.picks[0]!.lead_story_id).toBe(101);
+    expect(res.picks.slice(0, CONVERSATION_TOP_N).map((p) => p.lead_story_id))
+      .toEqual([101, 201, 301, 401, 501]);
+    // 102 and 103 dropped out of the lead rather than being cut. Both
+    // land in Worth knowing here: only two picks are left by then, so
+    // there is nothing to separate them with — the cap did what it
+    // could, which is get them out of the top.
+    expect(sectionOf(res, 102)).toBe("worth_knowing");
+    expect(sectionOf(res, 103)).toBe("worth_knowing");
+    expect(res.movedDown).toContain(102);
+    expect(res.movedDown).toContain(103);
+    expect(res.cuts).toHaveLength(0);
+  });
+
+  test("a blocked pick lands as high as it legitimately can", () => {
+    // 102 is blocked from the conversation but should take the FIRST
+    // Worth-knowing slot, ahead of picks the editor ranked below it.
+    const picks = [
+      pick(1, 101),
+      pick(2, 102),
+      pick(3, 201),
+      pick(4, 301),
+      pick(5, 401),
+      pick(6, 501),
+      pick(7, 601),
+    ];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 9,
+      maxPerSectionPerCluster: 1,
+    });
+    expect(res.picks.find((p) => p.lead_story_id === 102)!.rank).toBe(
+      CONVERSATION_TOP_N + 1,
+    );
   });
 
   test("ranks come out contiguous from 1, so routeSection stays coherent", () => {
     const picks = [pick(1, 101), pick(2, 102), pick(3, 103), pick(4, 201)];
     const res = diversifyPicks(picks, byHundreds, {
-      maxPicksPerCluster: 5,
-      maxLeadPerCluster: 1,
+      maxPicksPerCluster: 9,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.picks.map((p) => p.rank)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("unrelated clusters are left in the editor's order", () => {
+    const picks = [pick(1, 101), pick(2, 201), pick(3, 301), pick(4, 401)];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 4,
+      maxPerSectionPerCluster: 1,
+    });
+    expect(res.picks.map((p) => p.lead_story_id)).toEqual([101, 201, 301, 401]);
+    expect(res.movedDown).toEqual([]);
+    expect(res.relaxed).toBe(false);
   });
 });
 
 describe("diversifyPicks — whole-issue cap", () => {
-  test("surplus picks from one cluster are cut, keeping the best-ranked", () => {
+  test("surplus beyond the issue cap is cut, keeping the best-ranked", () => {
     const picks = [
       pick(1, 101),
       pick(2, 102),
@@ -89,28 +168,32 @@ describe("diversifyPicks — whole-issue cap", () => {
     ];
     const res = diversifyPicks(picks, byHundreds, {
       maxPicksPerCluster: 2,
-      maxLeadPerCluster: 2,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.cuts.map((c) => c.lead_story_id)).toEqual([103, 104]);
-    expect(res.picks.map((p) => p.lead_story_id)).toEqual([101, 102, 201]);
+    expect(res.picks.map((p) => p.lead_story_id).sort()).toEqual([
+      101, 102, 201,
+    ]);
   });
 
-  test("cuts shorten the issue rather than relocating the crowding", () => {
-    // Demoting instead of cutting would just move a monotopic block from
-    // the lead into Worth knowing. Silence is a feature.
-    const picks = [pick(1, 101), pick(2, 102), pick(3, 103)];
+  test("the cap stops a huge cluster riding the spread down the issue", () => {
+    // Nine picks on one story: without the whole-issue cap the spread
+    // would place one in every section and still leave six in the tail.
+    const picks = Array.from({ length: 9 }, (_, i) => pick(i + 1, 101 + i));
     const res = diversifyPicks(picks, byHundreds, {
-      maxPicksPerCluster: 1,
-      maxLeadPerCluster: 1,
+      maxPicksPerCluster: 3,
+      maxPerSectionPerCluster: 1,
     });
-    expect(res.picks).toHaveLength(1);
+    expect(res.picks).toHaveLength(3);
+    expect(res.cuts).toHaveLength(6);
   });
 });
 
 describe("diversifyPicks — relaxation", () => {
   test("a genuinely single-narrative week still fills the lead section", () => {
-    // Everything is one cluster. Enforcing the lead cap here would ship
-    // a two-item conversation section for no editorial reason.
+    // Everything is one cluster. Sections are fixed-size, so the cap
+    // cannot be honoured — the conversation fills anyway rather than
+    // shipping a one-item lead.
     const picks = [
       pick(1, 101),
       pick(2, 102),
@@ -121,7 +204,7 @@ describe("diversifyPicks — relaxation", () => {
     ];
     const res = diversifyPicks(picks, byHundreds, {
       maxPicksPerCluster: 99,
-      maxLeadPerCluster: 2,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.relaxed).toBe(true);
     expect(res.picks.slice(0, CONVERSATION_TOP_N)).toHaveLength(
@@ -131,37 +214,29 @@ describe("diversifyPicks — relaxation", () => {
     expect(res.picks.map((p) => p.lead_story_id)).toEqual([
       101, 102, 103, 104, 105, 106,
     ]);
+    expect(res.movedDown).toEqual([]);
   });
 
-  test("the lead cap is bounded by how many other picks exist", () => {
+  test("spreading still does what it can when material is short", () => {
     // Four picks from one cluster, two from another, five lead slots.
-    // Promotion runs out of material: the lead section ends up with
-    // three from c1 despite a cap of 2, because there is nothing else to
-    // put there. That is the documented ceiling of the mechanism, not a
-    // bug — CONVERSATION_TOP_N is structural and doesn't shrink.
+    // Promotion runs out, so the conversation carries more c1 than the
+    // cap allows — but c2 was still promoted ahead of c1's surplus,
+    // which is the part that works.
     const picks = [
       pick(1, 101),
       pick(2, 102),
-      pick(3, 201),
-      pick(4, 202),
-      pick(5, 103),
-      pick(6, 104),
+      pick(3, 103),
+      pick(4, 104),
+      pick(5, 201),
+      pick(6, 202),
     ];
     const res = diversifyPicks(picks, byHundreds, {
       maxPicksPerCluster: 99,
-      maxLeadPerCluster: 2,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.relaxed).toBe(true);
-    const head = res.picks.slice(0, CONVERSATION_TOP_N);
-    expect(head).toHaveLength(CONVERSATION_TOP_N);
-    expect(
-      head.filter((p) => byHundreds(p.lead_story_id) === "c1"),
-    ).toHaveLength(3);
-    // But c2 still got promoted ahead of c1's surplus, which is the part
-    // that does work: without it the lead would be four c1 picks.
-    expect(head.map((p) => p.lead_story_id)).toEqual([101, 102, 201, 202, 103]);
-    // Nothing is reported as demoted when nothing actually left the lead.
-    expect(res.demoted).toEqual([]);
+    expect(res.picks.slice(0, CONVERSATION_TOP_N).map((p) => p.lead_story_id))
+      .toEqual([101, 201, 102, 103, 104]);
   });
 
   test("an unclustered pick is never treated as crowding", () => {
@@ -170,16 +245,17 @@ describe("diversifyPicks — relaxation", () => {
     const picks = [pick(1, 101), pick(2, 102), pick(3, 103)];
     const res = diversifyPicks(picks, () => null, {
       maxPicksPerCluster: 1,
-      maxLeadPerCluster: 1,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.cuts).toHaveLength(0);
     expect(res.picks).toHaveLength(3);
+    expect(res.relaxed).toBe(false);
   });
 
   test("fewer picks than lead slots is not an error", () => {
     const res = diversifyPicks([pick(1, 101), pick(2, 201)], byHundreds, {
       maxPicksPerCluster: 3,
-      maxLeadPerCluster: 1,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.picks.map((p) => p.lead_story_id)).toEqual([101, 201]);
     expect(res.relaxed).toBe(false);
@@ -188,7 +264,7 @@ describe("diversifyPicks — relaxation", () => {
   test("empty pick list survives", () => {
     const res = diversifyPicks([], byHundreds, {
       maxPicksPerCluster: 3,
-      maxLeadPerCluster: 2,
+      maxPerSectionPerCluster: 1,
     });
     expect(res.picks).toEqual([]);
     expect(res.cuts).toEqual([]);

@@ -120,7 +120,7 @@ export type ConfigMap = {
   "editor.cluster_threshold": number;
   "editor.pool_max_cluster_fraction": number;
   "compose.max_picks_per_cluster": number;
-  "compose.max_lead_per_cluster": number;
+  "compose.max_per_section_per_cluster": number;
   // How many prior published issues the editor and composer are shown,
   // so neither re-tells the reader something they already read.
   "compose.recent_coverage_issues": number;
@@ -341,29 +341,33 @@ export async function produceDraft(
   // Step 2b: diversity caps. The editor prompt has asked for topic
   // balance since v0.1 and still shipped issues whose entire lead
   // section was one narrative; this is the structural backstop, applied
-  // to the editor's output before partitioning. See compose-diversity.ts.
-  const diversity = diversifyPicks(
-    rawPicks,
-    (leadStoryId) => byId.get(leadStoryId)?.cluster_key ?? null,
-    {
-      maxPicksPerCluster: run.cfg["compose.max_picks_per_cluster"],
-      maxLeadPerCluster: run.cfg["compose.max_lead_per_cluster"],
-    },
-  );
+  // to the editor's output before partitioning. It SPREADS a dominant
+  // narrative down the sections rather than cutting it — one item up
+  // top and one in Worth knowing reads as a story the brief is
+  // following; five up top reads as a brief with one subject. See
+  // compose-diversity.ts.
+  const clusterOfLead = (leadStoryId: number): string | null =>
+    byId.get(leadStoryId)?.cluster_key ?? null;
+  const diversity = diversifyPicks(rawPicks, clusterOfLead, {
+    maxPicksPerCluster: run.cfg["compose.max_picks_per_cluster"],
+    maxPerSectionPerCluster: run.cfg["compose.max_per_section_per_cluster"],
+  });
   const normalizedPicks = diversity.picks;
-  if (diversity.cuts.length > 0 || diversity.demoted.length > 0) {
+  if (diversity.cuts.length > 0 || diversity.movedDown.length > 0) {
     console.log(
       `[compose] diversity: cut ${diversity.cuts.length} over-cluster pick(s)` +
         (diversity.cuts.length > 0
           ? ` [${diversity.cuts.map((c) => `${c.lead_story_id}→${c.cluster_key}`).join(" ")}]`
           : "") +
-        `, demoted ${diversity.demoted.length} out of the lead section` +
-        (diversity.demoted.length > 0 ? ` [${diversity.demoted.join(" ")}]` : ""),
+        `, spread ${diversity.movedDown.length} into a later section` +
+        (diversity.movedDown.length > 0
+          ? ` [${diversity.movedDown.join(" ")}]`
+          : ""),
     );
   }
   if (diversity.relaxed) {
     console.log(
-      "[compose] diversity: lead cap relaxed — every pick belongs to one narrative this week",
+      "[compose] diversity: per-section cap relaxed — not enough of anything else to spread with",
     );
   }
 
@@ -873,10 +877,18 @@ async function buildComposerInput(
   // too speculative to anchor a synthesis). Each entry's shape uses
   // the editor's reason if available (the one-line arc headline),
   // or falls back to the lead story's scorer one-liner.
+  //
+  // Grouped by narrative CLUSTER, not by theme. Three themes off one
+  // running story used to yield three synthesis entries, so the opening
+  // paragraph named the same news three ways before the brief had even
+  // started — the same saturation the section caps fix, in the one
+  // paragraph the reader always reads. One cluster, one entry; the
+  // cluster's best-placed item speaks for it.
   const synthesisItems = [...conversation, ...worth_knowing];
-  const synthesisByTheme = new Map<
-    number,
+  const synthesisByCluster = new Map<
+    string,
     {
+      theme_id: number;
       theme_name: string;
       category: string | null;
       shape: string;
@@ -890,7 +902,10 @@ async function buildComposerInput(
         ? Number(leadRow.theme_id)
         : null;
     if (tid === null) continue;
-    const existing = synthesisByTheme.get(tid);
+    // Unclustered themes key on themselves, so an unmeasured theme is
+    // never folded into someone else's entry.
+    const key = leadRow?.cluster_key ?? `t${tid}`;
+    const existing = synthesisByCluster.get(key);
     const theme_name =
       leadRow?.theme_name ?? it.stories[0]?.theme_name ?? `theme #${tid}`;
     const category = it.stories[0]?.category ?? null;
@@ -898,8 +913,12 @@ async function buildComposerInput(
       it.reason.length > 0
         ? it.reason
         : it.stories[0]?.scorer_one_liner ?? theme_name;
+    // First writer wins (items arrive in section then rank order, so
+    // that's the cluster's best-placed item), except that an arc
+    // displaces a single — an arc's framing describes the thread.
     if (existing === undefined || (it.kind === "arc" && !existing.is_arc)) {
-      synthesisByTheme.set(tid, {
+      synthesisByCluster.set(key, {
+        theme_id: tid,
         theme_name,
         category,
         shape,
@@ -908,9 +927,9 @@ async function buildComposerInput(
     }
   }
   const synthesis_themes: ComposerInput["synthesis_themes"] =
-    synthesisByTheme.size >= 2
-      ? [...synthesisByTheme.entries()].map(([tid, entry]) => {
-          const meta = themeMeta.get(tid);
+    synthesisByCluster.size >= 2
+      ? [...synthesisByCluster.values()].map((entry) => {
+          const meta = themeMeta.get(entry.theme_id);
           return {
             theme_name: entry.theme_name,
             category: entry.category as ComposerInput["synthesis_themes"][number]["category"],
@@ -1661,7 +1680,7 @@ async function loadConfig(): Promise<ConfigMap> {
   map["editor.cluster_threshold"] ??= 0.72;
   map["editor.pool_max_cluster_fraction"] ??= 0.25;
   map["compose.max_picks_per_cluster"] ??= 4;
-  map["compose.max_lead_per_cluster"] ??= 2;
+  map["compose.max_per_section_per_cluster"] ??= 1;
   // Prior-issue memory, added in migration 075. Three issues is roughly
   // a month of a weekly — long enough to catch "we've led with this
   // three weeks running", short enough that the digest stays small.

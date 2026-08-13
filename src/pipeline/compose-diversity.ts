@@ -8,45 +8,63 @@
 // between the reader and a monotopic brief, for the same reason the
 // composer doesn't choose its own sections.
 //
-// So the caps live here, in TypeScript, applied to the editor's output
-// before partitioning. Two of them:
+// The rule this encodes: a dominant narrative should be SPREAD DOWN the
+// brief, not stacked at the top. One item in the conversation, one in
+// Worth knowing, one in Worth watching reads as a story the brief is
+// following. Five in the conversation reads as a brief with one subject.
+// Same picks either way — the difference is entirely placement, which is
+// why placement is what this fixes.
 //
-//   1. maxPicksPerCluster — how much of the WHOLE brief one narrative
-//      may occupy. Surplus is cut, not demoted: demoting just relocates
-//      the saturation to Worth knowing, and a brief that runs short is
-//      the intended failure mode here (CLAUDE.md §Invariants #1).
-//   2. maxLeadPerCluster — how much of the CONVERSATION section (ranks
-//      1..CONVERSATION_TOP_N) one narrative may occupy. Surplus is
-//      demoted rather than cut; the story still belongs in the issue,
-//      just not stacked at the top.
+// Two caps:
 //
-// The lead cap is best-effort by construction. It works by promoting
-// other clusters' picks ahead of a saturated one, so its power is
-// bounded by how many other picks exist: when the pool genuinely holds
-// nothing else, the section fills with the dominant narrative anyway and
-// `relaxed` records that it happened. That is the intended behaviour —
-// the goal is to stop a narrative crowding out competitors that EXIST,
-// not to manufacture variety that doesn't, and CONVERSATION_TOP_N is a
-// structural constant rather than something to shrink on a quiet week.
+//   1. maxPerSectionPerCluster — how many picks one narrative may hold
+//      in any ONE section. This is the load-bearing one. Surplus is
+//      pushed into the next section, not cut: the story earned its place
+//      in the issue, it just shouldn't own the top of it.
+//   2. maxPicksPerCluster — a whole-issue backstop. Surplus is cut, and
+//      a brief that runs short is an acceptable outcome (CLAUDE.md
+//      §Invariants #1). With the per-section cap doing the real work
+//      this rarely binds; it exists so a 9-story cluster can't ride the
+//      spread all the way down the issue.
 //
-// The whole-issue cap has no such escape: it cuts, and a short issue is
-// an acceptable outcome (CLAUDE.md §Invariants #1). Cut picks keep
-// published_to_reader = false, so they return to next week's pool rather
-// than being lost.
+// Cut picks keep published_to_reader = false, so they return to next
+// week's pool rather than being lost.
+//
+// The spread is best-effort by construction. It works by promoting other
+// clusters' picks ahead of a saturated one, so its power is bounded by
+// how many other picks exist. Sections are fixed-size (routing is
+// rank-based — see compose-partition.ts), so a section that cannot be
+// filled under the cap gets filled over it rather than left short:
+// CONVERSATION_TOP_N is a structural constant, not something to shrink
+// on a thin week. `relaxed` records when that happened, which is the
+// signal that the week itself was monotopic rather than that the caps
+// misfired.
 
 import type { NormalizedPick } from "../shared/editor-schema.ts";
-import { CONVERSATION_TOP_N } from "./compose-partition.ts";
+import {
+  CONVERSATION_TOP_N,
+  WORTH_KNOWING_TOP_N,
+} from "./compose-partition.ts";
+
+// Capacity of each bounded section, derived from the partition module's
+// rank thresholds so the two can't drift. Worth watching is the
+// unbounded tail and isn't listed: everything left flows into it, and a
+// cap there would have nowhere to push surplus to.
+export const BOUNDED_SECTION_SIZES: readonly number[] = [
+  CONVERSATION_TOP_N,
+  WORTH_KNOWING_TOP_N - CONVERSATION_TOP_N,
+];
 
 export interface DiversityOptions {
   /** Max picks from one narrative cluster across the entire issue.
    *  Surplus picks are cut. */
   maxPicksPerCluster: number;
-  /** Max picks from one narrative cluster inside the conversation
-   *  section. Surplus picks are demoted below the section boundary. */
-  maxLeadPerCluster: number;
-  /** Size of the conversation section. Defaults to the partition
-   *  module's threshold so the two can't drift. */
-  conversationSlots?: number;
+  /** Max picks from one narrative cluster within a single section.
+   *  Surplus is pushed down into the next section. */
+  maxPerSectionPerCluster: number;
+  /** Bounded section capacities, in order. Defaults to the partition
+   *  module's thresholds. */
+  sectionSizes?: readonly number[];
 }
 
 export interface DiversityCut {
@@ -60,12 +78,11 @@ export interface DiversityResult {
   picks: NormalizedPick[];
   /** Picks removed by the whole-issue cap. */
   cuts: DiversityCut[];
-  /** Lead-story ids that were demoted out of the conversation section. */
-  demoted: number[];
-  /** True when the lead cap could not be honoured because no other
-   *  cluster had a pick left to promote — a genuinely monotopic week
-   *  rather than a crowding failure. Worth logging: it's the signal that
-   *  the week itself was thin, not that the caps misfired. */
+  /** Lead-story ids pushed into a later section than pure rank order
+   *  would have given them. */
+  movedDown: number[];
+  /** True when a bounded section had to be filled past the per-section
+   *  cap because no other cluster had a pick left to promote. */
   relaxed: boolean;
 }
 
@@ -84,7 +101,7 @@ export function diversifyPicks(
   clusterOf: (leadStoryId: number) => string | null,
   opts: DiversityOptions,
 ): DiversityResult {
-  const slots = opts.conversationSlots ?? CONVERSATION_TOP_N;
+  const sizes = opts.sectionSizes ?? BOUNDED_SECTION_SIZES;
   const keyFor = (p: NormalizedPick): string =>
     clusterOf(p.lead_story_id) ?? `lead:${p.lead_story_id}`;
 
@@ -111,55 +128,68 @@ export function diversifyPicks(
     kept.push(p);
   }
 
-  // Pass 2 — lead cap. Greedily fill the conversation section with the
-  // best-ranked pick whose cluster still has room, preserving relative
-  // order within a cluster. Everything not selected keeps its relative
-  // order behind the head, so a demoted pick lands at the top of Worth
-  // knowing rather than at the bottom of the issue.
-  const head: NormalizedPick[] = [];
-  const remainder = [...kept];
-  const headPerCluster = new Map<string, number>();
+  // Pass 2 — spread. Fill each bounded section in turn with the
+  // best-ranked pick whose cluster still has room there. A pick that is
+  // blocked stays in the queue and gets its shot at the next section, so
+  // relative order within a cluster is preserved and the surplus lands
+  // as high as it legitimately can rather than at the bottom.
+  const ordered: NormalizedPick[] = [];
+  const queue = [...kept];
   let relaxed = false;
 
-  while (head.length < slots && remainder.length > 0) {
-    const idx = remainder.findIndex(
-      (p) => (headPerCluster.get(keyFor(p)) ?? 0) < opts.maxLeadPerCluster,
-    );
-    if (idx === -1) {
-      // No cluster has room: every remaining pick belongs to a narrative
-      // that already owns its share of the lead. Nothing left to promote,
-      // so the constraint is unsatisfiable — record it and stop.
-      relaxed = true;
-      break;
-    }
-    const [p] = remainder.splice(idx, 1);
-    const key = keyFor(p!);
-    headPerCluster.set(key, (headPerCluster.get(key) ?? 0) + 1);
-    head.push(p!);
-  }
-  // Top up the head from what's left. This does NOT change the output
-  // order — head and remainder are concatenated below, so moving an item
-  // between them is invisible there. It exists so `head` is the true set
-  // of lead-section picks, which is what `demoted` is measured against;
-  // without it a pick that stayed in the lead would be reported as
-  // demoted out of it.
-  if (relaxed) {
-    while (head.length < slots && remainder.length > 0) {
-      head.push(remainder.shift()!);
+  for (const size of sizes) {
+    const usedInSection = new Map<string, number>();
+    for (let placed = 0; placed < size && queue.length > 0; placed++) {
+      let idx = queue.findIndex(
+        (p) =>
+          (usedInSection.get(keyFor(p)) ?? 0) < opts.maxPerSectionPerCluster,
+      );
+      if (idx === -1) {
+        // Every remaining pick belongs to a narrative that already owns
+        // its share of this section. Sections are fixed-size, so there
+        // is no "leave it short" option — take the best-ranked pick and
+        // record that the cap could not be honoured.
+        idx = 0;
+        relaxed = true;
+      }
+      const [p] = queue.splice(idx, 1);
+      const key = keyFor(p!);
+      usedInSection.set(key, (usedInSection.get(key) ?? 0) + 1);
+      ordered.push(p!);
     }
   }
+  // Worth watching: the unbounded tail takes whatever is left, in order.
+  ordered.push(...queue);
 
-  const ordered = [...head, ...remainder];
-  const headIds = new Set(head.map((p) => p.lead_story_id));
-  const demoted = kept
-    .slice(0, Math.min(slots, kept.length))
-    .filter((p) => !headIds.has(p.lead_story_id))
-    .map((p) => p.lead_story_id);
+  // Which picks ended up in a later section than pure rank order would
+  // have put them. Reported for the compose log, not acted on.
+  const movedDown: number[] = [];
+  const originalIndex = new Map(
+    kept.map((p, i) => [p.lead_story_id, i] as const),
+  );
+  for (let i = 0; i < ordered.length; i++) {
+    const before = originalIndex.get(ordered[i]!.lead_story_id);
+    if (before === undefined) continue;
+    if (sectionIndex(i, sizes) > sectionIndex(before, sizes)) {
+      movedDown.push(ordered[i]!.lead_story_id);
+    }
+  }
 
   return {
     picks: ordered.map((p, i) => ({ ...p, rank: i + 1 })),
     cuts,
-    demoted,
+    movedDown,
     relaxed,
   };
+}
+
+/** Which section a zero-based position falls in. The index past the last
+ *  bounded section is the unbounded tail. */
+function sectionIndex(position: number, sizes: readonly number[]): number {
+  let remaining = position;
+  for (let i = 0; i < sizes.length; i++) {
+    if (remaining < sizes[i]!) return i;
+    remaining -= sizes[i]!;
+  }
+  return sizes.length;
 }

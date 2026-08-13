@@ -13,6 +13,11 @@
 --    v0.1; a prompt was never going to be enough, for the same reason
 --    the composer doesn't choose its own sections.
 --
+--    The fix is about PLACEMENT, not exclusion. One item in the
+--    conversation, one in Worth knowing, one in Worth watching reads as
+--    a story the brief is following. Five in the conversation reads as a
+--    brief with one subject. Same picks either way.
+--
 --    So: cluster themes by centroid cosine and cap the clusters.
 --    - editor.cluster_threshold (0.72) sits between the story→theme
 --      attach bar (0.70) and the theme→theme MERGE bar (0.85). That gap
@@ -24,16 +29,26 @@
 --      one narrative may occupy, before the editor ever sees it. Tighter
 --      than the category cap (0.5, mig 033) because "politics" is a
 --      filing drawer and a cluster is one running story.
---    - compose.max_picks_per_cluster (4) caps the whole issue. Surplus
---      is CUT, not demoted: demoting relocates the saturation into Worth
---      knowing, and a short issue is the intended failure mode here
---      (invariant 1, silence is a feature).
---    - compose.max_lead_per_cluster (2) caps the conversation section.
---      Surplus is demoted rather than cut — the story still belongs in
---      the issue, just not stacked at the top.
+--    - compose.max_per_section_per_cluster (1) is the load-bearing one:
+--      one narrative gets one slot per section, and its surplus is
+--      pushed DOWN into the next section rather than cut. The story
+--      earned its place in the issue; it just shouldn't own the top.
+--      The cluster's best-ranked pick still leads, so spreading costs
+--      the story nothing but the pile-up behind it.
+--    - compose.max_picks_per_cluster (4) is a whole-issue backstop.
+--      Surplus is cut, and a short issue is an acceptable outcome
+--      (invariant 1, silence is a feature). With the per-section cap
+--      doing the real work this rarely binds; it exists so a nine-story
+--      cluster can't ride the spread all the way down the issue.
 --
---    All four relax automatically when the pool genuinely offers nothing
---    else: a week where every story really is one war still produces a
+--    The synthesis opener is grouped by cluster too. Three themes off
+--    one story used to seed three opener entries, so the paragraph the
+--    reader always reads named the same news three ways.
+--
+--    The caps relax automatically when the pool offers nothing else.
+--    Sections are fixed-size (routing is rank-based), so a section that
+--    can't be filled under the cap is filled over it rather than left
+--    short — a week where every story really is one war still produces a
 --    normally-shaped brief. The goal is to stop a narrative crowding out
 --    competitors that exist, not to manufacture variety that doesn't.
 --
@@ -56,7 +71,7 @@ INSERT INTO config (key, value) VALUES
   ('editor.cluster_threshold',           '0.72'::jsonb),
   ('editor.pool_max_cluster_fraction',   '0.25'::jsonb),
   ('compose.max_picks_per_cluster',      '4'::jsonb),
-  ('compose.max_lead_per_cluster',       '2'::jsonb),
+  ('compose.max_per_section_per_cluster', '1'::jsonb),
   ('compose.recent_coverage_issues',     '3'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
