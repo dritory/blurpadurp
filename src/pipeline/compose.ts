@@ -121,6 +121,9 @@ export type ConfigMap = {
   "editor.pool_max_cluster_fraction": number;
   "compose.max_picks_per_cluster": number;
   "compose.max_per_section_per_cluster": number;
+  // Issue size. The editor is asked for more than this so the balance
+  // pass has a reserve to spend; the surplus is trimmed off the tail.
+  "compose.max_issue_picks": number;
   // How many prior published issues the editor and composer are shown,
   // so neither re-tells the reader something they already read.
   "compose.recent_coverage_issues": number;
@@ -324,7 +327,8 @@ export async function produceDraft(
     }
   }
 
-  // Step 2: editor curation — pick 10-15 from the pool.
+  // Step 2: editor curation — pick 12-18 from the pool (about 15 ship;
+  // the tail ranks are a reserve for the balance pass below).
   const { output: editorResult, input: editorInput } = await curateViaEditor(
     run.editor,
     pool,
@@ -351,6 +355,7 @@ export async function produceDraft(
   const diversity = diversifyPicks(rawPicks, clusterOfLead, {
     maxPicksPerCluster: run.cfg["compose.max_picks_per_cluster"],
     maxPerSectionPerCluster: run.cfg["compose.max_per_section_per_cluster"],
+    maxPicks: run.cfg["compose.max_issue_picks"],
   });
   const normalizedPicks = diversity.picks;
   if (diversity.cuts.length > 0 || diversity.movedDown.length > 0) {
@@ -1686,6 +1691,7 @@ async function loadConfig(): Promise<ConfigMap> {
   map["editor.pool_max_cluster_fraction"] ??= 0.25;
   map["compose.max_picks_per_cluster"] ??= 4;
   map["compose.max_per_section_per_cluster"] ??= 1;
+  map["compose.max_issue_picks"] ??= 15;
   // Prior-issue memory, added in migration 075. Three issues is roughly
   // a month of a weekly — long enough to catch "we've led with this
   // three weeks running", short enough that the digest stays small.

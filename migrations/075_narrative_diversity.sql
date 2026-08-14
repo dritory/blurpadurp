@@ -35,11 +35,23 @@
 --      earned its place in the issue; it just shouldn't own the top.
 --      The cluster's best-ranked pick still leads, so spreading costs
 --      the story nothing but the pile-up behind it.
---    - compose.max_picks_per_cluster (4) is a whole-issue backstop.
---      Surplus is cut, and a short issue is an acceptable outcome
---      (invariant 1, silence is a feature). With the per-section cap
---      doing the real work this rarely binds; it exists so a nine-story
---      cluster can't ride the spread all the way down the issue.
+--    - compose.max_picks_per_cluster (4) is a whole-issue backstop that
+--      cuts. It exists because Worth watching is an unbounded tail, so
+--      without it a nine-story cluster rides the spread down and ships
+--      seven one-liners on one subject.
+--
+--    Cutting used to shorten the issue, and the justification for that
+--    was invariant 1 (silence is a feature). That was the wrong
+--    invariant: silence is about a week with nothing worth saying, and
+--    this pool is never that thin. What actually happened was that on
+--    exactly the weeks the caps matter, a 12-pick issue became a 10-pick
+--    issue and Worth watching vanished entirely.
+--
+--    So the editor is now asked for 12-18 (editor prompt v0.6) against
+--    compose.max_issue_picks (15). The extra ranks are a reserve: the
+--    cluster cut spends them, and whatever is still surplus is trimmed
+--    off the tail. A dropped pick costs the issue a slot instead of a
+--    section.
 --
 --    The synthesis opener is grouped by cluster too. Three themes off
 --    one story used to seed three opener entries, so the paragraph the
@@ -75,6 +87,7 @@ INSERT INTO config (key, value) VALUES
   ('editor.pool_max_cluster_fraction',   '0.25'::jsonb),
   ('compose.max_picks_per_cluster',      '4'::jsonb),
   ('compose.max_per_section_per_cluster', '1'::jsonb),
+  ('compose.max_issue_picks',            '15'::jsonb),
   ('compose.recent_coverage_issues',     '3'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 

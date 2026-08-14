@@ -1,7 +1,11 @@
-// Editor stage: takes 30–80 gate-passers, returns a 10–15 item shortlist
+// Editor stage: takes 30–80 gate-passers, returns a 12–18 item shortlist
 // with reasons. Curation is fuzzy — we want LLM judgment here, not a sort
 // key — so the prompt asks for topic balance, duplicate collapse, and
 // under-covered-angle preference. Composer writes from this shortlist.
+//
+// It asks for more than ships. compose-diversity.ts drops picks that
+// crowd one narrative and then trims from the bottom, so the tail ranks
+// are a reserve — see the "reserve" note in docs/editor-prompt.md.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { readFile } from "node:fs/promises";
@@ -146,7 +150,13 @@ function renderUserMessage(input: EditorInput): string {
   const lines: string[] = [];
   lines.push(`as_of_date: ${input.as_of_date}`);
   lines.push(`pool_size: ${input.stories.length}`);
-  lines.push(`target_picks: 10-15`, "");
+  // Deliberately more than ship. The downstream balance pass drops picks
+  // that crowd one narrative, and with a rich pool a dropped pick should
+  // cost the issue a slot, not a whole section.
+  lines.push(
+    `target_picks: 12-18 (about 15 ship; the last few ranks are a reserve)`,
+    "",
+  );
 
   // Pool composition: the shape the editor is working with. Surfaces
   // the two cohorts where editorial judgment matters most — "quiet
@@ -331,7 +341,7 @@ const EDITOR_TOOL = {
       picks: {
         type: "array",
         description:
-          "Ordered shortlist of 10–15 story_ids with rank and reason.",
+          "Ordered shortlist of 12–18 story_ids with rank and reason; roughly 15 ship.",
         items: {
           type: "object",
           properties: {

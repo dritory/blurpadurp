@@ -189,6 +189,82 @@ describe("diversifyPicks — whole-issue cap", () => {
   });
 });
 
+describe("diversifyPicks — the reserve", () => {
+  // The editor is asked for more than ships (12-18 against a 15 issue)
+  // so that dropping a crowding pick costs a slot rather than a section.
+  // The pool is never thin enough for "silence is a feature" to be the
+  // right justification for a short issue.
+  test("a cluster cut is absorbed by the reserve, not by the issue", () => {
+    // Six picks on one story plus nine others — 15 from the editor.
+    const picks = [
+      ...[101, 102, 103, 104, 105, 106].map((id, i) => pick(i + 1, id)),
+      ...[201, 301, 401, 501, 601, 701, 801, 901, 1001].map((id, i) =>
+        pick(7 + i, id),
+      ),
+    ];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 4,
+      maxPerSectionPerCluster: 1,
+      maxPicks: 12,
+    });
+    // Two picks cut for crowding, three trimmed off the tail — and the
+    // issue still ships a full 12 with all three sections populated.
+    expect(res.picks).toHaveLength(12);
+    const tail = res.picks.filter(
+      (p) => sectionOf(res, p.lead_story_id) === "worth_watching",
+    );
+    expect(tail.length).toBeGreaterThan(0);
+  });
+
+  test("without a reserve the tail section is what disappears", () => {
+    // The regression this guards: same shape, no spare picks. Twelve in,
+    // ten out, Worth watching empty. Kept as a test so the reason the
+    // reserve exists stays visible.
+    const picks = [
+      ...[101, 102, 103, 104, 105, 106].map((id, i) => pick(i + 1, id)),
+      ...[201, 301, 401, 501, 601, 701].map((id, i) => pick(7 + i, id)),
+    ];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 4,
+      maxPerSectionPerCluster: 1,
+    });
+    expect(res.picks).toHaveLength(10);
+    expect(
+      res.picks.filter(
+        (p) => sectionOf(res, p.lead_story_id) === "worth_watching",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("the trim comes off the tail, never out of the spread", () => {
+    const picks = Array.from({ length: 14 }, (_, i) =>
+      pick(i + 1, (i + 1) * 100 + 1),
+    );
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 4,
+      maxPerSectionPerCluster: 1,
+      maxPicks: 11,
+    });
+    expect(res.picks).toHaveLength(11);
+    // The first eleven of the editor's order survive; the last three go.
+    expect(res.picks.map((p) => p.lead_story_id)).toEqual(
+      picks.slice(0, 11).map((p) => p.lead_story_id),
+    );
+    expect(res.cuts.map((c) => c.lead_story_id)).toEqual([1201, 1301, 1401]);
+  });
+
+  test("no trimming when the issue is already at or under size", () => {
+    const picks = [pick(1, 101), pick(2, 201), pick(3, 301)];
+    const res = diversifyPicks(picks, byHundreds, {
+      maxPicksPerCluster: 4,
+      maxPerSectionPerCluster: 1,
+      maxPicks: 15,
+    });
+    expect(res.picks).toHaveLength(3);
+    expect(res.cuts).toEqual([]);
+  });
+});
+
 describe("diversifyPicks — over-cap placements", () => {
   test("an over-cap placement is routine, not a quiet-week signal", () => {
     // Two five-wide sections need ten picks before the tail sees

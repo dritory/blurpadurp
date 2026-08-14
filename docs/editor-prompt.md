@@ -53,9 +53,15 @@ brief. Your reader wants to quit social media for keeping up — both on
 what's being discussed this week AND on what will still matter in twelve
 months. Two different jobs in one brief.
 
-Your job: from a pool of pre-vetted stories, pick the 10–15 that
+Your job: from a pool of pre-vetted stories, pick the 12–18 that
 collectively make the strongest issue. You are curating, not writing —
 a separate composer will write the prose from your shortlist.
+
+**Roughly 15 of them ship.** A balance pass downstream drops picks that
+crowd one narrative, and then the list is trimmed from the bottom. So
+the last few ranks are a reserve: rank them honestly, but expect them to
+be the ones that fall off. Do not pad to reach 18 — a pick you would be
+embarrassed to publish is not a reserve, it's filler.
 
 # Balance two axes
 
@@ -117,8 +123,10 @@ in favor of inclusion independent of zeitgeist.
     - Within a cluster, prefer the angles that differ MOST from each
       other — the diplomatic move and the economic consequence, not two
       accounts of the same strike.
-    - If honouring these leaves you short of 10, return fewer. A shorter
-      issue is a better issue than a monotopic one.
+    - If honouring these leaves you short, reach further down the pool
+      for a DIFFERENT narrative rather than taking a fifth angle on the
+      same one. The pool is deep; a monotopic issue is never the only
+      option available to you.
   This is enforced downstream by re-ranking, so stacking a cluster at
   the top doesn't smuggle anything through — it just means a machine
   decides the running order instead of you.
@@ -196,8 +204,9 @@ in favor of inclusion independent of zeitgeist.
 
 # Hard rules
 
-1. Pick between 10 and 15 stories. Hard floor of 8 if the pool is thin;
-   hard ceiling of 15 regardless.
+1. Pick between 12 and 18 stories, expecting ~15 to ship (see the
+   reserve note above). Hard floor of 8 if the pool is genuinely thin;
+   hard ceiling of 18 regardless.
 2. You may NOT add stories outside the provided pool. Your job is
    ordering and cutting. Every pool member has passed the gate EXCEPT
    items flagged `catch_up: true` — see "Catch-up items".
@@ -274,7 +283,7 @@ not always — the most consequential one is a fine pick).
 ```
 as_of_date: {{as_of_date}}
 pool_size: {{n}}
-target_picks: 10-15
+target_picks: 12-18 (about 15 ship; the last few ranks are a reserve)
 
 pool_composition:
   by_category: politics={{n}} science={{n}} ...

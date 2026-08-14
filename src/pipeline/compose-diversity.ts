@@ -71,6 +71,11 @@ export interface DiversityOptions {
   /** Bounded section capacities, in order. Defaults to the partition
    *  module's thresholds. */
   sectionSizes?: readonly number[];
+  /** Ship at most this many picks. The editor is asked for more than
+   *  ships so that dropping a crowding pick costs the issue a slot
+   *  rather than a whole section — this is where the surplus is spent.
+   *  Applied LAST, after the spread, so it only ever trims the tail. */
+  maxPicks?: number;
 }
 
 export interface DiversityCut {
@@ -169,6 +174,19 @@ export function diversifyPicks(
   // Worth watching: the unbounded tail takes whatever is left, in order.
   ordered.push(...queue);
 
+  // Trim to the shipping size. Last, and off the tail only: the reserve
+  // exists to absorb the cuts above, so anything still surplus after
+  // those is the lowest-ranked Worth-watching one-liner and nothing the
+  // spread depends on.
+  const trimmed =
+    opts.maxPicks !== undefined && ordered.length > opts.maxPicks
+      ? ordered.splice(opts.maxPicks).map((p) => ({
+          lead_story_id: p.lead_story_id,
+          cluster_key: keyFor(p),
+          reason: `trimmed to the ${opts.maxPicks}-pick issue size`,
+        }))
+      : [];
+
   // Which picks ended up in a later section than pure rank order would
   // have put them. Reported for the compose log, not acted on.
   const movedDown: number[] = [];
@@ -185,7 +203,7 @@ export function diversifyPicks(
 
   return {
     picks: ordered.map((p, i) => ({ ...p, rank: i + 1 })),
-    cuts,
+    cuts: [...cuts, ...trimmed],
     movedDown,
     overCap,
   };
