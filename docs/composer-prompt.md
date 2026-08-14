@@ -1,7 +1,19 @@
-# Composer prompt v0.10
+# Composer prompt v0.11
 
-Version tag: `composer-v0.10`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.11`. Pre-1.0 — schema and behavior may change
 freely.
+
+v0.11 gives the composer reader-memory at issue level. `theme_timelines`
+(v0.3) says what has *happened* under a theme; it never said what the
+reader had already been *told*. So a running thread got re-introduced
+from scratch week after week, its background re-explained each time, and
+the opener reached for the same pivot shape. New input `recent_issues` —
+the last few issues with what each led on and the one-liners it carried
+— plus rules in "Continuity": don't re-explain settled background, refer
+back as a callback rather than as news, don't recycle the last opener's
+shape, and say what actually changed when a story returns. The companion
+editor change (v0.6) stops the same story being *picked* repeatedly;
+this stops it being *written* repeatedly.
 
 v0.10 handles catch-up stories. A catch-up run adds items older than the
 brief's own week (see the editor prompt), and everything in this prompt
@@ -656,6 +668,27 @@ context — **reference, never re-render.**
   for a single new development.
 - Never repeat framing from prior entries — the reader read last week.
 
+`recent_issues` is the same reader-memory one level up: the last few
+issues as ISSUES, newest first, with the themes each one led on and the
+one-liners it already told. `theme_timelines` says what has happened;
+`recent_issues` says what the reader has already been told. Use it:
+
+- **Don't re-explain settled background.** If a prior issue laid out why
+  the strait matters, this week's paragraph starts from the development,
+  not from the primer. One clause of reminder is generous.
+- **Reference an earlier issue as a callback, never as news.** "The
+  shipping ban we covered a fortnight ago" — not a fresh introduction of
+  a thing the reader already has.
+- **Don't recycle the last opener's shape.** If last week's opener
+  pivoted on "Elsewhere, less visibly…", this week's does not. The
+  reader notices a formula faster than they notice a topic.
+- **A returning story needs a reason to return, in the prose.** Say what
+  changed. If the honest answer is "nothing much, but it continues",
+  that's a short sentence, not a paragraph.
+- `already_told` is the scorer's one-liner, not the sentence you wrote
+  last week — treat it as "the reader knows roughly this", not as text
+  to avoid word-for-word.
+
 ## Catch-up items
 
 Some stories arrive flagged `catch_up: true` with an `age_days` well
@@ -823,6 +856,20 @@ skip items, or reorder within a section.
       ...
 
   - ...
+
+# recent_issues (what the reader already received, newest first. Don't
+# re-explain background these gave, don't recycle their opener framing,
+# reference them as callbacks and never as news)
+
+  - {{YYYY-MM-DD}} ({{n}} weeks ago) "{{issue title}}"
+    led with: {{theme_name}} | {{theme_name}}
+      already told: {{one_liner}}
+      already told: {{one_liner}}
+      ...
+
+  - ...
+
+  {{omitted entirely when nothing has been published yet}}
 
 Return your JSON object now.
 ```

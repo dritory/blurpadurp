@@ -55,9 +55,14 @@ is how the drift hid last time.
   (mig 049) — cost is no longer the binding constraint. Progressive
   scoring (cheap prefilter → expensive final) is disabled by default
   — flip `scorer.prefilter_model_id` in config to turn on.
-- **editor** runs the editor model to curate 10–15 picks from the
+- **editor** runs the editor model to curate 12–18 picks from the
   gated pool (`docs/editor-prompt.md`). Sees a pre-computed `themes`
-  digest that flags arc candidates structurally.
+  digest that flags arc candidates structurally, the `narrative_clusters`
+  digest (which themes are one running story — mig 075), and
+  `recent_coverage` (what the last three issues told the reader).
+  Its output is **not** taken as final: `diversifyPicks` applies the
+  cluster caps afterwards, because a prompt asking for balance had
+  demonstrably not been enough.
 - **compose** partitions picks into four fixed sections server-side,
   then runs the composer model to write prose
   (`docs/composer-prompt.md`).
@@ -214,6 +219,8 @@ medium**. This shapes partition choices:
 | One forgotten draft silently stalls the whole pipeline (`runCompose` bails while any `is_draft` row exists, so every later compose no-ops with only a log line — this ate three weeks of briefs once, and a blocked pipeline looked exactly like a quiet one) | The autopublish sweep: a draft that can't sit forever can't block forever. Backed by the `/admin/review` banner, which states the actual publish time for an open draft instead of leaving the deadline implicit | `src/pipeline/autopublish.ts`, `src/views/admin-review.tsx` |
 | A reviewer added after the draft sweep (or one whose send errored) never gets the draft — the sweep's `NOT EXISTS` checks only that a `dispatch_log` row exists, not that it succeeded | "Send draft to reviewers" on `/admin/review/:id` → `resendDraftToReviewers`, which targets reviewers with no *settled* send. `DRAFT_SEND_SETTLED` must list statuses from **both** writers — the dispatch stage (`sent`/`noop`) and the Resend webhook (`delivered`/`delayed`), which rewrites rows by `provider_message_id`. Omitting the webhook's pair re-mails everyone whose delivery was confirmed | `src/pipeline/dispatch.ts`, `src/pipeline/dispatch-resend.test.ts` |
 | Discarding a draft that reviewers were emailed fails on `dispatch_log_issue_id_fkey` — and discard is the *recovery* path for a stalled pipeline, so the blockage becomes unclearable | `discardDraft` drops the draft's `dispatch_log` rows in the same transaction, behind an `EXISTS (… is_draft)` guard so a wrong id can't wipe a published issue's audit trail. `dispatch_log.issue_id` has no `ON DELETE CASCADE`, unlike `issue_pick`/`issue_annotation` | `src/pipeline/draft.ts`, `test/integration/discard-draft.test.ts` |
+| One narrative saturates the brief. A dominant story doesn't arrive as one theme — "US–Iran escalation", "Hormuz shipping" and "oil price spike" are three themes by every measure the system had, all legitimately high-composite, and one piece of news to the reader. Nothing capped that, so an entire conversation section shipped as the same story told four ways | Themes are clustered one level up by centroid cosine (0.72 — deliberately between the 0.70 story→theme attach bar and the 0.85 theme→theme **merge** bar, so clusters group without merging; complete linkage, so a bridge theme can't chain two unrelated narratives). The fix is **placement, not exclusion**: `compose.max_per_section_per_cluster` (1) gives a narrative one slot per section and pushes its surplus **down** into the next one — one item up top and one in Worth knowing reads as a story the brief is following, five up top reads as a brief with one subject, and the cluster's best-ranked pick still leads either way. `compose.max_picks_per_cluster` (4) is a whole-issue backstop that cuts, because Worth watching is an unbounded tail and a nine-story cluster would otherwise ride the spread down and ship seven one-liners on one subject; `editor.pool_max_cluster_fraction` caps admission before the editor ever sees it. Those cuts used to shorten the issue, justified by invariant 1 — **wrong invariant**: silence is about a week with nothing worth saying, and this pool is never that thin. What it actually did was kill Worth watching on exactly the weeks the caps fire. The editor is now asked for 12–18 against `compose.max_issue_picks` (15), so the tail ranks are a reserve the cut spends and a dropped pick costs a slot, not a section. The synthesis opener groups by cluster too, or the one paragraph everyone reads names the same news three ways. Sections are fixed-size (rank-based routing), so a section that can't be filled under the cap is filled over it rather than left short; `diversifyPicks` reports those as a **count**, not a flag, because two five-wide sections need ten picks and the editor targets 10–15 — one or two over-cap placements is an ordinary week, and only a count near the issue size means the week really was one story | `src/shared/theme-cluster.ts`, `src/pipeline/compose-diversity.ts`, mig 075 |
+| The brief had no memory of itself. Per theme it knew a count (`n_prior_publications`) and a timeline of story one-liners — neither answers "have we already told the reader this?" — so a running story got re-picked and re-explained week after week, each issue defensible and the sequence repetitive | `loadRecentCoverage` reads the last `compose.recent_coverage_issues` (3) published issues out of `issue_pick`, which has recorded (issue, story, section, rank) all along — no new write path. Editor gets `recent_coverage` plus per-theme `recent_issue_count` / `last_covered_summary`; composer gets `recent_issues` (what each issue led on and already told). Note the limit: it carries the scorer's one-liner, not the prose the reader actually read, so it answers "did we cover this?" and not "did we already make this exact observation?" | `src/shared/recent-coverage.ts`, mig 075 |
 | Same story appears in consecutive issues | `persistIssue` flips `published_to_reader = true` | `src/pipeline/compose.ts` |
 | Shrug items recur across runs | Shrug IDs included in the published-set | `src/pipeline/compose.ts` |
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |
@@ -250,6 +257,20 @@ See `docs/tuning.md`. Short version:
   Basic-auth realm, no logout button.
 - **`BLURPADURP_BLOCK_CRAWLERS=1`** flips robots.txt to Disallow-all
   — for stage-2 hidden deploys.
+
+## Locales
+
+The site chrome is English (unprefixed) + Norwegian bokmål (`/no`).
+**The brief body is not translated** — it's composer output, and every
+Norwegian page that can show one says so rather than letting the reader
+find out. Strings live in `src/shared/i18n.ts`, one typed object per
+locale, so a missing key is a compile error. Three things to know before
+touching it: locale is never negotiated from `Accept-Language` (reader
+pages sit behind an edge cache keyed on path alone, so varying by header
+hands the wrong language to whoever asks second); the R2 key map has to
+be changed in `static-export.tsx` **and** `infra/worker/src/index.ts`;
+and a subscriber's language lives on their row (mig 076) because a link
+clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
 
 ## When in doubt
 
@@ -291,10 +312,13 @@ See `docs/tuning.md`. Short version:
 - Scorer rubric + prompt: `docs/scoring.md`, `docs/scoring-prompt.md`
 - Editor curation rules + prompt: `docs/editor-prompt.md`
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
+- Narrative clustering + diversity caps: `src/shared/theme-cluster.ts` (maths), `src/shared/theme-cluster-store.ts` (centroid load), `src/pipeline/compose-diversity.ts` (caps)
+- Prior-issue memory: `src/shared/recent-coverage.ts`
 - Draft checker (gloss first-use today; task-tagged for more later): deterministic `src/shared/gloss-lint.ts` + LLM `src/ai/checker.ts`, types in `src/shared/check-schema.ts`, automatic fix loop in `src/shared/auto-fix.ts`
 - Dispatch design + live behavior: `docs/dispatch.md`
 - Storage tiering + cold-storage plan: `docs/storage.md`
 - Scaling reads (edge Worker + static export to R2): `docs/scaling.md`
+- Locales (site chrome EN + NB; the brief is NOT translated): `docs/i18n.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`

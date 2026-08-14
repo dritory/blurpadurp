@@ -4,7 +4,8 @@ import type { Hono, } from "hono";
 
 import { db } from "../db/index.ts";
 import { loadPipelineStatus } from "./status.ts";
-import { servePage } from "../shared/page-cache.ts";
+import { pageCacheKey, servePage } from "../shared/page-cache.ts";
+import { LOCALES, LOCALE_PREFIX } from "../shared/i18n.ts";
 import { verifyToken } from "../shared/tokens.ts";
 import { About } from "../views/about.tsx";
 import { Archive, } from "../views/archive.tsx";
@@ -66,49 +67,70 @@ function renderHtml(node: unknown): Promise<string> {
   ).then(String);
 }
 
-app.get("/", async (c) => {
-  // Served from the R2 page cache (busted on publish) so crawler/reader
-  // traffic doesn't wake Neon between weekly issues. See page-cache.ts.
-  const body = await servePage("home", async () => {
-    const home = await loadHome();
-    return renderHtml(<Home home={home} flash={null} />);
+// Reader pages are registered once per locale: the default locale on
+// its bare path (so no existing URL moves) and each other locale under
+// its prefix. The handler closes over its locale rather than sniffing
+// the path, so a page can't render in one language and link in another.
+//
+// Locale is NOT negotiated from Accept-Language. These pages are served
+// from a shared edge cache keyed on path alone — varying the body by a
+// request header behind that cache hands the wrong language to whoever
+// asks second. The prefix in the URL is the whole story.
+for (const locale of LOCALES) {
+  const prefix = LOCALE_PREFIX[locale];
+  const root = prefix === "" ? "/" : prefix;
+
+  app.get(root, async (c) => {
+    // Served from the R2 page cache (busted on publish) so crawler/reader
+    // traffic doesn't wake Neon between weekly issues. See page-cache.ts.
+    const body = await servePage(pageCacheKey(locale, "home"), async () => {
+      const home = await loadHome();
+      return renderHtml(<Home home={home} flash={null} locale={locale} />);
+    });
+    return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
   });
-  return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
-});
 
-app.get("/subscribe", (c) => {
-  const flash = parseFlash(
-    c.req.query("subscribed"),
-    c.req.query("error"),
-    c.req.query("already"),
-  );
-  return c.html(<SubscribePage flash={flash} />);
-});
-
-app.get("/archive", async (c) => {
-  const body = await servePage("archive", async () => {
-    const issues = await loadArchive();
-    return renderHtml(<Archive issues={issues} />);
+  app.get(`${prefix}/subscribe`, (c) => {
+    const flash = parseFlash(
+      c.req.query("subscribed"),
+      c.req.query("error"),
+      c.req.query("already"),
+      locale,
+    );
+    return c.html(<SubscribePage flash={flash} locale={locale} />);
   });
-  return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
-});
 
-app.get("/issue/:id", async (c) => {
-  const id = Number(c.req.param("id"));
-  if (!Number.isFinite(id) || id <= 0) return c.notFound();
-  // Published issues are immutable, so a longer TTL is safe; recompose
-  // is rare and admin-driven.
-  const body = await servePage(
-    `issue-${id}`,
-    async () => {
-      const issue = await loadIssue(id);
-      return issue === null ? null : renderHtml(<IssuePage issue={issue} />);
-    },
-    6 * 3600,
-  );
-  if (body === null) return c.notFound();
-  return c.html(body, 200, { "Cache-Control": "public, max-age=3600" });
-});
+  app.get(`${prefix}/archive`, async (c) => {
+    const body = await servePage(pageCacheKey(locale, "archive"), async () => {
+      const issues = await loadArchive();
+      return renderHtml(<Archive issues={issues} locale={locale} />);
+    });
+    return c.html(body ?? "", 200, { "Cache-Control": "public, max-age=600" });
+  });
+
+  app.get(`${prefix}/issue/:id`, async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isFinite(id) || id <= 0) return c.notFound();
+    // Published issues are immutable, so a longer TTL is safe; recompose
+    // is rare and admin-driven.
+    const body = await servePage(
+      pageCacheKey(locale, `issue-${id}`),
+      async () => {
+        const issue = await loadIssue(id);
+        return issue === null
+          ? null
+          : renderHtml(<IssuePage issue={issue} locale={locale} />);
+      },
+      6 * 3600,
+    );
+    if (body === null) return c.notFound();
+    return c.html(body, 200, { "Cache-Control": "public, max-age=3600" });
+  });
+
+  app.get(`${prefix}/about`, (c) => c.html(<About locale={locale} />));
+
+  app.get(`${prefix}/privacy`, (c) => c.html(<Privacy locale={locale} />));
+}
 
 // Draft preview for non-admin reviewers. Authorized via a signed
 // magic-link token (kind=draft-preview) generated from the admin
@@ -181,10 +203,6 @@ app.post("/draft/:id/notes", async (c) => {
     .execute();
   return c.redirect(`${back}&noted=1#notes`, 303);
 });
-
-app.get("/about", (c) => c.html(<About />));
-
-app.get("/privacy", (c) => c.html(<Privacy />));
 
 app.get("/theme/:id", async (c) => {
   const id = Number(c.req.param("id"));

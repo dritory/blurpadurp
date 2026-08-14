@@ -1,7 +1,11 @@
-// Editor stage: takes 30–80 gate-passers, returns a 10–15 item shortlist
+// Editor stage: takes 30–80 gate-passers, returns a 12–18 item shortlist
 // with reasons. Curation is fuzzy — we want LLM judgment here, not a sort
 // key — so the prompt asks for topic balance, duplicate collapse, and
 // under-covered-angle preference. Composer writes from this shortlist.
+//
+// It asks for more than ships. compose-diversity.ts drops picks that
+// crowd one narrative and then trims from the bottom, so the tail ranks
+// are a reserve — see the "reserve" note in docs/editor-prompt.md.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { readFile } from "node:fs/promises";
@@ -146,7 +150,13 @@ function renderUserMessage(input: EditorInput): string {
   const lines: string[] = [];
   lines.push(`as_of_date: ${input.as_of_date}`);
   lines.push(`pool_size: ${input.stories.length}`);
-  lines.push(`target_picks: 10-15`, "");
+  // Deliberately more than ship. The downstream balance pass drops picks
+  // that crowd one narrative, and with a rich pool a dropped pick should
+  // cost the issue a slot, not a whole section.
+  lines.push(
+    `target_picks: 12-18 (about 15 ship; the last few ranks are a reserve)`,
+    "",
+  );
 
   // Pool composition: the shape the editor is working with. Surfaces
   // the two cohorts where editorial judgment matters most — "quiet
@@ -175,6 +185,54 @@ function renderUserMessage(input: EditorInput): string {
   );
   lines.push("");
 
+  // Narrative clusters: themes that are arcs of ONE running story. This
+  // is the structural answer to a brief whose whole lead section was the
+  // same war told four ways — the editor could previously only see four
+  // separate high-composite themes and had no signal they were one.
+  if (input.narrative_clusters.length > 0) {
+    lines.push(
+      "narrative_clusters (themes below that are arcs of ONE running story):",
+    );
+    for (const c of input.narrative_clusters) {
+      lines.push(
+        `  - ${c.cluster_key}: ${c.n_stories} stories across ${c.theme_ids.length} themes — ${c.theme_names.join(" | ")}`,
+      );
+      lines.push(`    theme_ids: [${c.theme_ids.join(", ")}]`);
+    }
+    lines.push(
+      "    ↑ Treat each cluster as ONE story for balance. Picking three of these",
+      "      is three angles on the same news, not three stories.",
+    );
+    lines.push("");
+  }
+
+  // Prior-issue memory. Without it the editor re-picks a running story
+  // week after week, each pick individually defensible.
+  if (input.recent_coverage.length > 0) {
+    lines.push("recent_coverage (what the reader already received):");
+    for (const issue of input.recent_coverage) {
+      const when =
+        issue.weeks_ago === 0
+          ? "this week"
+          : issue.weeks_ago === 1
+            ? "1 week ago"
+            : `${issue.weeks_ago} weeks ago`;
+      lines.push(
+        `  - ${issue.published_at} (${when}) "${issue.title ?? "untitled"}"`,
+      );
+      for (const item of issue.items) {
+        const theme =
+          item.theme_name !== null ? ` [${item.theme_name}]` : "";
+        lines.push(`      ${item.section}${theme}: ${item.summary}`);
+      }
+    }
+    lines.push(
+      "    ↑ A theme here has already been explained to the reader. Pick it again",
+      "      only for genuine development, and never for a recap.",
+    );
+    lines.push("");
+  }
+
   // Themes digest first — multi-story themes with day_span >= 2 are
   // obvious arc candidates. Gives the model structural visibility into
   // which stories belong together across the week.
@@ -187,6 +245,7 @@ function renderUserMessage(input: EditorInput): string {
       const flags: string[] = [];
       if (t.story_ids.length >= 2 && t.day_span >= 2) flags.push("← arc");
       if (t.is_long_running) flags.push("★ long-running");
+      if (t.recent_issue_count >= 2) flags.push("⟳ covered repeatedly");
       if (t.trajectory === "rising") flags.push("↑ rising");
       if (t.trajectory === "falling") flags.push("↓ falling");
       if (t.wikipedia_corroborated) flags.push("⊕ wikipedia");
@@ -211,6 +270,14 @@ function renderUserMessage(input: EditorInput): string {
       lines.push(
         `    trajectory: ${t.trajectory}  n_prior_publications: ${t.n_prior_publications}  age_days: ${t.age_days}`,
       );
+      if (t.cluster_key !== null) {
+        lines.push(`    narrative_cluster: ${t.cluster_key}`);
+      }
+      if (t.recent_issue_count > 0) {
+        lines.push(
+          `    in ${t.recent_issue_count} of the last ${input.recent_coverage.length} issues; last on ${t.last_covered_date}: "${t.last_covered_summary ?? ""}"`,
+        );
+      }
       lines.push("");
     }
   }
@@ -274,7 +341,7 @@ const EDITOR_TOOL = {
       picks: {
         type: "array",
         description:
-          "Ordered shortlist of 10–15 story_ids with rank and reason.",
+          "Ordered shortlist of 12–18 story_ids with rank and reason; roughly 15 ship.",
         items: {
           type: "object",
           properties: {

@@ -166,6 +166,11 @@ export interface Database {
     // When the last confirmation email was sent. Gates the per-recipient
     // resend cooldown in POST /subscribe (mig 061). Null = never sent.
     last_confirmation_sent_at: Date | null;
+    // Language for everything we send this address and for the
+    // preferences page they reach by signed link (mig 076). The
+    // subscribe form carries it; there is no URL to read it from once
+    // the reader is in their inbox. 'en' | 'nb'.
+    locale: Generated<string>;
   };
 
   push_subscription: {

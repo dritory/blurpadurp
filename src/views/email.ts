@@ -7,6 +7,19 @@
 // The brief template wraps whatever composed_html the composer emitted
 // (<h2>, <p>, <a>, <strong>, <em>, <span class="shrug-tag">,
 // <span class="cite">) and adds header, issue title, footer.
+//
+// The wrapper is localized (mig 076); the composed body inside it is
+// not. That asymmetry is deliberate and documented in shared/i18n.ts.
+
+import {
+  DATE_LOCALE,
+  DEFAULT_LOCALE,
+  HTML_LANG,
+  fill,
+  type Locale,
+  localizePath,
+  t,
+} from "../shared/i18n.ts";
 
 export interface BriefEmailCtx {
   brandUrl: string; // e.g. https://blurpadurp.com — no trailing slash
@@ -17,11 +30,17 @@ export interface BriefEmailCtx {
   date: Date;
   issueHtml: string;
   issueMarkdown: string;
+  // Subscriber's language (email_subscription.locale, mig 076). Wraps
+  // the brief in their chrome — the BODY is still the composer's
+  // English prose, which is why the language of the frame is the only
+  // thing this changes.
+  locale?: Locale;
 }
 
 export interface ConfirmEmailCtx {
   brandUrl: string;
   confirmUrl: string;
+  locale?: Locale;
 }
 
 export interface DraftReviewEmailCtx {
@@ -53,8 +72,8 @@ function hostOf(u: string): string {
   }
 }
 
-function fmtDate(d: Date): string {
-  return d.toLocaleDateString("en-US", {
+function fmtDate(d: Date, locale: Locale = DEFAULT_LOCALE): string {
+  return d.toLocaleDateString(DATE_LOCALE[locale], {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -88,9 +107,13 @@ const EMAIL_CSS = `
   .cta-btn { display: inline-block; margin: 18px 0; padding: 12px 22px; background: #1a1a1a; color: #faf8f3; text-decoration: none; font-family: ${SANS}; font-weight: 600; font-size: 15px; }
 `;
 
-function docShell(subject: string, body: string): string {
+function docShell(
+  subject: string,
+  body: string,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${HTML_LANG[locale]}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -106,21 +129,30 @@ ${body}
 }
 
 export function renderBriefEmail(ctx: BriefEmailCtx): Rendered {
-  const dateStr = fmtDate(ctx.date);
-  const subject = ctx.title !== null ? ctx.title : `Blurpadurp — ${dateStr}`;
+  const locale = ctx.locale ?? DEFAULT_LOCALE;
+  const e = t(locale).email;
+  const dateStr = fmtDate(ctx.date, locale);
+  const subject =
+    ctx.title !== null
+      ? ctx.title
+      : fill(e.briefSubjectFallback, { date: dateStr });
   const titleHtml =
     ctx.title !== null ? `<h1 class="title">${esc(ctx.title)}</h1>` : "";
-  const privacyUrl = `${ctx.brandUrl}/privacy`;
+  const privacyUrl = `${ctx.brandUrl}${localizePath(locale, "/privacy")}`;
+  const brandHref = `${ctx.brandUrl}${localizePath(locale, "/")}`;
+  const whyHtml = fill(e.briefWhyHtml, {
+    link: `<a href="${esc(brandHref)}">${esc(hostOf(ctx.brandUrl))}</a>`,
+  });
   const body = `
 <p class="brand">Blurpadurp</p>
 <p class="meta">${esc(dateStr)}</p>
 ${titleHtml}
 ${ctx.issueHtml}
 <div class="footer">
-  <p>You're receiving this because you subscribed at <a href="${esc(ctx.brandUrl)}">${esc(hostOf(ctx.brandUrl))}</a>. One brief a week.</p>
-  <p><a href="${esc(ctx.unsubscribeUrl)}">Unsubscribe</a> · <a href="${esc(ctx.manageUrl)}">Preferences</a> · <a href="${esc(ctx.issueUrl)}">Read on web</a> · <a href="${esc(privacyUrl)}">Privacy</a></p>
+  <p>${whyHtml}</p>
+  <p><a href="${esc(ctx.unsubscribeUrl)}">${esc(e.unsubscribe)}</a> · <a href="${esc(ctx.manageUrl)}">${esc(e.preferences)}</a> · <a href="${esc(ctx.issueUrl)}">${esc(e.readOnWeb)}</a> · <a href="${esc(privacyUrl)}">${esc(e.privacy)}</a></p>
 </div>`;
-  const html = docShell(subject, body);
+  const html = docShell(subject, body, locale);
   const text = [
     "BLURPADURP",
     dateStr,
@@ -129,9 +161,10 @@ ${ctx.issueHtml}
     ctx.issueMarkdown.trim(),
     "",
     "---",
-    `Read on web: ${ctx.issueUrl}`,
-    `Preferences: ${ctx.manageUrl}`,
-    `Unsubscribe: ${ctx.unsubscribeUrl}`,
+    fill(e.briefWhyText, { host: hostOf(ctx.brandUrl) }),
+    `${e.readOnWeb}: ${ctx.issueUrl}`,
+    `${e.preferences}: ${ctx.manageUrl}`,
+    `${e.unsubscribe}: ${ctx.unsubscribeUrl}`,
     "",
   ]
     .filter((s) => s !== null && s !== undefined)
@@ -191,33 +224,32 @@ ${titleHtml}
 }
 
 export function renderConfirmationEmail(ctx: ConfirmEmailCtx): Rendered {
-  const subject = "Confirm your Blurpadurp subscription";
+  const locale = ctx.locale ?? DEFAULT_LOCALE;
+  const e = t(locale).email;
+  const subject = e.confirmSubject;
+  const expiry = fill(e.confirmExpiry, { host: hostOf(ctx.brandUrl) });
   const body = `
 <p class="brand">Blurpadurp</p>
-<p class="meta">One tap and you're done.</p>
-<p>
-  Confirm your email so Blurp can send you the brief when there's something worth reading.
-  If you didn't subscribe, ignore this — nothing happens without a click.
-</p>
-<p><a class="cta-btn" href="${esc(ctx.confirmUrl)}">Confirm subscription</a></p>
+<p class="meta">${esc(e.confirmMeta)}</p>
+<p>${esc(e.confirmBody)}</p>
+<p><a class="cta-btn" href="${esc(ctx.confirmUrl)}">${esc(e.confirmCta)}</a></p>
 <p style="font-size: 13px; color: #6b6b6b;">
-  Or paste this into your browser:<br>
+  ${esc(e.confirmPasteHint)}<br>
   <a href="${esc(ctx.confirmUrl)}">${esc(ctx.confirmUrl)}</a>
 </p>
 <div class="footer">
-  <p>Link expires in 14 days. Subscribe again from ${esc(hostOf(ctx.brandUrl))} if it does.</p>
-  <p>No account, no password, no tracking.</p>
+  <p>${esc(expiry)}</p>
+  <p>${esc(e.confirmNoAccount)}</p>
 </div>`;
-  const html = docShell(subject, body);
+  const html = docShell(subject, body, locale);
   const text = [
     "BLURPADURP",
     "",
-    "Confirm your email so Blurp can send you the brief when there's something worth reading.",
-    "If you didn't subscribe, ignore this — nothing happens without a click.",
+    e.confirmBody,
     "",
-    `Tap to confirm: ${ctx.confirmUrl}`,
+    `${e.confirmCta}: ${ctx.confirmUrl}`,
     "",
-    "Link expires in 14 days.",
+    expiry,
   ].join("\n");
   return { subject, html, text };
 }

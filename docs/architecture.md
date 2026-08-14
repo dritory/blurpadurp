@@ -25,7 +25,7 @@ gate             (absolute threshold AND relative-to-theme threshold)
    │               │
    ↓               ↓
 editor         log + discard
-   │  (LLM curator: picks 10–15 from 30–80 passers —
+   │  (LLM curator: picks 12–18 from 30–80 passers, ~15 ship —
    │   topic balance, under-covered-angle preference,
    │   duplicate collapse; see docs/editor-prompt.md)
    ↓

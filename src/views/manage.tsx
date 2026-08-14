@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
+import { DEFAULT_LOCALE, fill, type Locale, t } from "../shared/i18n.ts";
 
 export interface Category {
   slug: string;
@@ -15,6 +16,10 @@ export interface ManageData {
   categoryMutes: string[];
   categories: Category[];
   flash: { kind: "ok" | "error"; msg: string } | null;
+  /** The subscriber's own language, from email_subscription.locale. The
+   *  page is reached by a signed link from an email, so there is no
+   *  locale in the URL to read — the row is the only source. */
+  locale: Locale;
 }
 
 function hhmm(t: string): string {
@@ -22,10 +27,15 @@ function hhmm(t: string): string {
   return t.length >= 5 ? t.slice(0, 5) : t;
 }
 
+// Category names come from the DB in English. Translating them would
+// mean a per-locale name column; until that exists the slug's English
+// name is shown in both languages, which is at least accurate.
 export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
   const muted = new Set(data.categoryMutes);
+  const locale: Locale = data.locale ?? DEFAULT_LOCALE;
+  const s = t(locale).manage;
   return (
-    <Layout title="Preferences — Blurpadurp" nav={null}>
+    <Layout title={s.pageTitle} nav={null} locale={locale}>
       <style
         dangerouslySetInnerHTML={{
           __html: `
@@ -45,11 +55,13 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
           `,
         }}
       />
-      <h2>Preferences</h2>
-      <p class="addr">
-        Signed in as <strong>{data.email}</strong> via a one-shot link. No
-        password, no login — the link is your authorization.
-      </p>
+      <h2>{s.heading}</h2>
+      <p
+        class="addr"
+        dangerouslySetInnerHTML={{
+          __html: fill(s.signedInHtml, { email: escapeHtml(data.email) }),
+        }}
+      />
       {data.flash !== null ? (
         <div class={`flash ${data.flash.kind === "error" ? "error" : ""}`}>
           {data.flash.msg}
@@ -59,7 +71,7 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
       <form class="manage-form" method="post" action={`/manage/${data.token}`}>
         <div class="field">
           <label class="fld" for="delivery_time_local">
-            Delivery time
+            {s.deliveryTime}
           </label>
           <input
             type="time"
@@ -68,12 +80,12 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
             value={hhmm(data.deliveryTimeLocal)}
             required
           />
-          <p class="hint">Local time to dispatch. Issues arrive within ±30 min.</p>
+          <p class="hint">{s.deliveryTimeHint}</p>
         </div>
 
         <div class="field">
           <label class="fld" for="timezone">
-            Timezone
+            {s.timezone}
           </label>
           <input
             type="text"
@@ -83,17 +95,10 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
             placeholder="e.g. Europe/Oslo"
             required
           />
-          <p class="hint">
-            IANA timezone name (America/New_York, Asia/Tokyo, UTC …). List:
-            {" "}
-            <a
-              href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
-              rel="noopener noreferrer"
-              target="_blank"
-            >
-              tz database
-            </a>.
-          </p>
+          <p
+            class="hint"
+            dangerouslySetInnerHTML={{ __html: s.timezoneHintHtml }}
+          />
         </div>
 
         <div class="field row-check">
@@ -104,14 +109,11 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
             value="1"
             checked={data.urgentOverride}
           />
-          <label for="urgent_override">
-            Send event-driven issues immediately, ignoring the delivery
-            window above.
-          </label>
+          <label for="urgent_override">{s.urgentLabel}</label>
         </div>
 
         <div class="field">
-          <label class="fld">Mute categories</label>
+          <label class="fld">{s.muteHeading}</label>
           <div class="cats">
             {data.categories.map((cat) => (
               <div class="row-check">
@@ -126,14 +128,11 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
               </div>
             ))}
           </div>
-          <p class="hint">
-            An issue is skipped for you only if <em>every</em> story in it
-            falls under a muted category.
-          </p>
+          <p class="hint" dangerouslySetInnerHTML={{ __html: s.muteHintHtml }} />
         </div>
 
         <div class="field">
-          <button type="submit">Save preferences</button>
+          <button type="submit">{s.save}</button>
         </div>
         <div class="field row-check">
           <input
@@ -142,13 +141,21 @@ export const ManagePage: FC<{ data: ManageData }> = ({ data }) => {
             name="unsubscribe"
             value="1"
           />
-          <label for="unsubscribe">
-            I want to unsubscribe from Blurpadurp. (Check this box and save
-            to stop receiving issues. One-click unsubscribe is also available
-            in the footer of every email.)
-          </label>
+          <label for="unsubscribe">{s.unsubscribeLabel}</label>
         </div>
       </form>
     </Layout>
   );
 };
+
+// The signed-in line is a translated template with the subscriber's own
+// address interpolated into it, and it renders unescaped so translations
+// can place the <strong>. The address is the only non-constant part, so
+// it gets escaped on the way in.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}

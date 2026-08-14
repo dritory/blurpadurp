@@ -1,6 +1,13 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "./layout.tsx";
 import { IssueBody, type IssueView, formatIssueDate, issueLabel } from "./issue.tsx";
+import {
+  DEFAULT_LOCALE,
+  fill,
+  type Locale,
+  localizePath,
+  t,
+} from "../shared/i18n.ts";
 
 export type Flash = { kind: "ok" | "error"; msg: string } | null;
 
@@ -21,23 +28,24 @@ export type HomeViewData =
     }
   | { kind: "empty" };
 
-export const Home: FC<{ home: HomeViewData; flash: Flash }> = ({
-  home,
-  flash,
-}) => (
-  <Layout title="Blurpadurp" nav="home">
+export const Home: FC<{
+  home: HomeViewData;
+  flash: Flash;
+  locale?: Locale;
+}> = ({ home, flash, locale = DEFAULT_LOCALE }) => (
+  <Layout title="Blurpadurp" nav="home" locale={locale} altPath="/">
     {flash !== null ? (
       <div class={`flash ${flash.kind === "error" ? "error" : ""}`}>
         {flash.msg}
       </div>
     ) : null}
     {home.kind === "issue" ? (
-      <IssueBody issue={home.issue} />
+      <IssueBody issue={home.issue} locale={locale} />
     ) : home.kind === "silent" ? (
-      <SilencePanel last={home.lastIssue} />
+      <SilencePanel last={home.lastIssue} locale={locale} />
     ) : (
       <p>
-        <em>No issues yet. Blurp hasn't found anything worth sending.</em>
+        <em>{t(locale).home.empty}</em>
       </p>
     )}
   </Layout>
@@ -50,28 +58,37 @@ const SilencePanel: FC<{
     publishedAt: Date;
     title: string | null;
   };
-}> = ({ last }) => (
-  <article class="issue-body">
-    <div class="issue-meta">{formatIssueDate(new Date())}</div>
-    <h1 class="issue-title">Quiet week.</h1>
-    <p>
-      <em>Blurp didn't find anything worth sending.</em>
-    </p>
-    <div style="margin-top: 3em;">
-      <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">
-        Last brief
+  locale: Locale;
+}> = ({ last, locale }) => {
+  const s = t(locale);
+  return (
+    <article class="issue-body">
+      <div class="issue-meta">{formatIssueDate(new Date(), locale)}</div>
+      <h1 class="issue-title">{s.home.quietTitle}</h1>
+      <p>
+        <em>{s.home.quietBody}</em>
       </p>
-      <p style="margin: 6px 0 0;">
-        <a href={`/issue/${last.id}`}>
-          {last.title ?? issueLabel(last)}
-        </a>
-      </p>
-      <p style="margin: 2px 0 0; color: var(--ink-soft); font-size: 14px;">
-        {formatIssueDate(last.publishedAt)}
-      </p>
-    </div>
-    <p style="margin-top: 1.5em;">
-      Older issues are in the <a href="/archive">archive</a>.
-    </p>
-  </article>
-);
+      <div style="margin-top: 3em;">
+        <p style="margin: 0; color: var(--ink-soft); font-family: var(--sans); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">
+          {s.home.lastBrief}
+        </p>
+        <p style="margin: 6px 0 0;">
+          <a href={localizePath(locale, `/issue/${last.id}`)}>
+            {last.title ?? issueLabel(last, locale)}
+          </a>
+        </p>
+        <p style="margin: 2px 0 0; color: var(--ink-soft); font-size: 14px;">
+          {formatIssueDate(last.publishedAt, locale)}
+        </p>
+      </div>
+      <p
+        style="margin-top: 1.5em;"
+        dangerouslySetInnerHTML={{
+          __html: fill(s.home.olderIssuesHtml, {
+            archive: localizePath(locale, "/archive"),
+          }),
+        }}
+      />
+    </article>
+  );
+};

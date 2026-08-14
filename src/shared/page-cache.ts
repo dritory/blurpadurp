@@ -12,10 +12,24 @@
 // best-effort — any error falls back to rendering from the DB, so the
 // pages work whether or not R2 is configured.
 
+import { DEFAULT_LOCALE, LOCALES, type Locale } from "./i18n.ts";
 import { getObjectStore } from "./object-store.ts";
 
 const PREFIX = "cache/";
 const DEFAULT_TTL_SEC = 3600; // 1h
+
+/**
+ * Cache key for a page in a locale. The default locale keeps its bare
+ * key ("home"), so existing cache objects stay valid across the deploy
+ * that adds a second language; other locales are namespaced.
+ *
+ * Locale MUST be part of the key. These bodies differ by language and
+ * nothing else, so a shared key would serve whichever language happened
+ * to render first to every reader until the TTL expired.
+ */
+export function pageCacheKey(locale: Locale, key: string): string {
+  return locale === DEFAULT_LOCALE ? key : `${locale}-${key}`;
+}
 
 interface CachedPage {
   builtAt: number;
@@ -60,11 +74,18 @@ export async function servePage(
 // they ride their TTL rather than this list.
 const PUBLIC_PAGE_KEYS = ["home", "archive", "feed", "sitemap"] as const;
 
+// Feed and sitemap have no per-locale variant (one feed, one sitemap
+// covering both languages), so only the HTML pages are busted per
+// locale. Busting a key that was never written is a no-op.
+const LOCALIZED_PAGE_KEYS = ["home", "archive"] as const;
+
 export async function bustPublicPages(): Promise<void> {
   const store = getObjectStore();
+  const keys = new Set<string>(PUBLIC_PAGE_KEYS);
+  for (const locale of LOCALES) {
+    for (const k of LOCALIZED_PAGE_KEYS) keys.add(pageCacheKey(locale, k));
+  }
   await Promise.all(
-    PUBLIC_PAGE_KEYS.map((k) =>
-      store.delete(`${PREFIX}${k}.json`).catch(() => {}),
-    ),
+    [...keys].map((k) => store.delete(`${PREFIX}${k}.json`).catch(() => {})),
   );
 }

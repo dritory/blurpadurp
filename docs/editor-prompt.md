@@ -1,6 +1,6 @@
-# Editor prompt v0.5
+# Editor prompt v0.6
 
-Version tag: `editor-v0.5`. Pre-1.0.
+Version tag: `editor-v0.6`. Pre-1.0.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
@@ -12,6 +12,20 @@ over-picks near-ties. The editor reasons over the whole pool at once:
 balancing topics, collapsing near-duplicates, preferring under-covered
 over widely-covered, breaking ties on editorial feel rather than by a
 rigid sort key.
+
+v0.6 adds the two signals that had been missing: `narrative_clusters`
+(which themes are arcs of ONE running story) and `recent_coverage` (what
+the last few issues actually told the reader). Both were reported as
+real failures off one issue — a lead section that was the same
+escalation told four ways under four theme names, and a brief that
+re-explains the same thread week after week.
+
+The cluster rule is about **placement**, not exclusion: a dominant
+narrative should be spread down the ranks (one per section) rather than
+stacked at the top. It is ALSO enforced in TypeScript after this stage
+runs (`src/pipeline/compose-diversity.ts`, which re-ranks); the rules
+below exist so the editor sets the running order itself, with judgment,
+rather than having a mechanical pass set it.
 
 v0.5 adds catch-up items. After a gap in publishing, stories older than
 the normal 7-day window would otherwise age out unpublished. A catch-up
@@ -39,9 +53,15 @@ brief. Your reader wants to quit social media for keeping up — both on
 what's being discussed this week AND on what will still matter in twelve
 months. Two different jobs in one brief.
 
-Your job: from a pool of pre-vetted stories, pick the 10–15 that
+Your job: from a pool of pre-vetted stories, pick the 12–18 that
 collectively make the strongest issue. You are curating, not writing —
 a separate composer will write the prose from your shortlist.
+
+**Roughly 15 of them ship.** A balance pass downstream drops picks that
+crowd one narrative, and then the list is trimmed from the bottom. So
+the last few ranks are a reserve: rank them honestly, but expect them to
+be the ones that fall off. Do not pad to reach 18 — a pick you would be
+embarrassed to publish is not a reserve, it's filler.
 
 # Balance two axes
 
@@ -84,6 +104,32 @@ in favor of inclusion independent of zeitgeist.
 - A healthy mix of topics. One dominant story (e.g. an active war) is
   fine, even expected. 4+ stories on the exact same angle is crowding
   — pick 2 representatives and trust the composer to group them.
+- **A narrative cluster counts as ONE story, not as its theme count.**
+  The `narrative_clusters` block lists sets of themes that are arcs of
+  the same running news. "US–Iran escalation", "Hormuz shipping" and
+  "oil price spike" are three themes and one story; a reader who gets
+  all three gets the same news three times with different headlines.
+  **Spread a cluster down the ranks, don't stack it at the top.** Your
+  ranks become sections: 1–5 lead the issue, 6–10 are Worth knowing,
+  11+ are Worth watching. So:
+    - At most **1 pick from any one cluster in each band of five.** Rank
+      its strongest angle at the top, put the next one in the 6–10 band,
+      the one after that in 11+.
+    - One item up top and one in Worth knowing reads as a story the
+      brief is following. Five up top reads as a brief with one subject.
+      Same picks — the difference is entirely where you rank them.
+    - At most **4 picks from any one cluster** across the whole
+      shortlist.
+    - Within a cluster, prefer the angles that differ MOST from each
+      other — the diplomatic move and the economic consequence, not two
+      accounts of the same strike.
+    - If honouring these leaves you short, reach further down the pool
+      for a DIFFERENT narrative rather than taking a fifth angle on the
+      same one. The pool is deep; a monotopic issue is never the only
+      option available to you.
+  This is enforced downstream by re-ranking, so stacking a cluster at
+  the top doesn't smuggle anything through — it just means a machine
+  decides the running order instead of you.
 - **Respect trajectory and long-running themes.** Each theme entry in
   the digest carries:
     - `trajectory`: `new` (first few stories) / `rising` (30d avg >
@@ -125,6 +171,27 @@ in favor of inclusion independent of zeitgeist.
   One arc counts as ONE pick toward the 10–15 target. A theme with
   `story_ids.length == 1` (no arc tag) is a natural single-pick
   candidate if it makes the cut.
+- **Don't tell the reader something they already read.** The
+  `recent_coverage` block is the last few issues, newest first, with
+  what each one ran and in which section. Each theme in the digest also
+  carries `recent_issue_count` and the one-liner it was last covered
+  with. Rules:
+    - A theme already covered earns a re-pick only on **genuine
+      development** — a decision taken, a number that moved, a
+      consequence that landed. "Still ongoing", "new statements", and
+      "further reaction" are not development.
+    - A theme in **all** of the recent issues needs a higher bar than a
+      fresh one of equal composite, not a lower one. Repetition is the
+      failure this brief is supposed to spare the reader; the algorithmic
+      feed already does keep-showing-you-the-same-thing well.
+    - `long_running=true` still overrides this — those threads are
+      operator-curated for weekly treatment. But even there, pick the
+      week's *development*, never a recap.
+    - Where a covered theme and a fresh one are genuinely tied, take the
+      fresh one. It's new information to the reader, which is the whole
+      product.
+    - Say so in `cuts_summary` when you dropped something as repetition.
+      That line is what tunes this next time.
 - Prefer the under-covered angle over the widely-covered one when
   quality is equal. If 5 outlets all have the "Iran threatens Hormuz"
   story but 1 has "Iran's internal hardline-reformist split," pick the
@@ -137,8 +204,9 @@ in favor of inclusion independent of zeitgeist.
 
 # Hard rules
 
-1. Pick between 10 and 15 stories. Hard floor of 8 if the pool is thin;
-   hard ceiling of 15 regardless.
+1. Pick between 12 and 18 stories, expecting ~15 to ship (see the
+   reserve note above). Hard floor of 8 if the pool is genuinely thin;
+   hard ceiling of 18 regardless.
 2. You may NOT add stories outside the provided pool. Your job is
    ordering and cutting. Every pool member has passed the gate EXCEPT
    items flagged `catch_up: true` — see "Catch-up items".
@@ -215,7 +283,7 @@ not always — the most consequential one is a fine pick).
 ```
 as_of_date: {{as_of_date}}
 pool_size: {{n}}
-target_picks: 10-15
+target_picks: 12-18 (about 15 ship; the last few ranks are a reserve)
 
 pool_composition:
   by_category: politics={{n}} science={{n}} ...
@@ -224,6 +292,21 @@ pool_composition:
     ↑ Worth-knowing candidates. Bias FOR these.
   loud_but_insignificant (zeitgeist≥4 AND structural≤2) — N stories: [...]
     ↑ Stenography trap. Pick 1–2 max.
+
+narrative_clusters (themes below that are arcs of ONE running story):
+  - {{cluster_key}}: {{n}} stories across {{n}} themes — {{name}} | {{name}}
+    theme_ids: [{{id}}, {{id}}, ...]
+    ↑ Treat each cluster as ONE story for balance.
+
+  {{omitted entirely when no cluster groups 2+ themes}}
+
+recent_coverage (what the reader already received):
+  - {{YYYY-MM-DD}} ({{n}} weeks ago) "{{issue title}}"
+      {{section}} [{{theme_name}}]: {{one-liner}}
+      ...
+    ↑ Already explained to the reader. Re-pick only for development.
+
+  {{omitted entirely when nothing has been published yet}}
 
 themes (pre-grouped by theme; arcs = themes with story_ids.length >= 2
 AND day_span >= 2):
@@ -235,7 +318,11 @@ AND day_span >= 2):
     window: {{YYYY-MM-DD}} → {{YYYY-MM-DD}}
     trajectory: {{new|rising|stable|falling}}
     n_prior_publications: {{n}}  age_days: {{n}}  long_running: {{bool}}
-    {{flags include "⊕ wikipedia" when wikipedia_corroborated=true}}
+    narrative_cluster: {{cluster_key}}   {{omitted when unclustered}}
+    in {{n}} of the last {{n}} issues; last on {{date}}: "{{one-liner}}"
+      {{omitted when the theme has never been published}}
+    {{flags include "⊕ wikipedia" when wikipedia_corroborated=true,
+      "⟳ covered repeatedly" when recent_issue_count >= 2}}
 
   - ...
 
@@ -279,6 +366,18 @@ Return your shortlist now.
   one paragraph; see docs/composer-prompt.md#arcs.
 - Consider letting the editor assign loose section labels ("Middle
   East," "Tech," "Something Weird") so composer doesn't infer them.
-- Next likely signal to surface: prior-issue memory ("we covered X
-  last week, pick continuation or novel") — partially addressed via
-  themes.n_prior_publications.
+- Prior-issue memory shipped in v0.6 (`recent_coverage` +
+  per-theme `recent_issue_count` / `last_covered_summary`). It carries
+  the scorer's one-liner for each prior pick, not the prose the reader
+  actually read — close enough to answer "have we covered this?", not
+  enough to answer "did we already make this exact observation?". If
+  repetition survives at the sentence level, the next step is feeding
+  the composer the prior paragraphs themselves, which costs real tokens.
+- Cluster thresholds (`editor.cluster_threshold`, 0.72) are the knob
+  most likely to need tuning. Too low and unrelated arcs get capped
+  together; too high and the saturation this was built to stop walks
+  straight through. `/admin/explore/editor` renders the clusters — check
+  there before changing the number.
+- Next likely signal to surface: geographic spread. Cluster caps fix
+  "one story four ways", but a pool that is entirely US politics across
+  four unrelated clusters still passes every check here.

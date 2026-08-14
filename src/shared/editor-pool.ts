@@ -8,6 +8,12 @@
 // and fill the pool with every member of the top themes until we hit
 // the configured pool_size. Stories without a theme become per-row
 // singleton buckets that compete on the same axis.
+//
+// Two soft caps keep one topic from owning the pool before the editor
+// ever sees it: a per-category one, and a tighter per-narrative-cluster
+// one (shared/theme-cluster.ts). The cluster cap is the load-bearing
+// one — a dominant story spawns several themes, all of them legitimately
+// high-composite, and ranking alone will happily admit every one.
 
 import { countTier1 } from "./source-tiers.ts";
 
@@ -18,6 +24,12 @@ export interface PoolRowShape {
   source_url: string | null;
   additional_source_urls: string[];
   category_slug?: string | null;
+  /** Narrative cluster this row's theme belongs to (see
+   *  shared/theme-cluster.ts). Several themes can share one — "US–Iran
+   *  escalation" and "Hormuz shipping" are distinct arcs of a single
+   *  story. Absent/null means unclustered, which is treated as a
+   *  cluster of one: we never assume an unmeasured theme is crowding. */
+  cluster_key?: string | null;
 }
 
 export interface PoolEntry<R extends PoolRowShape> {
@@ -31,6 +43,8 @@ export interface PoolBucket<R extends PoolRowShape> {
   rows: PoolEntry<R>[];
   maxComposite: number;
   tier1Total: number;
+  /** Narrative cluster of this bucket's theme, or null when unclustered. */
+  clusterKey: string | null;
 }
 
 export interface PoolResult<R extends PoolRowShape> {
@@ -54,6 +68,11 @@ export interface PoolOptions {
    *  1.0 (or greater) to disable capping. Stories without a category
    *  slug share a virtual "—" bucket. */
   maxCategoryFraction?: number;
+  /** Cap any single narrative cluster's themes to this fraction of
+   *  maxThemes. Tighter than the category cap by design: "politics" is
+   *  a filing drawer, a cluster is one running story, and five themes
+   *  off one story is what saturates a brief. 1.0 disables it. */
+  maxClusterFraction?: number;
   /** Story-count safety cap. Stops including more themes once the
    *  cumulative story count would exceed this — protects against a
    *  single runaway theme (50+ members) blowing up the editor input
@@ -96,6 +115,7 @@ export function selectEditorPool<R extends PoolRowShape>(
         rows: [a],
         maxComposite: composite,
         tier1Total: a.tier1,
+        clusterKey: a.row.cluster_key ?? null,
       });
     } else {
       existing.rows.push(a);
@@ -123,6 +143,11 @@ export function selectEditorPool<R extends PoolRowShape>(
   const perCategoryCount = new Map<string, number>();
   const storySafetyCap = opts.maxStorySafetyCap ?? 200;
 
+  const clusterFraction =
+    opts.maxClusterFraction !== undefined ? opts.maxClusterFraction : 1.0;
+  const perClusterCap = Math.ceil(maxThemes * clusterFraction);
+  const perClusterCount = new Map<string, number>();
+
   for (const bucket of ranked) {
     if (included.length >= maxThemes) {
       excluded.push(bucket);
@@ -138,9 +163,18 @@ export function selectEditorPool<R extends PoolRowShape>(
       excluded.push(bucket);
       continue;
     }
+    // Unclustered buckets never share a key, so they can't be capped
+    // against each other — an unmeasured theme is a cluster of one.
+    const cluster = bucket.clusterKey;
+    const clusterUsed = cluster !== null ? perClusterCount.get(cluster) ?? 0 : 0;
+    if (clusterFraction < 1.0 && cluster !== null && clusterUsed >= perClusterCap) {
+      excluded.push(bucket);
+      continue;
+    }
     pool.push(...bucket.rows);
     included.push(bucket);
     perCategoryCount.set(cat, used + 1);
+    if (cluster !== null) perClusterCount.set(cluster, clusterUsed + 1);
   }
 
   return {

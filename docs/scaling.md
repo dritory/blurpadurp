@@ -30,19 +30,32 @@ edge's copy.
 
 ## Path → object-key map (keep in sync)
 
-`src/pipeline/static-export.tsx` writes these; the Worker's `keyFor()`
-(`infra/worker/src/index.ts`) reads them. **If you change one, change
-the other.**
+`src/pipeline/static-export.tsx` writes these; the Worker's
+`pageTarget()` (`infra/worker/src/index.ts`) reads them. **If you change
+one, change the other.** A drift guard in `static-export.test.ts` pins
+the locale-prefix list on both sides, but the rest is convention.
 
 | URL | R2 key | Edge TTL |
 |---|---|---|
 | `/` | `home.html` | 60s (rolling) |
 | `/archive` | `archive.html` | 60s |
+| `/about` | `about.html` | 60s |
+| `/privacy` | `privacy.html` | 60s |
+| `/issue/<n>` | `issues/<n>.html` | 1 day (immutable) |
+| `/no`, `/no/<page>`, `/no/issue/<n>` | same key under `no/` | as above |
 | `/feed.xml` | `feed.xml` | 60s |
 | `/sitemap.xml` | `sitemap.xml` | 60s |
 | `/robots.txt` | `robots.txt` | 60s |
-| `/issue/<n>` | `issues/<n>.html` | 1 day (immutable) |
 | `/assets/<path>` | `assets/<path>` | 1 day |
+
+Locale note: the default locale keeps the bare keys, so adding a
+language moved nothing at the edge. Feed, sitemap and robots are
+deliberately **not** localized — one of each covers the whole site (the
+sitemap enumerates every locale's URLs, and the pages carry `hreflang`
+alternates saying they're translations of one another). Nothing at
+runtime connects the export's keys to the Worker's, so a locale added to
+one and not the other means `/no/*` silently proxies to Fly forever —
+which is what the drift guard exists to catch.
 
 The `/assets/*` row is **load-bearing**: every reader page references
 same-origin sub-resources (the brand mark `/assets/blurp.svg`, `wave.js`,
@@ -56,8 +69,8 @@ deploy-versioned (they change with code, not content), but re-uploading
 the tree on each weekly publish is cheap and keeps the bucket
 authoritative.
 
-Everything else (`/subscribe`, `/confirm/*`, `/unsubscribe/*`,
-`/manage/*`, `/draft/*`, `/theme/*`, `/about`, `/privacy`, `/status`,
+Everything else (`/subscribe` and `/no/subscribe`, `/confirm/*`,
+`/unsubscribe/*`, `/manage/*`, `/draft/*`, `/theme/*`, `/status`,
 `/webhooks/*`, `/admin/*`) is proxied to Fly.
 
 ## Safety properties

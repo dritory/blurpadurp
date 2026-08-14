@@ -39,13 +39,19 @@ import { renderAtomFeed } from "../views/feed.ts";
 import { Home } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
 import { Privacy } from "../views/privacy.tsx";
+import { LOCALES, LOCALE_PREFIX, type Locale, localizePath } from "../shared/i18n.ts";
 
 const PUBLIC_URL =
   getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
 const FEED_MAX_ENTRIES = 20;
 
 // Canonical object keys for the rolling pages (the per-issue keys are
-// `issues/<id>.html`). Mirrored in the Worker's keyFor().
+// `issues/<id>.html`). Mirrored in the Worker's pageTarget().
+//
+// The default locale keeps the bare keys so nothing at the edge moves;
+// other locales are namespaced under their prefix directory, e.g.
+// "no/home.html", "no/issues/12.html". `localeKey` is the single place
+// that mapping is expressed on this side.
 const KEY_HOME = "home.html";
 const KEY_ARCHIVE = "archive.html";
 const KEY_ABOUT = "about.html";
@@ -53,6 +59,13 @@ const KEY_PRIVACY = "privacy.html";
 const KEY_FEED = "feed.xml";
 const KEY_SITEMAP = "sitemap.xml";
 const KEY_ROBOTS = "robots.txt";
+
+/** Object key for a page in a locale. Mirrors the Worker's own mapping;
+ *  the static-export test pins both ends. */
+export function localeKey(locale: Locale, key: string): string {
+  const prefix = LOCALE_PREFIX[locale];
+  return prefix === "" ? key : `${prefix.slice(1)}/${key}`;
+}
 
 // The static reader pages reference same-origin sub-resources
 // (/assets/blurp.svg, /assets/wave.js, the SVG favicon). If those aren't
@@ -115,17 +128,25 @@ async function loadPublishedIssues(): Promise<IssueRow[]> {
 }
 
 function buildSitemap(issues: IssueRow[]): string {
-  const urls: Array<{ loc: string; lastmod?: string }> = [
-    { loc: `${PUBLIC_URL}/` },
-    { loc: `${PUBLIC_URL}/archive` },
-    { loc: `${PUBLIC_URL}/about` },
-    { loc: `${PUBLIC_URL}/privacy` },
-  ];
-  for (const iss of issues) {
-    urls.push({
-      loc: `${PUBLIC_URL}/issue/${iss.id}`,
-      lastmod: iss.publishedAt.toISOString().slice(0, 10),
-    });
+  // One sitemap covering every locale. Each localized URL is listed in
+  // its own right — hreflang alternates in the page <head> tell the
+  // crawler they're translations of one another, so listing them here
+  // is enumeration, not duplication.
+  const urls: Array<{ loc: string; lastmod?: string }> = [];
+  for (const locale of LOCALES) {
+    const at = (path: string) => `${PUBLIC_URL}${localizePath(locale, path)}`;
+    urls.push(
+      { loc: at("/") },
+      { loc: at("/archive") },
+      { loc: at("/about") },
+      { loc: at("/privacy") },
+    );
+    for (const iss of issues) {
+      urls.push({
+        loc: at(`/issue/${iss.id}`),
+        lastmod: iss.publishedAt.toISOString().slice(0, 10),
+      });
+    }
   }
   return (
     `<?xml version="1.0" encoding="utf-8"?>\n` +
@@ -179,13 +200,10 @@ export async function renderStaticSurface(
   const feedUpdated = issues[0]?.publishedAt ?? new Date();
 
   const pages: RenderedObject[] = [
-    { key: KEY_HOME, body: await renderNode(<Home home={home} flash={null} />) },
-    {
-      key: KEY_ARCHIVE,
-      body: await renderNode(<Archive issues={issues as ArchiveEntry[]} />),
-    },
-    { key: KEY_ABOUT, body: await renderNode(<About />) },
-    { key: KEY_PRIVACY, body: await renderNode(<Privacy />) },
+    // Feed, sitemap and robots are locale-agnostic — one of each, at
+    // the bare key. The feed carries the brief bodies, which aren't
+    // translated, so a per-locale feed would differ only in its own
+    // metadata and isn't worth a second surface to keep fresh.
     {
       key: KEY_FEED,
       body: renderAtomFeed({
@@ -197,11 +215,37 @@ export async function renderStaticSurface(
     { key: KEY_SITEMAP, body: buildSitemap(issues) },
     { key: KEY_ROBOTS, body: buildRobots() },
   ];
-  for (const iss of issues) {
-    pages.push({
-      key: `issues/${iss.id}.html`,
-      body: await renderNode(<IssuePage issue={iss} />),
-    });
+  // Every HTML page, once per locale. The issue set is identical across
+  // locales — only the chrome around each brief differs.
+  for (const locale of LOCALES) {
+    pages.push(
+      {
+        key: localeKey(locale, KEY_HOME),
+        body: await renderNode(
+          <Home home={home} flash={null} locale={locale} />,
+        ),
+      },
+      {
+        key: localeKey(locale, KEY_ARCHIVE),
+        body: await renderNode(
+          <Archive issues={issues as ArchiveEntry[]} locale={locale} />,
+        ),
+      },
+      {
+        key: localeKey(locale, KEY_ABOUT),
+        body: await renderNode(<About locale={locale} />),
+      },
+      {
+        key: localeKey(locale, KEY_PRIVACY),
+        body: await renderNode(<Privacy locale={locale} />),
+      },
+    );
+    for (const iss of issues) {
+      pages.push({
+        key: localeKey(locale, `issues/${iss.id}.html`),
+        body: await renderNode(<IssuePage issue={iss} locale={locale} />),
+      });
+    }
   }
   return pages;
 }
@@ -276,7 +320,15 @@ export async function refreshStaticSurface(): Promise<void> {
   // Purge the rolling pages at the edge so the new issue shows
   // immediately instead of waiting out the Worker's short edge TTL.
   // Issue permalinks are immutable, so they don't need purging.
-  const rolling: PurgePath[] = ["/", "/archive", "/feed.xml", "/sitemap.xml"];
+  const rolling: PurgePath[] = [
+    "/",
+    "/archive",
+    "/feed.xml",
+    "/sitemap.xml",
+    ...LOCALES.filter((l) => LOCALE_PREFIX[l] !== "").flatMap(
+      (l) => [localizePath(l, "/"), localizePath(l, "/archive")] as PurgePath[],
+    ),
+  ];
   try {
     await cdnPurge(rolling);
   } catch (err) {

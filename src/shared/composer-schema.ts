@@ -108,6 +108,27 @@ export const ComposerInputSchema = z.object({
       ),
     }),
   ),
+  // What the last few issues actually ran, newest first. theme_timelines
+  // already gives per-theme story history, but not the issue-level view:
+  // which stories the reader has already had explained to them, and how
+  // the last brief framed its week. Without it the composer re-introduces
+  // a three-week-old thread as though it were new, and reaches for the
+  // same opener shape every time. Defaulted so composer_input_jsonb
+  // persisted before v0.11 still re-parses for replay.
+  recent_issues: z
+    .array(
+      z.object({
+        published_at: z.string(), // YYYY-MM-DD
+        title: z.string().nullable(),
+        weeks_ago: z.number(),
+        // Themes that issue led with, in rank order — what the reader
+        // most recently had a full paragraph about.
+        led_with: z.array(z.string()),
+        // One-liners already told, across every section of that issue.
+        already_told: z.array(z.string()),
+      }),
+    )
+    .default([]),
   // Targeted revision notes fed back into a re-compose — e.g. the gloss
   // checker's findings ("VRA used un-glossed on first use; gloss it").
   // Absent on a first compose; set only when re-composing to fix specific

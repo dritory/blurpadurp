@@ -19,6 +19,13 @@ import { type MailResult, sendMail } from "../shared/mailer.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
 import { signToken } from "../shared/tokens.ts";
 import { renderBriefEmail, renderDraftReviewEmail } from "../views/email.ts";
+import { DEFAULT_LOCALE, isLocale, type Locale, localizePath } from "../shared/i18n.ts";
+
+/** email_subscription.locale, defaulting anything unrecognised (or a
+ *  row written before mig 076) to English. */
+function subscriberLocale(value: string | null | undefined): Locale {
+  return isLocale(value) ? value : DEFAULT_LOCALE;
+}
 
 const RECENCY_WINDOW_MS = 7 * 24 * 3600 * 1000;
 
@@ -374,6 +381,7 @@ async function runDispatch(): Promise<void> {
       "i.composed_markdown as composed_markdown",
       "e.id as subscription_id",
       "e.email as email",
+      "e.locale as locale",
     ])
     .where("i.published_at", ">=", cutoff)
     .where("i.is_draft", "=", false)
@@ -447,7 +455,11 @@ async function runDispatch(): Promise<void> {
     });
     const unsubscribeUrl = `${brandUrl}/unsubscribe/${unsubToken}`;
     const manageUrl = `${brandUrl}/manage/${manageToken}`;
-    const issueUrl = `${brandUrl}/issue/${issueId}`;
+    // The issue link points at the reader's own locale of the page, so
+    // clicking through from a Norwegian email doesn't drop them onto
+    // English chrome. The brief body is the same either way.
+    const locale = subscriberLocale(p.locale);
+    const issueUrl = `${brandUrl}${localizePath(locale, `/issue/${issueId}`)}`;
 
     const mail = renderBriefEmail({
       brandUrl,
@@ -458,6 +470,7 @@ async function runDispatch(): Promise<void> {
       date: new Date(p.published_at),
       issueHtml: p.composed_html,
       issueMarkdown: p.composed_markdown,
+      locale,
     });
 
     const res = await sendMail({
