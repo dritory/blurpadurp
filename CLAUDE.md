@@ -188,10 +188,15 @@ if they reappear it's a tuning regression):
   is the kind of story that {generates a cycle} and then
   {decays}`, item after item. Two of the prompt's five target
   moves apply to literally anything, so the model reaches for
-  those two every week. Composer v0.12 makes the moves a
-  no-repeat rota, bans the "which is the kind of thing that…"
-  and "forgotten by {weekday}" frames by name, and requires at
-  least one item under 15 words. Shrug lines must also never
+  those two every week. Composer v0.12 makes the **flat report
+  the default move** — state what happened and stop, the tag is
+  already the verdict — and rations the trailing clause: at
+  most two per section, each punchline move once per issue,
+  three of five items flat, two under 15 words. The
+  "which is the kind of thing that…" / "forgotten by {weekday}"
+  family is banned in every phrasing, not just the listed ones:
+  a clause that could move to a different shrug item unchanged
+  is filler, not an observation. Shrug lines must also never
   mention the brief's own structure ("this also appears in the
   conversation section above").
 

@@ -21,10 +21,18 @@ item came out as `{subject} did {thing}, which is the kind of story that
 {generates a cycle} and then {decays}`. Two of the five target moves
 (proleptic forgetting, self-consuming pattern) are the only ones that
 apply to literally anything, so the model reached for them every time and
-the section read as a template with the nouns swapped. Three changes:
-the moves are now an explicit no-repeat rota, the "kind of story
-that…" / "which will be forgotten by {weekday}" frames are banned
-outright as the specific tic to kill, and length has to vary. Backed by
+the section read as a template with the nouns swapped.
+
+The fix is not a wider menu of punchlines — it's fewer punchlines. **The
+flat report is now the default move**: state what happened and stop, the
+way the tag already carries the verdict. A trailing clause is rationed
+(at most two in the section, each punchline move at most once per issue)
+and has to do specific work — a tautology, an interval, a number. The
+general observation that a story will be forgotten is banned in every
+phrasing, not just the ones listed, because it has no specific version:
+if a clause could be moved onto a different shrug item unchanged, it
+isn't an observation, it's filler. Two items per section must come in
+under 15 words. Backed by
 structure rather than instruction where possible — the section's labels
 were also all identical (five "48-hour controversy" tags), which is a
 *selection* artifact and is fixed in `compose-shrug.ts`: the five slots are
@@ -446,36 +454,56 @@ Wit lives in specific understatement, tautology, and structural
 punchlines — NOT in explaining why the story doesn't matter.
 **The joke IS the dismissal.**
 
-Target moves (copy register, not phrasing). **Five moves, and no move
-may be used twice in one section** — see "vary the shape" below, which
-is the rule this list exists to serve:
+**Move A is the default. The rest are seasoning.** Most shrug items
+should be a flat statement of what happened, full stop — the dismissal
+is that the brief spent one sentence on it and moved on. A trailing
+clause explaining the joke is the exception you spend two or three times
+an issue, not the house sentence.
 
-*A. Dry tautology — say what it is, then say it's only that:*
-"Matt Wuerker drew some cartoons about April 2026. They are cartoons
-about April 2026." *In-circle hype*
+*A. Flat report — no punchline at all, the fact does it (**the default;
+use it for most items, and it may repeat**):*
 
-*B. Recursive specificity — notable only to the people it's notable to:*
-"Japan is minting commemorative coins for the Showa Era centennial,
-which is a thing Japan does, and which will be of great interest to
-the people it is of great interest to." *In-circle hype*
-
-*C. Time-bound punchline — structure carries the joke:*
-"Hong Kong announced a public consultation on its first five-year plan,
-which will resolve in approximately five years." *Manufactured hype*
-
-*D. Deflation by scale — put the claim next to its own number:*
-"BBC asked whether football is AI-proof. The question arrived attached
-to a collapsed $20 billion investment plan, which suggests the sport's
-more pressing vulnerability is not artificial intelligence."
-*Manufactured hype*
-
-*E. Flat report — no punchline at all, the fact does it:*
 "Arron Banks hired a private detective to investigate the journalist
 investigating him." *48-hour controversy*
 
-Note what E is doing: eleven words, no relative clause, no forecast of
-its own irrelevance. A section of five needs one or two of these or the
-rhythm never lands.
+"Nicola Sturgeon has not spoken to her jailed husband." *48-hour
+controversy*
+
+"Japan is minting commemorative coins for the Showa Era centennial."
+*In-circle hype*
+
+Eleven words, eight words, twelve words. No relative clause, no forecast
+of the story's own irrelevance, no em-dash. The reader gets the fact and
+the tag, and the tag is already the verdict — anything after it is the
+brief explaining its own joke. Note the third one: the same story gets a
+punchline in move B below, and the flat version is *not worse*. That's
+the test — if the fact is funny on its own, stop writing.
+
+The remaining moves are punchlines, **each usable at most once per
+issue**, and only when the flat version genuinely leaves something on
+the table:
+
+*B. Dry tautology — say what it is, then say it's only that:*
+"Matt Wuerker drew some cartoons about April 2026. They are cartoons
+about April 2026." *In-circle hype*
+
+*C. Recursive specificity — notable only to the people it's notable to:*
+"Japan is minting commemorative coins for the Showa Era centennial,
+which will be of great interest to the people it is of great interest
+to." *In-circle hype*
+
+*D. Time-bound punchline — structure carries the joke:*
+"Hong Kong announced a public consultation on its first five-year plan,
+which will resolve in approximately five years." *Manufactured hype*
+
+*E. Deflation by scale — put the claim next to its own number:*
+"BBC asked whether football is AI-proof. The question arrived attached
+to a collapsed $20 billion investment plan." *Manufactured hype*
+
+Note what C, D and E have in common: the trailing clause is doing
+*specific* work — a tautology, an interval, a number. It is not a
+general observation that this story will be forgotten. That general
+observation is the tic, and it has no specific version.
 
 ### Worth a shrug — vary the shape
 
@@ -497,27 +525,38 @@ not be.
 
 Hard rules:
 
-1. **No move twice.** Five items, five different moves from the list
-   above. Four items, four moves. If you've written the decay joke
-   (move C's cousin — "will be forgotten by Thursday", "gone by
-   Wednesday"), it is spent for the issue.
-2. **Banned frames**, because they are the tic, not a style: "which is
+1. **Most items are flat reports (move A).** In a section of five, at
+   least three. In a section of three, at least two. This is the rule
+   the others serve: a flat line can't have the tic, because it has
+   nothing after the fact.
+2. **At most two items carry a trailing clause**, of any kind, in the
+   whole section — and each punchline move (B–E) at most once. Ration
+   them: write every item flat first, then spend the trailing clause on
+   the one or two where the flat version genuinely lost something.
+3. **Banned frames**, because they are the tic, not a style: "which is
    the kind of story/thing/prediction that…", "the sort of thing
    that…", "a question that will feel urgent until…", "generates a news
    cycle and then…", "…and then runs out of road", "…forgotten by
-   {weekday}". One decay joke per issue at most, and phrase it fresh.
-3. **Vary length.** At least one item under 15 words. Not every line
-   gets an em-dash; not every line gets a trailing clause. Two long
-   ones back to back is a wall.
-4. **Vary the opening.** Don't start every item with a name doing
+   {weekday}". These have no acceptable variant — the general
+   observation that a story will be forgotten is banned in every
+   phrasing, not just these ones. If a trailing clause could be moved
+   onto a different shrug item without changing, it isn't specific
+   enough to exist.
+4. **Vary length.** At least two items under 15 words. Not every line
+   gets an em-dash. Two long ones back to back is a wall.
+5. **Vary the opening.** Don't start every item with a name doing
    something. Lead with the object, the number, or the claim itself.
-5. **No meta.** Never refer to the brief's own structure or editorial
+6. **No meta.** Never refer to the brief's own structure or editorial
    choices — "this also appears in the conversation section above",
    "a reasonable place for this coverage", "as noted earlier". The
    reader sees a brief, not its assembly notes.
-6. **The label is given, not chosen.** Each shrug row arrives with a
+7. **The label is given, not chosen.** Each shrug row arrives with a
    `label` field. Use it verbatim. Don't relabel to fit a joke — write
    the joke that fits.
+
+Sanity check before emitting: read the section as a column and count the
+em-dashes and the trailing clauses. Three or more of either and you have
+written the template again, whatever the words are.
 
 Bad (preachy or generic — wit dies):
 - "…the internet will survive without a take on it." *(explains; reader knows)*
@@ -698,14 +737,21 @@ public G7 break is the line." *(13 words.)*
 
 ### `shrug[]` → `## Worth a shrug`
 
-One wry sentence per item, own paragraph. Name the hype, dismiss with
-an observation, end with the label. No headline, no expansion, no "to
-be fair," no citations. See gold examples for the five target moves
-(dry tautology, recursive specificity, time-bound punchline, deflation
-by scale, flat report) — and **use a different one for each item**.
-The "vary the shape" rules there are hard rules, not suggestions: no
-repeated move, no "which is the kind of thing that…" frame, at least
-one item under 15 words, no commentary on the brief's own structure.
+One line per item, own paragraph, ending with the label. No headline,
+no expansion, no "to be fair," no citations.
+
+**Default to the flat report** (gold examples, move A): state what
+happened and stop. The label is the dismissal; a clause explaining why
+the story doesn't matter is the brief laughing at its own joke. The four
+punchline moves (dry tautology, recursive specificity, time-bound
+punchline, deflation by scale) are each usable once per issue, on the
+one or two items where the flat version genuinely loses something.
+
+The "vary the shape" rules there are hard rules, not suggestions: at
+least three of five items flat, at most two trailing clauses in the
+whole section, no "which is the kind of thing that…" frame in any
+phrasing, at least two items under 15 words, no commentary on the
+brief's own structure.
 
 **The `label` field is authoritative.** Each row carries a pre-chosen
 `label` (server-side, spread across the qualifying penalty factors so
@@ -936,8 +982,9 @@ skip items, or reorder within a section.
   - kind: single|arc
     ...same shape as conversation...
 
-# Section: shrug (one wry line per item, no citations. Use each row's
-# `label` verbatim, and a DIFFERENT target move for each row)
+# Section: shrug (one line per item, no citations. Use each row's
+# `label` verbatim. Most items are flat reports — no trailing clause;
+# at most 2 rows in the section get one)
 
   - story_id: {{id}}
     title: {{title}}

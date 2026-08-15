@@ -24,12 +24,21 @@
 --    Subject, verb, em-dash, relative clause predicting the item's own
 --    decay, five times. Two of the prompt's five target moves are the
 --    only ones that apply to anything at all, so the model reached for
---    those two every week. v0.12 makes the moves a no-repeat rota,
---    bans the "which is the kind of thing that…" / "forgotten by
---    {weekday}" frames by name, requires length variation (at least one
---    item under 15 words), and adds a move that has no punchline at all.
---    Also bans shrug lines that comment on the brief's own structure
---    ("this also appears in the conversation section above").
+--    those two every week.
+--
+--    The fix is fewer punchlines, not more of them. v0.12 promotes the
+--    flat report — state what happened and stop — to the default move:
+--    at least three of five items carry no trailing clause at all,
+--    because a line with nothing after the fact cannot have the tic,
+--    and the label already carries the verdict. The trailing clause is
+--    rationed to two per section, each punchline move once per issue,
+--    and has to do specific work (a tautology, an interval, a number);
+--    the general "this will be forgotten" observation is banned in
+--    every phrasing rather than by listed example, since a clause that
+--    would fit any other shrug item unchanged is filler. Two items per
+--    section must land under 15 words. Also bans shrug lines that
+--    comment on the brief's own structure ("this also appears in the
+--    conversation section above").
 --
 --    But the labels were identical too — five "48-hour controversy"
 --    tags — and no amount of prompt could fix that, because it was a

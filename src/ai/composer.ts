@@ -293,11 +293,14 @@ function renderShrugSection(
   lines: string[],
   items: ComposerInput["shrug"],
 ): void {
-  const rota =
+  // The trailing-clause budget scales with the section, so it is
+  // rendered rather than fixed in the prompt: "at most two" reads as
+  // permission for two when there are only three items.
+  const shape =
     items.length > 1
-      ? " — a DIFFERENT target move for each, label rendered verbatim"
+      ? ` — most flat, at most ${Math.min(2, Math.floor(items.length / 2))} with a trailing clause; label verbatim`
       : "";
-  lines.push(`# Section: shrug (${items.length} item${items.length === 1 ? "" : "s"}${rota})`, "");
+  lines.push(`# Section: shrug (${items.length} item${items.length === 1 ? "" : "s"}${shape})`, "");
   if (items.length === 0) {
     lines.push("  (empty — OMIT this H2 heading from output)", "");
     return;
