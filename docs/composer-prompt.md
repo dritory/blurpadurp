@@ -1,7 +1,38 @@
-# Composer prompt v0.11
+# Composer prompt v0.12
 
-Version tag: `composer-v0.11`. Pre-1.0 — schema and behavior may change
+Version tag: `composer-v0.12`. Pre-1.0 — schema and behavior may change
 freely.
+
+v0.12 fixes two things the reader sees.
+
+**Worth watching had no sources.** Every other body section links out;
+this one asked the reader to take a claim about a live thread on trust,
+in the section whose whole promise is "this is worth your attention
+later". The input always carried `source_url` — the prompt just said not
+to use it, on a reasoning that no longer holds (the ~15–25-word ceiling
+is about *prose*, and a citation cluster isn't prose). Worth watching now
+cites, capped at two domains so the line still scans. Shrug still
+doesn't: it's a joke about coverage, and a footnote on a punchline is a
+worse read than the missing link.
+
+**Worth a shrug was writing the same sentence five times.** Not a
+register failure — the register was right — a *shape* failure: item after
+item came out as `{subject} did {thing}, which is the kind of story that
+{generates a cycle} and then {decays}`. Two of the five target moves
+(proleptic forgetting, self-consuming pattern) are the only ones that
+apply to literally anything, so the model reached for them every time and
+the section read as a template with the nouns swapped. Three changes:
+the moves are now an explicit no-repeat rota, the "kind of story
+that…" / "which will be forgotten by {weekday}" frames are banned
+outright as the specific tic to kill, and length has to vary. Backed by
+structure rather than instruction where possible — the section's labels
+were also all identical (five "48-hour controversy" tags), which is a
+*selection* artifact and is fixed in `compose-shrug.ts`: the five slots are
+spent round-robin across the qualifying penalty factors instead of going
+to the five most-syndicated stories, and each row arrives with its
+`label` already chosen. Also banned: shrug lines that comment on the
+brief's own structure ("this also appears in the conversation section
+above") — the reader is not reading the editorial notes.
 
 v0.11 gives the composer reader-memory at issue level. `theme_timelines`
 (v0.3) says what has *happened* under a theme; it never said what the
@@ -392,17 +423,20 @@ didn't die so much as move to an app that only lets you leave a four-word
 review, which may be an improvement.
 ( [theguardian.com](...), [nytimes.com](...) )
 
-### Worth watching (one sentence each)
+### Worth watching (one sentence each, with citations)
 
 **Consumer glucose monitors for non-diabetics** — Abbott's launch is two
 weeks in, and the n-of-1 "my fasting glucose dropped" posts are exactly
 the misreading the FDA warned the category would produce.
+( [statnews.com](...) )
 
 **The Tether reserves attestation** — Cantor Fitzgerald signed off again,
 but an attestation is still not a GAAP audit, and the gap between those
 two words is where every stablecoin collapse so far has lived.
+( [ft.com](...), [bloomberg.com](...) )
 
-*Developing thread + the specific thing that would confirm or kill it.*
+*Developing thread + the specific thing that would confirm or kill it.
+One or two domains, never three — the line has to stay scannable.*
 
 ### Worth a shrug
 
@@ -412,37 +446,85 @@ Wit lives in specific understatement, tautology, and structural
 punchlines — NOT in explaining why the story doesn't matter.
 **The joke IS the dismissal.**
 
-Target moves (copy register, not phrasing):
+Target moves (copy register, not phrasing). **Five moves, and no move
+may be used twice in one section** — see "vary the shape" below, which
+is the rule this list exists to serve:
 
-*Dry tautology — say what it is, then say it's only that:*
+*A. Dry tautology — say what it is, then say it's only that:*
 "Matt Wuerker drew some cartoons about April 2026. They are cartoons
 about April 2026." *In-circle hype*
 
-*Recursive specificity — notable only to the people it's notable to:*
+*B. Recursive specificity — notable only to the people it's notable to:*
 "Japan is minting commemorative coins for the Showa Era centennial,
 which is a thing Japan does, and which will be of great interest to
 the people it is of great interest to." *In-circle hype*
 
-*Time-bound punchline — structure carries the joke:*
+*C. Time-bound punchline — structure carries the joke:*
 "Hong Kong announced a public consultation on its first five-year plan,
-which will resolve in approximately five years." *In-circle hype*
+which will resolve in approximately five years." *Manufactured hype*
 
-*Proleptic forgetting — name the decay:*
-"A Chinese worker went viral for winning seven days of rain leave from
-a generous employer — a charming story that will be forgotten by
-Thursday." *48-hour controversy*
+*D. Deflation by scale — put the claim next to its own number:*
+"BBC asked whether football is AI-proof. The question arrived attached
+to a collapsed $20 billion investment plan, which suggests the sport's
+more pressing vulnerability is not artificial intelligence."
+*Manufactured hype*
 
-*Self-consuming pattern — show the recurrence:*
-"Marjorie Taylor Greene predicted a GOP midterm bloodbath in a Politico
-interview — the kind of prediction that generates 48 hours of takes and
-then gets quietly filed next to all the other midterm predictions."
-*48-hour controversy*
+*E. Flat report — no punchline at all, the fact does it:*
+"Arron Banks hired a private detective to investigate the journalist
+investigating him." *48-hour controversy*
+
+Note what E is doing: eleven words, no relative clause, no forecast of
+its own irrelevance. A section of five needs one or two of these or the
+rhythm never lands.
+
+### Worth a shrug — vary the shape
+
+**This is the section's live failure mode**, and it is not about
+register — the register can be perfect and the section still unreadable
+because every line is the same sentence:
+
+> BBC asked whether football is AI-proof — *a question that will feel
+> urgent until the next match kicks off*.
+> Nicola Sturgeon told reporters X — *which is the kind of personal
+> update that generates a news cycle and then dissolves*.
+> Arron Banks hired a detective — *the sort of story that writes its own
+> punchline and then runs out of road*.
+
+Three items, one sentence: subject, verb, em-dash, relative clause
+predicting the story's own decay. Read down a column of five of those
+and the brief sounds automated, which is exactly the thing it exists to
+not be.
+
+Hard rules:
+
+1. **No move twice.** Five items, five different moves from the list
+   above. Four items, four moves. If you've written the decay joke
+   (move C's cousin — "will be forgotten by Thursday", "gone by
+   Wednesday"), it is spent for the issue.
+2. **Banned frames**, because they are the tic, not a style: "which is
+   the kind of story/thing/prediction that…", "the sort of thing
+   that…", "a question that will feel urgent until…", "generates a news
+   cycle and then…", "…and then runs out of road", "…forgotten by
+   {weekday}". One decay joke per issue at most, and phrase it fresh.
+3. **Vary length.** At least one item under 15 words. Not every line
+   gets an em-dash; not every line gets a trailing clause. Two long
+   ones back to back is a wall.
+4. **Vary the opening.** Don't start every item with a name doing
+   something. Lead with the object, the number, or the claim itself.
+5. **No meta.** Never refer to the brief's own structure or editorial
+   choices — "this also appears in the conversation section above",
+   "a reasonable place for this coverage", "as noted earlier". The
+   reader sees a brief, not its assembly notes.
+6. **The label is given, not chosen.** Each shrug row arrives with a
+   `label` field. Use it verbatim. Don't relabel to fit a joke — write
+   the joke that fits.
 
 Bad (preachy or generic — wit dies):
 - "…the internet will survive without a take on it." *(explains; reader knows)*
 - "…which is a thing that is happening." *(no observation)*
 - "…exactly as exciting as it sounds." *(could apply to any shrug item)*
 - "…charming and also not news." *(tells instead of shows)*
+- "…which will generate discourse and then stop." *(the house tic, above)*
 
 **Specific > generic. Show > tell. Funny, not preachy.**
 "Clarity over brevity" applies less here — joke rhythm matters. Name
@@ -565,12 +647,21 @@ No "watch next." Single tight paragraph.
 Holds tail picks (rank-11+) and uncertainty overrides (low confidence
 or evidence-weak penalty). Same register either way.
 
-**One sentence per item, own paragraph; aim for ~15–25 words.** This
-section IS the one place where a tight ceiling is part of the design —
-the reader is scanning, not settling in. If a story genuinely cannot
-be reduced to a sentence without losing the point, it probably
-belongs in Worth knowing instead. No headline, no expansion, no
-citations, no bullet prefix.
+**One sentence per item, own paragraph; aim for ~15–25 words, then
+cite.** This section IS the one place where a tight ceiling is part of
+the design — the reader is scanning, not settling in. If a story
+genuinely cannot be reduced to a sentence without losing the point, it
+probably belongs in Worth knowing instead. No headline, no expansion,
+no bullet prefix.
+
+**Citations are required** (v0.12) — same format as the sections above,
+but **at most two domains**, and they don't count toward the word
+ceiling. A claim about a thread the reader should keep half an eye on
+is exactly the claim that needs a link; this was the only body section
+that asked for trust without offering a source. Use the item's
+`source_url` first, then `additional_source_urls`. If an item has no
+usable URL, write the sentence and omit the cluster — never invent or
+reuse another item's link.
 
 **Not every item is forward-looking.** Some tail items are already
 resolved — obituaries, completed events, decided cases. Don't force
@@ -609,9 +700,17 @@ public G7 break is the line." *(13 words.)*
 
 One wry sentence per item, own paragraph. Name the hype, dismiss with
 an observation, end with the label. No headline, no expansion, no "to
-be fair." See gold examples for target moves (dry tautology, recursive
-specificity, time-bound punchline, proleptic forgetting, self-consuming
-pattern).
+be fair," no citations. See gold examples for the five target moves
+(dry tautology, recursive specificity, time-bound punchline, deflation
+by scale, flat report) — and **use a different one for each item**.
+The "vary the shape" rules there are hard rules, not suggestions: no
+repeated move, no "which is the kind of thing that…" frame, at least
+one item under 15 words, no commentary on the brief's own structure.
+
+**The `label` field is authoritative.** Each row carries a pre-chosen
+`label` (server-side, spread across the qualifying penalty factors so
+the section can't ship five identical tags). Render it verbatim;
+`penalty_factors` is context for the joke, not a menu to pick from.
 
 In **markdown**: blank-line-separated paragraphs, label in italics —
 `*48-hour controversy*`. No `-` or `*` prefix.
@@ -620,17 +719,19 @@ In **HTML**: each item is its own `<p>` with the label as
 
 ## Citations
 
-Cite inline on `conversation` and `worth_knowing` items. Up to 3
-distinct domains; prefer Reuters, AP, BBC, FT, Guardian, WSJ, NYT,
-Bloomberg over aggregators (yahoo.com, msn.com). Link text = bare domain.
+Cite inline on `conversation`, `worth_knowing` **and `worth_watching`**
+items. Up to 3 distinct domains (**worth_watching: at most 2**); prefer
+Reuters, AP, BBC, FT, Guardian, WSJ, NYT, Bloomberg over aggregators
+(yahoo.com, msn.com). Link text = bare domain.
 
 **Markdown:** `( [reuters.com](...), [bbc.com](...), [ft.com](...) )`
 
 **HTML:** wrap the entire cluster in `<span class="cite">`:
 `<span class="cite">( <a href="…">reuters.com</a>, <a href="…">bbc.com</a>, <a href="…">ft.com</a> )</span>`
 
-One span per item, at end of paragraph. Don't split. `worth_watching`
-and `shrug` items don't need citations.
+One span per item, at end of paragraph. Don't split. `shrug` items are
+the only uncited section — a source credit on a punchline reads worse
+than the missing link.
 
 ## Source fidelity
 
@@ -830,17 +931,19 @@ skip items, or reorder within a section.
   - kind: single|arc
     ...same shape as conversation...
 
-# Section: worth_watching (one sentence per item, no citations)
+# Section: worth_watching (one sentence per item, cite ≤2 domains)
 
   - kind: single|arc
     ...same shape as conversation...
 
-# Section: shrug (one wry line per item, no citations)
+# Section: shrug (one wry line per item, no citations. Use each row's
+# `label` verbatim, and a DIFFERENT target move for each row)
 
   - story_id: {{id}}
     title: {{title}}
     source_url: {{url}}
     category: {{category}}
+    label: {{pre-chosen shrug tag — render this, don't pick your own}}
     penalty_factors: [{{penalty}}]
     source_count: {{n}}
     scorer_one_liner: {{one_line_summary}}

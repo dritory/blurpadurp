@@ -58,6 +58,11 @@ export const ShrugItemSchema = z.object({
   title: z.string(),
   source_url: z.string().nullable(),
   category: z.enum(categorySlug).nullable(),
+  // The reader-facing tag, chosen server-side (compose-shrug.ts) so the
+  // section can't ship five identical labels. Optional because stored
+  // composer inputs from before v0.12 don't carry it — fixture replay
+  // parses those rows, and the renderer falls back to penalty_factors.
+  label: z.string().optional(),
   penalty_factors: z.array(z.string()),
   source_count: z.number(),
   scorer_one_liner: z.string(),

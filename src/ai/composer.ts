@@ -237,12 +237,21 @@ export function renderUserMessage(input: ComposerInput): string {
   return lines.join("\n");
 }
 
+// Per-section reminders rendered into the section header. Only Worth
+// watching carries one: citing it is new in v0.12 — ten prompt versions
+// said that section had no citations, and the header is the last thing
+// read before the section is written.
+const SECTION_HINTS: Record<string, string> = {
+  worth_watching: " — one sentence each, then cite at most 2 domains",
+};
+
 function renderItemSection(
   lines: string[],
   name: string,
   items: ComposerInput["conversation"],
 ): void {
-  lines.push(`# Section: ${name} (${items.length} item${items.length === 1 ? "" : "s"})`, "");
+  const hint = items.length > 0 ? SECTION_HINTS[name] ?? "" : "";
+  lines.push(`# Section: ${name} (${items.length} item${items.length === 1 ? "" : "s"}${hint})`, "");
   if (items.length === 0) {
     lines.push("  (empty — OMIT this H2 heading from output)", "");
     return;
@@ -284,7 +293,11 @@ function renderShrugSection(
   lines: string[],
   items: ComposerInput["shrug"],
 ): void {
-  lines.push(`# Section: shrug (${items.length} item${items.length === 1 ? "" : "s"})`, "");
+  const rota =
+    items.length > 1
+      ? " — a DIFFERENT target move for each, label rendered verbatim"
+      : "";
+  lines.push(`# Section: shrug (${items.length} item${items.length === 1 ? "" : "s"}${rota})`, "");
   if (items.length === 0) {
     lines.push("  (empty — OMIT this H2 heading from output)", "");
     return;
@@ -294,6 +307,9 @@ function renderShrugSection(
     lines.push(`    title: ${s.title}`);
     lines.push(`    source_url: ${s.source_url ?? "-"}`);
     lines.push(`    category: ${s.category ?? "-"}`);
+    // Pre-v0.12 stored inputs have no label; fall back to the first
+    // penalty factor, which is what the composer used to pick from.
+    lines.push(`    label: ${s.label ?? s.penalty_factors[0] ?? "-"}`);
     lines.push(`    penalty_factors: [${s.penalty_factors.join(", ")}]`);
     lines.push(`    source_count: ${s.source_count}`);
     lines.push(`    scorer_one_liner: ${s.scorer_one_liner}`);
