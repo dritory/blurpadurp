@@ -5,13 +5,17 @@
 -- structural fix because the second complaint was not really a prompt
 -- problem.
 --
--- 1. Worth watching had no citations. Every other body section links
---    out; this one asserted something about a live thread and asked the
---    reader to take it on trust. The input has always carried
---    source_url + additional_source_urls — the prompt just said not to
---    use them, on the theory that a ~15–25-word ceiling had no room. It
---    does: the ceiling is about prose, and a citation cluster isn't
---    prose. Capped at two domains so the line still scans.
+-- 1. Two sections had no citations. Worth watching asserted things
+--    about live threads with nothing to click; Worth a shrug named a
+--    thing that happened and dismissed it, also with nothing to click.
+--    Both inputs have always carried source_url — the prompt just said
+--    not to use it, on the theory that a short-line ceiling had no room.
+--    It does: the ceiling is about prose, and a citation cluster isn't
+--    prose. Every item in every section now cites, with the domain cap
+--    tightening as the item shortens (conversation and Worth knowing 3,
+--    Worth watching 2, shrug exactly 1) so a one-liner doesn't vanish
+--    behind a stack of links. In shrug the cluster sits between the
+--    sentence and the label, keeping the tag as the last thing read.
 --
 -- 2. Worth a shrug read as a template with the nouns swapped:
 --

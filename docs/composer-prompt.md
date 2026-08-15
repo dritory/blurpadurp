@@ -5,15 +5,19 @@ freely.
 
 v0.12 fixes two things the reader sees.
 
-**Worth watching had no sources.** Every other body section links out;
-this one asked the reader to take a claim about a live thread on trust,
-in the section whose whole promise is "this is worth your attention
-later". The input always carried `source_url` — the prompt just said not
-to use it, on a reasoning that no longer holds (the ~15–25-word ceiling
-is about *prose*, and a citation cluster isn't prose). Worth watching now
-cites, capped at two domains so the line still scans. Shrug still
-doesn't: it's a joke about coverage, and a footnote on a punchline is a
-worse read than the missing link.
+**Two sections shipped without sources.** Worth watching asserted things
+about live threads with nothing to click; Worth a shrug named a thing
+that happened and dismissed it, also with nothing to click. Both inputs
+carried `source_url` all along — the prompt simply said not to use it,
+on a reasoning that doesn't survive contact: the ~15–25-word ceiling is
+about *prose*, and a citation cluster isn't prose. **Every item in every
+section now cites**, with the domain cap tightening as the item shortens
+(conversation and Worth knowing 3, Worth watching 2, shrug exactly 1) so
+a one-line item doesn't disappear behind a stack of links. In shrug the
+cluster sits between the sentence and the label, keeping the tag as the
+last thing read. The rule that a dismissal is somehow exempt was wrong
+in the first place: it's still a claim about something that happened,
+and the reader who wants to check the joke shouldn't have to go looking.
 
 **Worth a shrug was writing the same sentence five times.** Not a
 register failure — the register was right — a *shape* failure: item after
@@ -32,15 +36,17 @@ general observation that a story will be forgotten is banned in every
 phrasing, not just the ones listed, because it has no specific version:
 if a clause could be moved onto a different shrug item unchanged, it
 isn't an observation, it's filler. Two items per section must come in
-under 15 words. Backed by
-structure rather than instruction where possible — the section's labels
-were also all identical (five "48-hour controversy" tags), which is a
-*selection* artifact and is fixed in `compose-shrug.ts`: the five slots are
-spent round-robin across the qualifying penalty factors instead of going
-to the five most-syndicated stories, and each row arrives with its
-`label` already chosen. Also banned: shrug lines that comment on the
-brief's own structure ("this also appears in the conversation section
-above") — the reader is not reading the editorial notes.
+under 15 words.
+
+Backed by structure rather than instruction where possible — the
+section's labels were also all identical (five "48-hour controversy"
+tags), which is a *selection* artifact and is fixed in
+`compose-shrug.ts`: the five slots are spent round-robin across the
+qualifying penalty factors instead of going to the five most-syndicated
+stories, and each row arrives with its `label` already chosen. Also
+banned: shrug lines that comment on the brief's own structure ("this
+also appears in the conversation section above") — the reader is not
+reading the editorial notes.
 
 v0.11 gives the composer reader-memory at issue level. `theme_timelines`
 (v0.3) says what has *happened* under a theme; it never said what the
@@ -464,20 +470,21 @@ an issue, not the house sentence.
 use it for most items, and it may repeat**):*
 
 "Arron Banks hired a private detective to investigate the journalist
-investigating him." *48-hour controversy*
+investigating him." ( [theguardian.com](...) ) *48-hour controversy*
 
-"Nicola Sturgeon has not spoken to her jailed husband." *48-hour
-controversy*
+"Nicola Sturgeon has not spoken to her jailed husband."
+( [bbc.com](...) ) *48-hour controversy*
 
 "Japan is minting commemorative coins for the Showa Era centennial."
-*In-circle hype*
+( [japantimes.co.jp](...) ) *In-circle hype*
 
 Eleven words, eight words, twelve words. No relative clause, no forecast
-of the story's own irrelevance, no em-dash. The reader gets the fact and
-the tag, and the tag is already the verdict — anything after it is the
-brief explaining its own joke. Note the third one: the same story gets a
-punchline in move B below, and the flat version is *not worse*. That's
-the test — if the fact is funny on its own, stop writing.
+of the story's own irrelevance, no em-dash. The reader gets the fact,
+the receipt and the tag, and the tag is already the verdict — anything
+after it is the brief explaining its own joke. Note the third one: the
+same story gets a punchline in move C below, and the flat version is
+*not worse*. That's the test — if the fact is funny on its own, stop
+writing.
 
 The remaining moves are punchlines, **each usable at most once per
 issue**, and only when the flat version genuinely leaves something on
@@ -485,20 +492,22 @@ the table:
 
 *B. Dry tautology — say what it is, then say it's only that:*
 "Matt Wuerker drew some cartoons about April 2026. They are cartoons
-about April 2026." *In-circle hype*
+about April 2026." ( [politico.com](...) ) *In-circle hype*
 
 *C. Recursive specificity — notable only to the people it's notable to:*
 "Japan is minting commemorative coins for the Showa Era centennial,
 which will be of great interest to the people it is of great interest
-to." *In-circle hype*
+to." ( [japantimes.co.jp](...) ) *In-circle hype*
 
 *D. Time-bound punchline — structure carries the joke:*
 "Hong Kong announced a public consultation on its first five-year plan,
-which will resolve in approximately five years." *Manufactured hype*
+which will resolve in approximately five years." ( [scmp.com](...) )
+*Manufactured hype*
 
 *E. Deflation by scale — put the claim next to its own number:*
 "BBC asked whether football is AI-proof. The question arrived attached
-to a collapsed $20 billion investment plan." *Manufactured hype*
+to a collapsed $20 billion investment plan." ( [bbc.com](...) )
+*Manufactured hype*
 
 Note what C, D and E have in common: the trailing clause is doing
 *specific* work — a tautology, an interval, a number. It is not a
@@ -553,6 +562,13 @@ Hard rules:
 7. **The label is given, not chosen.** Each shrug row arrives with a
    `label` field. Use it verbatim. Don't relabel to fit a joke — write
    the joke that fits.
+8. **Cite it.** One domain, from the row's `source_url`, in the
+   standard cluster — after the sentence, before the label, so the tag
+   stays the last thing read. A dismissal is still a claim about
+   something that happened, and the reader who wants to check the joke
+   shouldn't have to search for it. Never two domains here: the line is
+   short and a stack of links outweighs it. If the row has no
+   `source_url`, write the line without a cluster.
 
 Sanity check before emitting: read the section as a column and count the
 em-dashes and the trailing clauses. Three or more of either and you have
@@ -696,11 +712,10 @@ no bullet prefix.
 **Citations are required** (v0.12) — same format as the sections above,
 but **at most two domains**, and they don't count toward the word
 ceiling. A claim about a thread the reader should keep half an eye on
-is exactly the claim that needs a link; this was the only body section
-that asked for trust without offering a source. Use the item's
-`source_url` first, then `additional_source_urls`. If an item has no
-usable URL, write the sentence and omit the cluster — never invent or
-reuse another item's link.
+is exactly the claim that needs a link. Use the item's `source_url`
+first, then `additional_source_urls`. If an item has no usable URL,
+write the sentence and omit the cluster — never invent or reuse another
+item's link.
 
 **Not every item is forward-looking.** Some tail items are already
 resolved — obituaries, completed events, decided cases. Don't force
@@ -737,8 +752,8 @@ public G7 break is the line." *(13 words.)*
 
 ### `shrug[]` → `## Worth a shrug`
 
-One line per item, own paragraph, ending with the label. No headline,
-no expansion, no "to be fair," no citations.
+One line per item, own paragraph: sentence, then a **one-domain citation
+cluster**, then the label. No headline, no expansion, no "to be fair."
 
 **Default to the flat report** (gold examples, move A): state what
 happened and stop. The label is the dismissal; a clause explaining why
@@ -758,26 +773,43 @@ brief's own structure.
 the section can't ship five identical tags). Render it verbatim;
 `penalty_factors` is context for the joke, not a menu to pick from.
 
-In **markdown**: blank-line-separated paragraphs, label in italics —
-`*48-hour controversy*`. No `-` or `*` prefix.
-In **HTML**: each item is its own `<p>` with the label as
+In **markdown**: blank-line-separated paragraphs, citation cluster then
+label in italics — `… ( [bbc.com](…) ) *48-hour controversy*`. No `-` or
+`*` prefix.
+In **HTML**: each item is its own `<p>`, cluster in
+`<span class="cite">`, then the label as
 `<span class="shrug-tag">48-hour controversy</span>`. No `<ul>`/`<li>`.
 
 ## Citations
 
-Cite inline on `conversation`, `worth_knowing` **and `worth_watching`**
-items. Up to 3 distinct domains (**worth_watching: at most 2**); prefer
-Reuters, AP, BBC, FT, Guardian, WSJ, NYT, Bloomberg over aggregators
-(yahoo.com, msn.com). Link text = bare domain.
+**Every item in every section is cited.** No exceptions: if the brief
+says something happened, the reader can click through to who reported
+it. Prefer Reuters, AP, BBC, FT, Guardian, WSJ, NYT, Bloomberg over
+aggregators (yahoo.com, msn.com). Link text = bare domain.
+
+How many domains, per section — the cap tightens as the item gets
+shorter, because a citation cluster is fixed-size and a one-line item
+disappears behind three links:
+
+| Section | Domains |
+|---|---|
+| `conversation` | up to 3 |
+| `worth_knowing` | up to 3 |
+| `worth_watching` | at most 2 |
+| `shrug` | exactly 1 |
 
 **Markdown:** `( [reuters.com](...), [bbc.com](...), [ft.com](...) )`
 
 **HTML:** wrap the entire cluster in `<span class="cite">`:
 `<span class="cite">( <a href="…">reuters.com</a>, <a href="…">bbc.com</a>, <a href="…">ft.com</a> )</span>`
 
-One span per item, at end of paragraph. Don't split. `shrug` items are
-the only uncited section — a source credit on a punchline reads worse
-than the missing link.
+One span per item. Don't split it. It goes at the end of the paragraph
+in every section except `shrug`, where the label follows it.
+
+Domains come from the item's own `source_url` / `additional_source_urls`
+— never from another item, never from memory. An item whose input
+carries no URL is written without a cluster; that is the only way a line
+ships uncited, and it is not a licence to skip one that has a URL.
 
 ## Source fidelity
 
@@ -982,9 +1014,9 @@ skip items, or reorder within a section.
   - kind: single|arc
     ...same shape as conversation...
 
-# Section: shrug (one line per item, no citations. Use each row's
-# `label` verbatim. Most items are flat reports — no trailing clause;
-# at most 2 rows in the section get one)
+# Section: shrug (one line per item, cite exactly 1 domain, then the
+# row's `label` verbatim. Most items are flat reports — no trailing
+# clause; at most 2 rows in the section get one)
 
   - story_id: {{id}}
     title: {{title}}

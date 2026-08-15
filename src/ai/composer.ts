@@ -298,7 +298,7 @@ function renderShrugSection(
   // permission for two when there are only three items.
   const shape =
     items.length > 1
-      ? ` — most flat, at most ${Math.min(2, Math.floor(items.length / 2))} with a trailing clause; label verbatim`
+      ? ` — most flat, at most ${Math.min(2, Math.floor(items.length / 2))} with a trailing clause; cite 1 domain, label verbatim`
       : "";
   lines.push(`# Section: shrug (${items.length} item${items.length === 1 ? "" : "s"}${shape})`, "");
   if (items.length === 0) {
