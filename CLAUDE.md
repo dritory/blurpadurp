@@ -183,6 +183,22 @@ if they reappear it's a tuning regression):
 - Detail-before-meaning leads: opening with what happened
   before what it means. The first sentence carries
   significance; the second carries evidence.
+- **One shrug sentence, five times.** Worth a shrug's live
+  failure is shape, not register: `{name} did {thing} — which
+  is the kind of story that {generates a cycle} and then
+  {decays}`, item after item. Two of the prompt's five target
+  moves apply to literally anything, so the model reaches for
+  those two every week. Composer v0.12 makes the **flat report
+  the default move** — state what happened and stop, the tag is
+  already the verdict — and rations the trailing clause: at
+  most two per section, each punchline move once per issue,
+  three of five items flat, two under 15 words. The
+  "which is the kind of thing that…" / "forgotten by {weekday}"
+  family is banned in every phrasing, not just the listed ones:
+  a clause that could move to a different shrug item unchanged
+  is filler, not an observation. Shrug lines must also never
+  mention the brief's own structure ("this also appears in the
+  conversation section above").
 
 **Observed wins to preserve:**
 
@@ -221,6 +237,8 @@ medium**. This shapes partition choices:
 | Discarding a draft that reviewers were emailed fails on `dispatch_log_issue_id_fkey` — and discard is the *recovery* path for a stalled pipeline, so the blockage becomes unclearable | `discardDraft` drops the draft's `dispatch_log` rows in the same transaction, behind an `EXISTS (… is_draft)` guard so a wrong id can't wipe a published issue's audit trail. `dispatch_log.issue_id` has no `ON DELETE CASCADE`, unlike `issue_pick`/`issue_annotation` | `src/pipeline/draft.ts`, `test/integration/discard-draft.test.ts` |
 | One narrative saturates the brief. A dominant story doesn't arrive as one theme — "US–Iran escalation", "Hormuz shipping" and "oil price spike" are three themes by every measure the system had, all legitimately high-composite, and one piece of news to the reader. Nothing capped that, so an entire conversation section shipped as the same story told four ways | Themes are clustered one level up by centroid cosine (0.72 — deliberately between the 0.70 story→theme attach bar and the 0.85 theme→theme **merge** bar, so clusters group without merging; complete linkage, so a bridge theme can't chain two unrelated narratives). The fix is **placement, not exclusion**: `compose.max_per_section_per_cluster` (1) gives a narrative one slot per section and pushes its surplus **down** into the next one — one item up top and one in Worth knowing reads as a story the brief is following, five up top reads as a brief with one subject, and the cluster's best-ranked pick still leads either way. `compose.max_picks_per_cluster` (4) is a whole-issue backstop that cuts, because Worth watching is an unbounded tail and a nine-story cluster would otherwise ride the spread down and ship seven one-liners on one subject; `editor.pool_max_cluster_fraction` caps admission before the editor ever sees it. Those cuts used to shorten the issue, justified by invariant 1 — **wrong invariant**: silence is about a week with nothing worth saying, and this pool is never that thin. What it actually did was kill Worth watching on exactly the weeks the caps fire. The editor is now asked for 12–18 against `compose.max_issue_picks` (15), so the tail ranks are a reserve the cut spends and a dropped pick costs a slot, not a section. The synthesis opener groups by cluster too, or the one paragraph everyone reads names the same news three ways. Sections are fixed-size (rank-based routing), so a section that can't be filled under the cap is filled over it rather than left short; `diversifyPicks` reports those as a **count**, not a flag, because two five-wide sections need ten picks and the editor targets 10–15 — one or two over-cap placements is an ordinary week, and only a count near the issue size means the week really was one story | `src/shared/theme-cluster.ts`, `src/pipeline/compose-diversity.ts`, mig 075 |
 | The brief had no memory of itself. Per theme it knew a count (`n_prior_publications`) and a timeline of story one-liners — neither answers "have we already told the reader this?" — so a running story got re-picked and re-explained week after week, each issue defensible and the sequence repetitive | `loadRecentCoverage` reads the last `compose.recent_coverage_issues` (3) published issues out of `issue_pick`, which has recorded (issue, story, section, rank) all along — no new write path. Editor gets `recent_coverage` plus per-theme `recent_issue_count` / `last_covered_summary`; composer gets `recent_issues` (what each issue led on and already told). Note the limit: it carries the scorer's one-liner, not the prose the reader actually read, so it answers "did we cover this?" and not "did we already make this exact observation?" | `src/shared/recent-coverage.ts`, mig 075 |
+| Worth a shrug ships five rows tagged "48-hour controversy", and a composer reading five identical labels writes five identically-shaped jokes. Not a prompt failure — a **selection** one: candidates were ranked by `source_count` ("how hard did the algorithm push this"), and `controversy_flash` is by definition the marker of a story the wires piled onto, so the ranking was very nearly a `controversy_flash` sort. `in_circle_hype` — a niche launch two trade outlets carried — could never win that race | The five slots are spent round-robin across the qualifying penalty factors, `source_count` ranking *within* a factor, and the chosen tag ships as a pre-computed `label` on the row rather than a menu the composer picks from (invariant #2 again). A week where every candidate really is `controversy_flash` still gets five of them — the ranking no longer manufactures that, but it won't hide it either | `src/pipeline/compose-shrug.ts` |
+| Worth watching and Worth a shrug shipped with no sources — the prompt read their short-line ceilings as excluding citations (the ceiling is about prose; a citation cluster isn't prose), and treated a dismissal as somehow not a claim | Composer v0.12: **every item in every section cites**, with the domain cap tightening as the item shortens — conversation/Worth knowing 3, Worth watching 2, shrug exactly 1 — so a one-liner doesn't vanish behind a stack of links. In shrug the cluster sits between the sentence and the label, so the tag stays the last thing read. No input change was needed: `source_url` was always rendered | `docs/composer-prompt.md` |
 | Same story appears in consecutive issues | `persistIssue` flips `published_to_reader = true` | `src/pipeline/compose.ts` |
 | Shrug items recur across runs | Shrug IDs included in the published-set | `src/pipeline/compose.ts` |
 | Basic-auth 401 swallowed as branded 500 | `app.onError` re-raises `HTTPException` | `src/api/index.tsx` |
@@ -313,6 +331,7 @@ clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
 - Editor curation rules + prompt: `docs/editor-prompt.md`
 - Composer voice + sections + gold examples: `docs/composer-prompt.md`
 - Narrative clustering + diversity caps: `src/shared/theme-cluster.ts` (maths), `src/shared/theme-cluster-store.ts` (centroid load), `src/pipeline/compose-diversity.ts` (caps)
+- Shrug slot allocation + labels: `src/pipeline/compose-shrug.ts`
 - Prior-issue memory: `src/shared/recent-coverage.ts`
 - Draft checker (gloss first-use today; task-tagged for more later): deterministic `src/shared/gloss-lint.ts` + LLM `src/ai/checker.ts`, types in `src/shared/check-schema.ts`, automatic fix loop in `src/shared/auto-fix.ts`
 - Dispatch design + live behavior: `docs/dispatch.md`

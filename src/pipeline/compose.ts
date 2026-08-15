@@ -35,15 +35,11 @@ import { lintGloss } from "../shared/gloss-lint.ts";
 import { bumpGlossHits, loadGlossLists } from "../shared/gloss-store.ts";
 import type { ScorerOutput } from "../shared/scoring-schema.ts";
 import { routeSection } from "./compose-partition.ts";
-
-// Penalty factors that qualify a scored, failed-gate story for the Worth
-// a shrug section. These are the "hype" markers from the scorer rubric:
-// items the algorithm pushed that this brief refuses.
-const SHRUG_PENALTY_FACTORS = [
-  "in_circle_hype",
-  "manufactured_hype",
-  "controversy_flash",
-] as const;
+import {
+  SHRUG_PENALTY_FACTORS,
+  humanizePenaltyFactor,
+  selectShrugCandidates,
+} from "./compose-shrug.ts";
 
 // Read scorer fields from raw_output jsonb. Old rows (v0.1) stored
 // `one_line_summary` and `reasoning.retrodiction_12mo`; newer rows store
@@ -1266,19 +1262,15 @@ async function rowsForEditor() {
     .execute();
 }
 
-const PENALTY_LABELS: Record<string, string> = {
-  in_circle_hype: "in-circle hype",
-  manufactured_hype: "manufactured hype",
-  controversy_flash: "48-hour controversy",
-};
-function humanizePenaltyFactor(f: string): string {
-  return PENALTY_LABELS[f] ?? f.replace(/_/g, " ");
-}
-
 // Worth a shrug: scored-but-failed-gate items in the compose window
 // whose penalty factors include in_circle_hype / manufactured_hype /
-// controversy_flash. Ranked by how many sources carried it (higher =
-// more the algorithm pushed it = better shrug candidate). Capped at 5.
+// controversy_flash. Capped at 5. Which five, and what each is labelled,
+// is `selectShrugCandidates` — source_count ranks within a penalty
+// factor, but the slots are spread across factors, because a pure
+// source-count sort is very nearly a controversy_flash sort and the
+// section shipped five identically-tagged rows.
+const SHRUG_MAX_ITEMS = 5;
+
 async function loadShrugCandidates(
   cutoff: Date,
 ): Promise<ComposerInput["shrug"]> {
@@ -1345,18 +1337,26 @@ async function loadShrugCandidates(
     });
   }
 
-  return [...byStory.entries()]
-    .sort((a, b) => b[1].source_count - a[1].source_count)
-    .slice(0, 5)
-    .map(([story_id, v]) => ({
-      story_id,
-      title: v.title,
-      source_url: v.source_url,
-      category: v.category as ComposerInput["shrug"][number]["category"],
-      penalty_factors: [...v.penalty_factors].map(humanizePenaltyFactor),
-      source_count: v.source_count,
-      scorer_one_liner: v.scorer_one_liner,
-    }));
+  const candidates = [...byStory.entries()].map(([story_id, v]) => ({
+    story_id,
+    penalty_factors: [...v.penalty_factors],
+    source_count: v.source_count,
+    agg: v,
+  }));
+
+  return selectShrugCandidates(candidates, SHRUG_MAX_ITEMS).map(
+    ({ candidate, label_factor }) => ({
+      story_id: candidate.story_id,
+      title: candidate.agg.title,
+      source_url: candidate.agg.source_url,
+      category: candidate.agg
+        .category as ComposerInput["shrug"][number]["category"],
+      label: humanizePenaltyFactor(label_factor),
+      penalty_factors: candidate.penalty_factors.map(humanizePenaltyFactor),
+      source_count: candidate.source_count,
+      scorer_one_liner: candidate.agg.scorer_one_liner,
+    }),
+  );
 }
 
 async function loadFactorsByStory(

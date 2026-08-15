@@ -1,0 +1,64 @@
+-- Composer v0.12: sources on Worth watching, and a Worth a shrug that
+-- doesn't write the same sentence five times.
+--
+-- Two reader-visible complaints, one prompt change each, plus one
+-- structural fix because the second complaint was not really a prompt
+-- problem.
+--
+-- 1. Two sections had no citations. Worth watching asserted things
+--    about live threads with nothing to click; Worth a shrug named a
+--    thing that happened and dismissed it, also with nothing to click.
+--    Both inputs have always carried source_url — the prompt just said
+--    not to use it, on the theory that a short-line ceiling had no room.
+--    It does: the ceiling is about prose, and a citation cluster isn't
+--    prose. Every item in every section now cites, with the domain cap
+--    tightening as the item shortens (conversation and Worth knowing 3,
+--    Worth watching 2, shrug exactly 1) so a one-liner doesn't vanish
+--    behind a stack of links. In shrug the cluster sits between the
+--    sentence and the label, keeping the tag as the last thing read.
+--
+-- 2. Worth a shrug read as a template with the nouns swapped:
+--
+--      "X asked whether Y — a question that will feel urgent until Z."
+--      "A told reporters B — which is the kind of personal update that
+--       generates a news cycle and then dissolves."
+--      "C hired a detective — the sort of story that writes its own
+--       punchline and then runs out of road."
+--
+--    Subject, verb, em-dash, relative clause predicting the item's own
+--    decay, five times. Two of the prompt's five target moves are the
+--    only ones that apply to anything at all, so the model reached for
+--    those two every week.
+--
+--    The fix is fewer punchlines, not more of them. v0.12 promotes the
+--    flat report — state what happened and stop — to the default move:
+--    at least three of five items carry no trailing clause at all,
+--    because a line with nothing after the fact cannot have the tic,
+--    and the label already carries the verdict. The trailing clause is
+--    rationed to two per section, each punchline move once per issue,
+--    and has to do specific work (a tautology, an interval, a number);
+--    the general "this will be forgotten" observation is banned in
+--    every phrasing rather than by listed example, since a clause that
+--    would fit any other shrug item unchanged is filler. Two items per
+--    section must land under 15 words. Also bans shrug lines that
+--    comment on the brief's own structure ("this also appears in the
+--    conversation section above").
+--
+--    But the labels were identical too — five "48-hour controversy"
+--    tags — and no amount of prompt could fix that, because it was a
+--    selection artifact. Shrug candidates were ranked by source_count,
+--    and controversy_flash is *by definition* the marker of a story the
+--    wires piled onto, so the ranking was very nearly a
+--    controversy_flash sort. in_circle_hype (a niche launch two trade
+--    outlets covered) could never win that race. compose-shrug.ts now
+--    spends the five slots round-robin across the qualifying factors,
+--    ranking by source_count within each, and hands the composer a
+--    pre-chosen `label` per row instead of a menu — same reason the
+--    composer doesn't choose its own section (CLAUDE.md §Invariants #2).
+--
+-- Bumping the version string invalidates composer cache-on-hash lookups,
+-- forcing fresh output against the corrected prompt.
+
+UPDATE config
+SET value = '"composer-v0.12"'::jsonb, updated_at = now()
+WHERE key = 'composer.prompt_version';
