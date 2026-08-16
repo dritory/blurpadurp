@@ -251,7 +251,9 @@ medium**. This shapes partition choices:
 | Pipeline pool drains on re-compose | Composer-replay harness (doesn't touch DB) | `bun run cli composer-replay …` |
 | Neon CU climbing from `/health` probe storm | `/health` is DB-less (process-alive only). DB-backed freshness payload lives at `/status` for external monitors; `/admin/status` for the operator. Freshness-query indexes from mig 051. | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
 | Neon woken by crawler/reader traffic on public pages | Public read pages (`/`, `/archive`, `/about`, `/privacy`, `/feed.xml`, `/sitemap.xml`, `/issue/:id`) served from the R2 page cache (TTL + bust on publish), not the DB. App machine autostops, so the cache must be out-of-process (R2). `/about` and `/privacy` are effectively static — the Hono routes still exist as a fallback for direct-to-origin probes, but the Worker serves the R2 copy first. | `src/shared/page-cache.ts`, `src/pipeline/draft.ts` |
-| Fly machine wakes on a reader visit *despite* the R2 edge | The HTML was edge-served, but its same-origin sub-resources weren't: `/assets/*` (brand mark, `wave.js`) + the `/favicon.ico` probe fell through the Worker's `keyFor` → proxied to Fly. Worker now serves `/assets/*` from R2 (`exportPublicAssets` mirrors `./public`). The `<link rel="icon">` tag in the layout helps well-behaved browsers but crawlers and older clients still probe `/favicon.ico` directly, so the Worker also maps `/favicon.ico` → `assets/blurp.svg` to keep that probe off the origin. | `infra/worker/src/index.ts`, `src/pipeline/static-export.tsx`, `src/views/layout.tsx` |
+| Fly machine wakes on a reader visit *despite* the R2 edge | The HTML was edge-served, but its same-origin sub-resources weren't: `/assets/*` (brand mark, `wave.js`) + the `/favicon.ico` probe fell through the Worker's key map → proxied to Fly. Both are edge-served now. The `<link rel="icon">` tag in the layout helps well-behaved browsers but crawlers and older clients still probe `/favicon.ico` directly, so the manifest aliases it onto `assets/blurp.svg` to keep that probe off the origin. | `infra/worker/src/index.ts`, `src/pipeline/static-export.tsx`, `src/views/layout.tsx` |
+| The path→key map existed twice — the export chose keys, the Worker re-derived them from the request path, and a comment on each side asked the next person to keep them in agreement. It drifted twice: `/assets/*` was added to the export only (the row above), and the Worker's `keyFor` was renamed to `pageTarget`/`assetTarget` while all three comments kept pointing at the old name. Nothing at runtime connected the two, so drift showed up as reader traffic quietly waking Fly | The export publishes its own map: `manifest.json`, written into the bucket **last** (after every body is in place) and re-read by the Worker per isolate on a 60s TTL. The Worker holds no routes at all, so adding a page/locale/asset is a one-sided change — which also dodges `worker-deploy.yml` only firing on `infra/worker/**`. No manifest = no routes = everything proxies to origin, the same Tier-0 degradation as an empty bucket (`bun run cli static-export` populates it without waiting for a publish). Worker routing lives in a Cloudflare-type-free `routes.ts` **so the app's tests can import the real resolver** and run it over the real export output — the old guard could only regex the locale list out of the Worker's source | `src/shared/static-manifest.ts`, `infra/worker/src/routes.ts`, `src/pipeline/static-export.tsx` |
+| `src/db/schema.ts` is hand-maintained against 77 migrations ("keep in sync by hand"). Drift is silent in the direction that matters: a migration adds or renames a column, the Kysely types don't know, and every query still type-checks while lying about what comes back | `test/integration/schema-drift.test.ts` diffs the declared `Database` interface against `information_schema` on the migrated test database — tables, columns, nullability, base type, and `Generated<>` on a column with no default. Costs nothing to run: the integration job already stands up Postgres and applies every migration. `numeric` maps to `string` on purpose (node-postgres doesn't parse numerics into JS numbers) | `test/integration/schema-drift.test.ts` |
 | Site 5xx + monitor alert during cold start (single autostopping machine races its own stop: "machine still active, refusing to start") | Stay scale-to-zero (min = 0) but soften: `auto_stop_machines = "suspend"` (resume from RAM) + 15s health-check interval so a failed post-boot check re-probes fast. Self-heals; runbook #13. Do NOT "fix" the adjacent pg sslmode warning by pinning verify-full — it breaks the Neon handshake (runbook #13). | `fly.toml`, `docs/runbook.md` |
 | Confirmation-email bombing / domain-reputation abuse via `POST /subscribe` | Three layers: per-recipient `last_confirmation_sent_at` cooldown (mig 061) kills same-address resend; a fixed-key global token bucket caps total outbound confirmations and alerts via `notifyAdmin` on trip; a coarse per-IP limiter wraps the signed-token routes. All throttle paths return the same `subscribed=1` redirect — never leak whether an address exists or was throttled. | `src/api/index.tsx`, `src/shared/rate-limit.ts` |
 
@@ -290,10 +292,12 @@ find out. Strings live in `src/shared/i18n.ts`, one typed object per
 locale, so a missing key is a compile error. Three things to know before
 touching it: locale is never negotiated from `Accept-Language` (reader
 pages sit behind an edge cache keyed on path alone, so varying by header
-hands the wrong language to whoever asks second); the R2 key map has to
-be changed in `static-export.tsx` **and** `infra/worker/src/index.ts`;
-and a subscriber's language lives on their row (mig 076) because a link
-clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
+hands the wrong language to whoever asks second); the R2 key map is
+authored once in `static-export.tsx` and published to the edge as
+`manifest.json`, so a new locale is a change there alone (the Worker
+needs no deploy); and a subscriber's language lives on their row
+(mig 076) because a link clicked from an inbox has no URL to recover it
+from. See `docs/i18n.md`.
 
 ## When in doubt
 
@@ -302,10 +306,11 @@ clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
   sub-resources** from a public R2 bucket and proxies the
   dynamic/write trickle to Fly. (Serving assets is load-bearing —
   miss them and the browser wakes Fly fetching the logo/favicon
-  off the R2-served HTML.) Publish-time export +
-  path→key map live in `src/pipeline/static-export.tsx` /
-  `infra/worker/`; keep the two key maps in sync. Opt-in via
-  `R2_PUBLIC_BUCKET` — no-op until set. See `docs/scaling.md`.
+  off the R2-served HTML.) The publish-time export owns the path→key
+  map (`src/pipeline/static-export.tsx`) and publishes it as
+  `manifest.json`; the Worker reads that and holds no routes of its
+  own. Opt-in via `R2_PUBLIC_BUCKET` — no-op until set. See
+  `docs/scaling.md`.
 - Don't add a new AI stage. Prefer hard structure in TypeScript.
 - Don't hot-patch prompts in production. Capture → replay → bump
   version → commit.

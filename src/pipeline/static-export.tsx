@@ -8,8 +8,10 @@
 // publish, leaving a cold gap); this one is pushed eagerly at publish
 // time so the edge always has a fresh copy with no origin round-trip.
 //
-// Object keys here MUST match the path→key mapping the Worker uses
-// (infra/worker/src/index.ts → keyFor). Keep the two in sync.
+// This module is the single author of the path→key mapping. It writes
+// `manifest.json` alongside the pages (src/shared/static-manifest.ts) and
+// the Worker resolves requests against that, so there is no second map at
+// the edge to keep in sync — there used to be, and it drifted twice.
 //
 // The render path deliberately reuses the same view components and feed
 // renderer as the live routes (src/views/*). The small loaders below
@@ -40,18 +42,27 @@ import { Home } from "../views/home.tsx";
 import { IssuePage, type IssueView } from "../views/issue.tsx";
 import { Privacy } from "../views/privacy.tsx";
 import { LOCALES, LOCALE_PREFIX, type Locale, localizePath } from "../shared/i18n.ts";
+import {
+  buildManifest,
+  HTML_CONTENT_TYPE,
+  MANIFEST_KEY,
+  type StaticEntry,
+  TTL_ASSET,
+  TTL_IMMUTABLE,
+  TTL_ROLLING,
+} from "../shared/static-manifest.ts";
 
 const PUBLIC_URL =
   getEnvOptional("BLURPADURP_PUBLIC_URL") ?? "http://localhost:3000";
 const FEED_MAX_ENTRIES = 20;
 
 // Canonical object keys for the rolling pages (the per-issue keys are
-// `issues/<id>.html`). Mirrored in the Worker's pageTarget().
+// `issues/<id>.html`). The Worker learns these from the manifest.
 //
 // The default locale keeps the bare keys so nothing at the edge moves;
 // other locales are namespaced under their prefix directory, e.g.
 // "no/home.html", "no/issues/12.html". `localeKey` is the single place
-// that mapping is expressed on this side.
+// that mapping is expressed.
 const KEY_HOME = "home.html";
 const KEY_ARCHIVE = "archive.html";
 const KEY_ABOUT = "about.html";
@@ -60,8 +71,9 @@ const KEY_FEED = "feed.xml";
 const KEY_SITEMAP = "sitemap.xml";
 const KEY_ROBOTS = "robots.txt";
 
-/** Object key for a page in a locale. Mirrors the Worker's own mapping;
- *  the static-export test pins both ends. */
+/** Object key for a page in a locale. The public path that serves it is
+ *  `localizePath(locale, path)`; the two travel together into the
+ *  manifest, so neither has to be re-derived at the edge. */
 export function localeKey(locale: Locale, key: string): string {
   const prefix = LOCALE_PREFIX[locale];
   return prefix === "" ? key : `${prefix.slice(1)}/${key}`;
@@ -71,10 +83,19 @@ export function localeKey(locale: Locale, key: string): string {
 // (/assets/blurp.svg, /assets/wave.js, the SVG favicon). If those aren't
 // at the edge too, the browser fires them straight at Fly the instant it
 // parses the R2-served HTML — waking the machine on every reader visit.
-// So we push the whole ./public tree to R2 under `assets/<path>`; the
-// Worker serves /assets/* from there (mirrored in infra/worker keyFor).
+// So we push the whole ./public tree to R2 under `assets/<path>` and list
+// each one in the manifest under its /assets/<path> URL.
 const ASSET_SOURCE_DIR = "public";
 const ASSET_KEY_PREFIX = "assets/";
+const ASSET_URL_PREFIX = "/assets/";
+
+// The layout sets an explicit <link rel="icon">, but crawlers and older
+// clients still probe /favicon.ico directly — and every miss wakes the
+// Fly origin. Alias it onto the SVG mark the pages already link to. The
+// manifest is a path→object map, so this is just a second path pointing
+// at an object the asset push already wrote.
+const FAVICON_PATH = "/favicon.ico";
+const FAVICON_ASSET = "blurp.svg";
 
 const ASSET_CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
@@ -173,17 +194,20 @@ export interface StaticExportResult {
   count: number;
   issues: number;
   assets: number;
+  /** Paths advertised to the edge in the manifest. */
+  routes: number;
 }
 
-export interface RenderedObject {
-  key: string;
+// Each rendered page carries the public path that serves it, its content
+// type and its edge TTL, so the manifest can be folded straight out of
+// this list rather than re-derived from the keys.
+export interface RenderedObject extends StaticEntry {
   body: string;
 }
 
 // Pure render: turn the published-issue set into the full list of
-// object key → body pairs the public store should hold. No DB, no store
-// — so it's unit-testable with canned rows. Keys mirror the Worker's
-// keyFor().
+// objects the public store should hold. No DB, no store — so it's
+// unit-testable with canned rows.
 export async function renderStaticSurface(
   issues: IssueRow[],
   thresholdDays: number,
@@ -201,50 +225,85 @@ export async function renderStaticSurface(
 
   const pages: RenderedObject[] = [
     // Feed, sitemap and robots are locale-agnostic — one of each, at
-    // the bare key. The feed carries the brief bodies, which aren't
-    // translated, so a per-locale feed would differ only in its own
-    // metadata and isn't worth a second surface to keep fresh.
+    // the bare key, served from the bare path. The feed carries the
+    // brief bodies, which aren't translated, so a per-locale feed would
+    // differ only in its own metadata and isn't worth a second surface
+    // to keep fresh.
     {
+      path: `/${KEY_FEED}`,
       key: KEY_FEED,
+      contentType: "application/atom+xml; charset=utf-8",
+      ttl: TTL_ROLLING,
       body: renderAtomFeed({
         baseUrl: PUBLIC_URL,
         entries: feedEntries,
         updated: feedUpdated,
       }),
     },
-    { key: KEY_SITEMAP, body: buildSitemap(issues) },
-    { key: KEY_ROBOTS, body: buildRobots() },
+    {
+      path: `/${KEY_SITEMAP}`,
+      key: KEY_SITEMAP,
+      contentType: "application/xml; charset=utf-8",
+      ttl: TTL_ROLLING,
+      body: buildSitemap(issues),
+    },
+    {
+      path: `/${KEY_ROBOTS}`,
+      key: KEY_ROBOTS,
+      contentType: "text/plain; charset=utf-8",
+      ttl: TTL_ROLLING,
+      body: buildRobots(),
+    },
   ];
   // Every HTML page, once per locale. The issue set is identical across
   // locales — only the chrome around each brief differs.
   for (const locale of LOCALES) {
+    // One helper so the path and the key for a page are written on the
+    // same line — they are two halves of one decision, and splitting
+    // them is how the edge map drifted in the first place.
+    const page = (
+      path: string,
+      key: string,
+      body: string,
+      ttl: number = TTL_ROLLING,
+    ): RenderedObject => ({
+      path: localizePath(locale, path),
+      key: localeKey(locale, key),
+      contentType: HTML_CONTENT_TYPE,
+      ttl,
+      body,
+    });
+
     pages.push(
-      {
-        key: localeKey(locale, KEY_HOME),
-        body: await renderNode(
-          <Home home={home} flash={null} locale={locale} />,
-        ),
-      },
-      {
-        key: localeKey(locale, KEY_ARCHIVE),
-        body: await renderNode(
+      page(
+        "/",
+        KEY_HOME,
+        await renderNode(<Home home={home} flash={null} locale={locale} />),
+      ),
+      page(
+        "/archive",
+        KEY_ARCHIVE,
+        await renderNode(
           <Archive issues={issues as ArchiveEntry[]} locale={locale} />,
         ),
-      },
-      {
-        key: localeKey(locale, KEY_ABOUT),
-        body: await renderNode(<About locale={locale} />),
-      },
-      {
-        key: localeKey(locale, KEY_PRIVACY),
-        body: await renderNode(<Privacy locale={locale} />),
-      },
+      ),
+      page("/about", KEY_ABOUT, await renderNode(<About locale={locale} />)),
+      page(
+        "/privacy",
+        KEY_PRIVACY,
+        await renderNode(<Privacy locale={locale} />),
+      ),
     );
     for (const iss of issues) {
-      pages.push({
-        key: localeKey(locale, `issues/${iss.id}.html`),
-        body: await renderNode(<IssuePage issue={iss} locale={locale} />),
-      });
+      pages.push(
+        page(
+          `/issue/${iss.id}`,
+          `issues/${iss.id}.html`,
+          await renderNode(<IssuePage issue={iss} locale={locale} />),
+          // Permalinks are immutable once published.
+          TTL_IMMUTABLE,
+        ),
+      );
     }
   }
   return pages;
@@ -267,26 +326,45 @@ async function listFiles(dir: string): Promise<string[]> {
 // the edge Worker can serve /assets/* without ever touching Fly. These
 // are deploy-versioned (they change with code, not content), but
 // re-uploading the ~2.5 MB tree on each weekly publish is cheap and
-// keeps the bucket authoritative. Returns the number of files written.
-export async function exportPublicAssets(): Promise<number> {
+// keeps the bucket authoritative.
+//
+// Returns one manifest entry per file written, so the assets land in the
+// manifest by the same route as the pages — the Worker no longer has its
+// own /assets/* rule or its own extension→content-type table.
+export async function exportPublicAssets(): Promise<StaticEntry[]> {
   let files: string[];
   try {
     files = await listFiles(ASSET_SOURCE_DIR);
   } catch {
     // No ./public (shouldn't happen in prod) — nothing to push.
-    return 0;
+    return [];
   }
   const store = getPublicObjectStore();
-  await Promise.all(
+  const entries = await Promise.all(
     files.map(async (file) => {
       const rel = relative(ASSET_SOURCE_DIR, file).split(sep).join("/");
+      const contentType = assetContentType(file);
       const bytes = new Uint8Array(await Bun.file(file).arrayBuffer());
-      await store.put(`${ASSET_KEY_PREFIX}${rel}`, bytes, {
-        contentType: assetContentType(file),
-      });
+      await store.put(`${ASSET_KEY_PREFIX}${rel}`, bytes, { contentType });
+      return {
+        path: `${ASSET_URL_PREFIX}${rel}`,
+        key: `${ASSET_KEY_PREFIX}${rel}`,
+        contentType,
+        ttl: TTL_ASSET,
+      };
     }),
   );
-  return files.length;
+
+  // /favicon.ico is an alias onto an object the loop above already
+  // wrote, not a file of its own — so only advertise it if that object
+  // actually exists.
+  const favicon = entries.find(
+    (e) => e.key === `${ASSET_KEY_PREFIX}${FAVICON_ASSET}`,
+  );
+  if (favicon) {
+    entries.push({ ...favicon, path: FAVICON_PATH });
+  }
+  return entries;
 }
 
 // Render every public page and write it to the public object store.
@@ -298,9 +376,28 @@ export async function exportStaticPages(): Promise<StaticExportResult> {
   const thresholdDays = await loadHomeStalenessThresholdDays();
   const objects = await renderStaticSurface(issues, thresholdDays);
   const store = getPublicObjectStore();
-  await Promise.all(objects.map((o) => store.put(o.key, o.body)));
+  await Promise.all(
+    objects.map((o) => store.put(o.key, o.body, { contentType: o.contentType })),
+  );
   const assets = await exportPublicAssets();
-  return { count: objects.length, issues: issues.length, assets };
+
+  // The manifest goes last, on purpose: it's the thing that makes a path
+  // servable from the edge, so writing it only after every body is in
+  // place means the Worker never resolves a route to an object that
+  // isn't there yet. (An R2 miss falls through to the origin, so the
+  // worst case was already slow-not-broken — but ordering makes even
+  // that window not exist.)
+  const manifest = buildManifest([...objects, ...assets], new Date());
+  await store.put(MANIFEST_KEY, JSON.stringify(manifest), {
+    contentType: "application/json",
+  });
+
+  return {
+    count: objects.length,
+    issues: issues.length,
+    assets: assets.length,
+    routes: Object.keys(manifest.routes).length,
+  };
 }
 
 // Publish-hook entry point. No-op in production until R2_PUBLIC_BUCKET
@@ -312,7 +409,7 @@ export async function refreshStaticSurface(): Promise<void> {
   try {
     const res = await exportStaticPages();
     console.log(
-      `static-export: wrote ${res.count} pages (${res.issues} issues) + ${res.assets} assets to the public store`,
+      `static-export: wrote ${res.count} pages (${res.issues} issues) + ${res.assets} assets to the public store, ${res.routes} routes in the manifest`,
     );
   } catch (err) {
     console.error("static-export: export failed (non-fatal)", err);

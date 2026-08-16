@@ -185,7 +185,7 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       );
       const res = await exportStaticPages();
       console.log(
-        `static-export: wrote ${res.count} objects (${res.issues} issues) to the public store`,
+        `static-export: wrote ${res.count} objects (${res.issues} issues) + ${res.assets} assets to the public store, ${res.routes} routes in the manifest`,
       );
       return;
     }
