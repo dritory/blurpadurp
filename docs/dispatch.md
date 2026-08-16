@@ -22,6 +22,30 @@ A single cron invocation (default: hourly, top of the hour) calls
 `dispatch()`. The call is idempotent — safe to retry, safe to run
 twice concurrently — because of guarantee 1.
 
+In practice the cadence is 6h, not hourly (mig 053) — an empty sweep
+still wakes Neon, and this is a weekly product. That makes *publish*
+the latency problem rather than the sweep: an issue goes live on the
+web the instant the draft is published, but the mail waits for the next
+sweep, so up to six hours of "I published it and nobody got anything"
+looked exactly like a broken dispatch. `publishDraft` therefore queues
+a `pipeline_force_run` row for dispatch (both from `/admin/review` and
+from the autopublish sweep), which the next scheduler tick consumes —
+so the email follows within the hour. The web-vs-email split is stated
+on the publish confirmation too, because the honest answer to "why is
+my inbox empty" is usually "it hasn't run yet".
+
+## From header
+
+`FROM_EMAIL` (default `brief@blurpadurp.com`) is the address;
+`FROM_NAME` (default `Blurpadurp`) is the display name. They are joined
+in `formatFrom` — without a display name, inbox lists and phone
+notifications show the bare local part, i.e. "brief", which identifies
+nothing. Setting `FROM_EMAIL` to a full mailbox
+(`Blurpadurp <brief@blurpadurp.com>`) short-circuits both and is used
+verbatim. The address's domain still has to be the SPF/DKIM-verified
+one in Resend; the display name is free text and changing it needs no
+DNS work.
+
 ```
 for each undelivered (issue, subscription) pair:
   if issue.is_event_driven and subscription.urgent_override:
@@ -255,6 +279,7 @@ HAVING count(*) >= 3;
 Before turning dispatch on:
 
 - [ ] `RESEND_API_KEY` and `FROM_EMAIL` set; domain SPF+DKIM verified.
+      `FROM_NAME` defaults to `Blurpadurp` — only set it to override.
 - [ ] VAPID keys generated, `VAPID_PUBLIC_KEY` exposed via a route so
       the browser can subscribe.
 - [ ] `/webhooks/resend` implemented and registered in Resend.

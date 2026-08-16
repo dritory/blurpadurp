@@ -2875,7 +2875,14 @@ export function parsePromptFlash(
 export function parseReviewFlash(
   q: Record<string, string>,
 ): { kind: "ok"; msg: string } | { kind: "err"; msg: string } | null {
-  if (q.published === "1") return { kind: "ok", msg: "Published." };
+  if (q.published === "1")
+    return {
+      kind: "ok",
+      // Live on the web now; the email is a separate stage. Saying so
+      // beats an operator watching an empty inbox and assuming a
+      // failure — dispatch is queued and fires on the next tick.
+      msg: "Published — live on the web. Emails go out on the next scheduler tick (within the hour); watch dispatch on /admin/status.",
+    };
   if (q.recomposed === "1")
     return { kind: "ok", msg: "Re-composed. Review below." };
   if (q.reedited === "1")

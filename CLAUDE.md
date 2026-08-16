@@ -96,7 +96,12 @@ is how the drift hid last time.
   used to silently block every compose behind it.
 - **dispatch** is live (`src/pipeline/dispatch.ts`). Email send via
   Resend; per-(issue, subscription) at-most-once enforced by the
-  `dispatch_log` unique constraint. Web-push is stubbed. The Resend
+  `dispatch_log` unique constraint. Runs every 6h (mig 053), so
+  `publishDraft` queues a dispatch force-run — publishing puts the
+  issue on the web instantly and the mail would otherwise trail it by
+  up to six hours, which is indistinguishable from a broken sweep.
+  From header is `FROM_NAME <FROM_EMAIL>` (`formatFrom`); a bare
+  address shows as "brief" in every inbox list. Web-push is stubbed. The Resend
   webhook (`/webhooks/resend`) handles bounces/complaints and
   auto-unsubscribes hard failures. Design + send-window logic in
   `docs/dispatch.md`.

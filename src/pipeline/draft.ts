@@ -5,9 +5,10 @@
 // if called on a published issue. Recompose and reedit require a draft.
 //
 // publishDraft flips is_draft=false and marks every pick story as
-// published_to_reader=true in one transaction. Next hourly dispatch
-// picks it up; the public pages (/, /archive, /issue) start showing it
-// immediately since they filter on is_draft.
+// published_to_reader=true in one transaction, then queues a dispatch
+// force-run so the email follows on the next scheduler tick rather than
+// waiting out dispatch's 6h cadence. The public pages (/, /archive,
+// /issue) start showing it immediately since they filter on is_draft.
 //
 // discardDraft deletes the issue row. issue_pick and issue_annotation
 // cascade. Stories go back into the pool (they were never marked
@@ -30,6 +31,35 @@ import { refreshStaticSurface } from "./static-export.tsx";
 import type { ComposerInput } from "../shared/composer-schema.ts";
 import { loadSystemPromptText } from "../shared/prompts.ts";
 import { buildPickRows, produceDraft } from "./compose.ts";
+
+// Queue a dispatch sweep for the next scheduler tick.
+//
+// Publishing makes the issue live on the web immediately, but the email
+// only goes out when dispatch next runs — and dispatch is on a 6h
+// cadence (mig 053), so "I published and nothing was sent" was the
+// normal case for up to six hours, with nothing on the page saying so.
+// The force-run row shortens that to the next hourly tick.
+//
+// Cheap and idempotent: `stage` is the primary key, so a second publish
+// before the tick collapses into the same row. Worst case the row
+// outlives a sweep that already ran in the same tick and buys one extra
+// (empty) sweep next tick — publishes are weekly, so that's noise.
+// Best-effort: a failure here must not fail a publish that already
+// committed.
+async function queueDispatch(): Promise<void> {
+  try {
+    await db
+      .insertInto("pipeline_force_run")
+      .values({ stage: "dispatch", args: null })
+      .onConflict((oc) => oc.column("stage").doNothing())
+      .execute();
+  } catch (err) {
+    console.error(
+      "[publish] could not queue dispatch — it will go out on the next scheduled sweep:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
 
 export async function publishDraft(issueId: number): Promise<boolean> {
   const published = await db.transaction().execute(async (tx) => {
@@ -103,6 +133,7 @@ export async function publishDraft(issueId: number): Promise<boolean> {
     // purge the edge (no-op until R2_PUBLIC_BUCKET is wired). See
     // docs/scaling.md. Best-effort — never throws into publish.
     await refreshStaticSurface();
+    await queueDispatch();
   }
   return published;
 }
