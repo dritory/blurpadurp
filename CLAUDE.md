@@ -25,9 +25,10 @@ unless a feature genuinely needs it). Architecture in
 
 ```
 ingest → score → editor → compose → autopublish → dispatch → retention
+                                                          → heartbeat
 ```
 
-Six scheduled stages, run hourly by `scheduler.ts` against the
+Seven scheduled stages, run hourly by `scheduler.ts` against the
 `pipeline_schedule` table (mig 039). Each acquires a DB mutex
 (`pipeline_lock`, mig 024) so manual + cron triggers can't collide.
 
@@ -115,8 +116,22 @@ is how the drift hid last time.
   that never flipped it, the tiering `docs/storage.md` describes has
   never actually run. Check that before concluding storage growth is a
   bug.
+- **heartbeat** runs every 6h, last in the tick so its digest reports
+  the state the tick *left* (`src/pipeline/heartbeat.ts`, mig 078). It
+  watches the failures that never throw — a stage outside its cadence,
+  a draft parked past the staleness ceiling, spend against the cap,
+  `pg_database_size` against `storage.db_budget_mb` — and mails the
+  operator. Two rules, both in the pure `heartbeatDecision`: a problem
+  mails at most every `heartbeat.alert_interval_hours` (12), and a
+  *healthy* pipeline still mails every
+  `heartbeat.all_clear_interval_hours` (168). **Don't drop the
+  all-clear to cut noise** — without it an empty inbox means both
+  "fine" and "the monitor died too", which is the exact ambiguity this
+  stage exists to remove. Stage stall thresholds are 3× cadence, and
+  anchored compose is measured against a week, not its ignored
+  `interval_sec`.
 
-Beyond the five scheduled stages, `src/pipeline/` also holds:
+Beyond the scheduled stages, `src/pipeline/` also holds:
 `urgent.ts` (event-driven mid-cycle publish), `eval.ts` (human-label
 calibration set surfaced at `/admin/eval`), `draft.ts` (admin draft
 publish/discard/recompose plumbing), `fixture.ts` (capture/replay
@@ -236,6 +251,7 @@ medium**. This shapes partition choices:
 | The fix gate became worse than no gate. The propose→preview→accept path (mig 065) was a human approving each recompose — but once the sweep started retrying hourly (mig 071), an adopted automatic pass cleared the pending proposal, so a candidate the operator was reading got wiped and Accept failed with "no proposal". It also gated nothing the loop wasn't already enforcing, and on a hands-off schedule the latency meant the brief sat waiting for an approval nobody was coming to give | Removed (mig 072 drops `fix_candidate_jsonb`). Reviewability moves from **before** the change to **after** it: `auto_fix_jsonb` carries the composer's `original_markdown` + `original_findings`, captured on the first run and never overwritten, and `/admin/review` renders the before/after plus the pass log. Remedies for a fix you dislike are the ordinary ones — Re-compose, edit the body, Discard | `src/shared/auto-fix.ts`, `src/views/admin-review.tsx` |
 | Gloss panel cries wolf — the acronym regex flags ubiquitous names (BBC, IBM) and every source-credit link label, so real findings stop being read. Worse, the AI layer quietly overruled them and the page showed both verdicts with equal weight | Four things, mig 070: the code whitelist is a deliberate **superset** of the composer prompt's (over-glossing costs six words, over-flagging costs the operator's trust) and `checker.ts` renders it into its own system prompt so the layers can't drift; acronyms appearing **only** inside markdown link labels aren't uses at all; `gloss_term.is_ignored` is an operator ignore list with a one-click "ignore" button on each finding; and `CheckResult.markdown_sha` lets the panel tell a current AI verdict from a stale one — a current verdict demotes the regex flags it didn't reproduce to an "overruled" fold-out | `src/shared/gloss-lint.ts`, `src/shared/check-schema.ts` |
 | "Re-generate fix" is a guaranteed no-op — the composer is cached on a hash of its rendered input, so the same findings produced the byte-identical brief straight out of `ai_call_log` and nothing on the page moved | The attempt number is rendered into the revision notes (`findingsToNotes(findings, attempt)`), which both breaks the hash and tells the composer something true: the last try didn't land. Persisted on `FixCandidate.attempt`, so each manual re-generate counts up. `/admin/review/:id/auto-fix` re-runs the whole automatic loop on demand — the hourly sweep deliberately won't (a composer call an hour), which had left no way to say "try again" | `src/shared/auto-fix.ts`, `src/api/admin.tsx` |
+| A stage fails on the hourly tick and **nobody hears about it**. The scheduler was already correct about retrying — due-ness reads `last_success_at`, so a failing stage stays due rather than silently advancing — but the human-facing half was a `console.error` on a machine that suspends between ticks. And the failures that hurt most here don't throw at all: a stage that stops being scheduled, a draft past the staleness ceiling, storage creeping toward the free-tier wall (which surfaced as "publish crashes"). For a product whose correct output is sometimes *nothing*, a jammed pipeline and a quiet week are the same observation | Two channels, both plain email through the existing `notifyAdmin`. (1) The scheduler's catch block mails on a throw, rate-limited by **consecutive-failure count** — powers of two, so 1/2/4/8… A count, not a clock, because each tick is a fresh `scheduler-tick` process and `notifyAdmin`'s dedup map is in-memory and always empty on arrival. (2) The `heartbeat` stage digests everything that never throws. Both decisions are pure functions (`shouldNotifyFailure`, `heartbeatDecision`, `findProblems`) with the DB reads next door in `pipeline-heartbeat.ts` | `src/shared/pipeline-health.ts`, `src/pipeline/heartbeat.ts`, `src/scheduler.ts` |
 | Operator can't tell a blocked pipeline from a quiet week, and can't drive a release from the web (every parameterized op was CLI-only because `pipeline_force_run` had nowhere to put an argument) | `/admin/release`: blockers (open draft, lock, cadence gap, next anchored compose), unpublished-backlog counts by age band with the stranded bands flagged, and a catch-up picker. `pipeline_force_run.args` (mig 067) carries stage parameters, so `/admin/run/:stage` can finally say *how* to run, not just *that* it should | `src/views/admin-release.tsx`, `src/api/admin.tsx` |
 | One forgotten draft silently stalls the whole pipeline (`runCompose` bails while any `is_draft` row exists, so every later compose no-ops with only a log line — this ate three weeks of briefs once, and a blocked pipeline looked exactly like a quiet one) | The autopublish sweep: a draft that can't sit forever can't block forever. Backed by the `/admin/review` banner, which states the actual publish time for an open draft instead of leaving the deadline implicit | `src/pipeline/autopublish.ts`, `src/views/admin-review.tsx` |
 | A reviewer added after the draft sweep (or one whose send errored) never gets the draft — the sweep's `NOT EXISTS` checks only that a `dispatch_log` row exists, not that it succeeded | "Send draft to reviewers" on `/admin/review/:id` → `resendDraftToReviewers`, which targets reviewers with no *settled* send. `DRAFT_SEND_SETTLED` must list statuses from **both** writers — the dispatch stage (`sent`/`noop`) and the Resend webhook (`delivered`/`delayed`), which rewrites rows by `provider_message_id`. Omitting the webhook's pair re-mails everyone whose delivery was confirmed | `src/pipeline/dispatch.ts`, `src/pipeline/dispatch-resend.test.ts` |

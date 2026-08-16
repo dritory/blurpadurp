@@ -22,6 +22,7 @@ const SUBCOMMANDS = [
   "editor-replay",
   "reset-publish",
   "retention",
+  "heartbeat",
   "cold-migrate",
   "eval",
   "scheduler-tick",
@@ -135,6 +136,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       return;
     case "retention":
       await (await import("./pipeline/retention.ts")).retention();
+      return;
+    case "heartbeat":
+      await (await import("./pipeline/heartbeat.ts")).heartbeat();
       return;
     case "cold-migrate": {
       const batchSize = args[0] !== undefined ? Number(args[0]) : 500;
