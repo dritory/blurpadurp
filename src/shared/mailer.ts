@@ -14,6 +14,46 @@ import { Resend } from "resend";
 import { getEnvOptional } from "./env.ts";
 
 const FROM_DEFAULT = "brief@blurpadurp.com";
+// Display name on the From header. Without one, every inbox and
+// push notification shows the bare local part ("brief") — the address
+// identifies the sender to a mail server, the display name identifies
+// it to the reader. Overridable via FROM_NAME.
+const FROM_NAME_DEFAULT = "Blurpadurp";
+
+// Characters allowed in an unquoted RFC 5322 display name (atext plus
+// space). Anything else — comma, period, colon, parens, quotes — has
+// to be inside a quoted-string or the header is malformed.
+const UNQUOTED_DISPLAY_NAME = /^[A-Za-z0-9 !#$%&'*+\-/=?^_`{|}~]+$/;
+
+/** Build the From header from an address + optional display name.
+ *
+ *  Three shapes, in precedence order:
+ *  - FROM_EMAIL already in mailbox form ("Name <addr>") → used verbatim;
+ *    the operator has said exactly what they want.
+ *  - address + name → `Name <addr>`, name quoted when it needs it.
+ *  - address alone (name blank after sanitising) → bare address.
+ *
+ *  CR/LF are stripped from the name rather than escaped: a newline in a
+ *  header value is header injection, and there is no legitimate name
+ *  that needs one.
+ */
+export function formatFrom(address: string, name: string | undefined): string {
+  if (address.includes("<")) return address;
+  const clean = (name ?? "").replace(/[\r\n]+/g, " ").trim();
+  if (clean === "") return address;
+  const display = UNQUOTED_DISPLAY_NAME.test(clean)
+    ? clean
+    : `"${clean.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+  return `${display} <${address}>`;
+}
+
+/** Resolved From header for this process, from env + defaults. */
+export function resolveFrom(): string {
+  return formatFrom(
+    getEnvOptional("FROM_EMAIL") ?? FROM_DEFAULT,
+    getEnvOptional("FROM_NAME") ?? FROM_NAME_DEFAULT,
+  );
+}
 
 export interface MailInput {
   to: string;
@@ -42,11 +82,11 @@ function getClient(apiKey: string): Resend {
 
 export async function sendMail(input: MailInput): Promise<MailResult> {
   const apiKey = getEnvOptional("RESEND_API_KEY");
-  const from = getEnvOptional("FROM_EMAIL") ?? FROM_DEFAULT;
+  const from = resolveFrom();
 
   if (apiKey === undefined || apiKey.length === 0) {
     console.log(
-      `[mailer] NOOP → ${input.to} :: ${input.subject} (${input.text.length} chars text, ${input.html.length} html)`,
+      `[mailer] NOOP → ${input.to} :: ${input.subject} (from ${from}, ${input.text.length} chars text, ${input.html.length} html)`,
     );
     return { ok: true, id: null, error: null, noop: true };
   }

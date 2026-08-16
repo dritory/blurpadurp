@@ -295,6 +295,70 @@ Spikes suggest a script.
 not a wall. If it's sustained, Turnstile or equivalent is the right
 answer.
 
+### 8b. Published an issue, no emails arrived
+
+**Symptom:** The issue is live on `/` and `/archive`, inboxes are empty.
+
+Publish and send are two different stages. Publishing flips `is_draft`
+and busts the page cache; the mail waits for the dispatch sweep, which
+runs on a **6h** cadence (mig 053). `publishDraft` queues a
+`pipeline_force_run` row so the next hourly tick sends — but that's
+still up to an hour, and the first thing to rule out is simply "it
+hasn't run yet".
+
+**Quick diagnosis**, in order — stop at the first one that answers it:
+
+```sql
+-- 1. has dispatch run since the publish? (also /admin/status)
+SELECT status, started_at, completed_at, error
+FROM pipeline_run WHERE stage = 'dispatch'
+ORDER BY started_at DESC LIMIT 5;
+
+-- 2. is the stage even switched on?
+SELECT * FROM pipeline_schedule WHERE stage = 'dispatch';
+SELECT * FROM pipeline_force_run;      -- pending queue
+
+-- 3. what did the sweep decide for this issue?
+SELECT status, count(*) FROM dispatch_log
+WHERE issue_id = <id> AND subscription_kind = 'email' GROUP BY 1;
+
+-- 4. is the audience non-empty?
+SELECT count(*) FROM email_subscription
+WHERE confirmed_at IS NOT NULL AND unsubscribed_at IS NULL;
+```
+
+Reading step 3:
+
+- **`noop`** — `RESEND_API_KEY` is unset on the machine that ran the
+  sweep. The mailer logs the send and returns success by design (keeps
+  dev cheap), so this is the one failure that looks like a clean run in
+  every log and counter. Check `fly secrets list`.
+- **`error_permanent` / `error_transient`** — read the `error` column;
+  usually an unverified sending domain or a bad `FROM_EMAIL`.
+- **`sent` but nothing received** — it left the building. Resend
+  dashboard, then spam/DMARC. Check `/webhooks/resend` is registered:
+  without it, bounces never come back.
+- **no rows at all** — nobody matched the pair query. Three filters do
+  this: `confirmed_at IS NULL` (subscribed but never clicked confirm),
+  `unsubscribed_at IS NOT NULL`, and `published_at >= confirmed_at` —
+  a subscriber only gets issues published *after* they confirmed, so a
+  brand-new subscriber is correctly skipped for an issue that predates
+  them.
+
+**Immediate:** force a sweep — "Run now" on `/admin/scheduler`, or
+`bun run cli dispatch`. Dispatch is at-most-once per (issue,
+subscription), so a `noop`/error row blocks the retry. After fixing the
+cause, clear only the un-sent rows and re-run:
+
+```sql
+DELETE FROM dispatch_log
+WHERE issue_id = <id> AND subscription_kind = 'email'
+  AND status IN ('noop', 'error_permanent', 'error_transient');
+```
+
+Never delete `sent` / `delivered` / `delayed` rows — that's how you
+mail the same issue twice.
+
 ### 9. Email dispatch double-sending
 
 **Symptom:** A reader reports getting two copies of the same issue.
