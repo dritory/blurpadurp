@@ -36,6 +36,10 @@ function byKey(objs: RenderedObject[]): Map<string, string> {
   return new Map(objs.map((o) => [o.key, o.body]));
 }
 
+function byPath(objs: RenderedObject[]): Map<string, RenderedObject> {
+  return new Map(objs.map((o) => [o.path, o]));
+}
+
 describe("renderStaticSurface", () => {
   test("emits the full rolling+permalink key set, keys match the Worker", async () => {
     const now = new Date();
@@ -56,8 +60,8 @@ describe("renderStaticSurface", () => {
       "privacy.html",
       "issues/1.html",
       "issues/2.html",
-      // Norwegian is namespaced under its URL prefix. These MUST match
-      // the Worker's pageTarget() mapping in infra/worker/src/index.ts.
+      // Norwegian is namespaced under its URL prefix. The Worker learns
+      // these from the manifest rather than re-deriving them.
       "no/home.html",
       "no/archive.html",
       "no/about.html",
@@ -131,22 +135,59 @@ describe("renderStaticSurface", () => {
   });
 });
 
-describe("Worker key map", () => {
-  // The export writes R2 keys and the Worker reads them; nothing at
-  // runtime connects the two, so a locale added on one side and not the
-  // other means /no/* quietly proxies to Fly (or 404s) forever. The
-  // Worker isn't importable here — it's a separate build with
-  // Cloudflare-only types — so the guard reads its source.
-  test("the Worker's locale prefixes match LOCALE_PREFIX", async () => {
-    const { LOCALES, LOCALE_PREFIX } = await import("../shared/i18n.ts");
-    const src = await Bun.file("infra/worker/src/index.ts").text();
-    const m = src.match(/const LOCALE_PREFIXES = \[([^\]]*)\]/);
-    expect(m).not.toBeNull();
-    const workerPrefixes = [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]);
-    const appPrefixes = LOCALES.map((l) => LOCALE_PREFIX[l]).filter(
-      (p) => p !== "",
+describe("every rendered page is reachable through the Worker", () => {
+  // The export writes R2 keys and the Worker reads them. This used to be
+  // two hand-written maps joined by a comment, and the guard here could
+  // only regex the Worker's locale-prefix list out of its source. Now the
+  // export publishes a manifest and the Worker resolves against it — so
+  // the test can run the Worker's actual resolver over the actual output
+  // and assert that every page the pipeline renders is served from the
+  // edge rather than falling through to Fly.
+  test("each page's public path resolves to that page's object", async () => {
+    const { buildManifest } = await import("../shared/static-manifest.ts");
+    const { lookupRoute, parseManifest } = await import(
+      "../../infra/worker/src/routes.ts"
     );
-    expect(workerPrefixes.sort()).toEqual(appPrefixes.sort());
+
+    const objs = await renderStaticSurface([issue(2, new Date())], 8);
+    // Serialised and re-parsed, exactly as it travels through R2.
+    const manifest = parseManifest(
+      JSON.stringify(buildManifest(objs, new Date())),
+    );
+
+    for (const obj of objs) {
+      const route = lookupRoute(manifest, obj.path);
+      expect(route, `${obj.path} does not resolve at the edge`).not.toBeNull();
+      expect(route?.key).toBe(obj.key);
+      expect(route?.contentType).toBe(obj.contentType);
+    }
+  });
+
+  test("the localized paths are the ones readers actually visit", async () => {
+    const { LOCALES, LOCALE_PREFIX } = await import("../shared/i18n.ts");
+    const objs = byPath(await renderStaticSurface([issue(2, new Date())], 8));
+
+    // Default locale is unprefixed; every other locale sits under its
+    // prefix. A locale added to i18n.ts and not rendered here shows up as
+    // a missing path, not as a silent proxy-to-Fly.
+    for (const locale of LOCALES) {
+      const prefix = LOCALE_PREFIX[locale];
+      expect(objs.has(prefix === "" ? "/" : prefix)).toBe(true);
+      for (const path of ["/archive", "/about", "/privacy", "/issue/2"]) {
+        expect(objs.has(`${prefix}${path}`)).toBe(true);
+      }
+    }
+    // Locale-agnostic surfaces stay at the bare path — exactly one each.
+    for (const path of ["/feed.xml", "/sitemap.xml", "/robots.txt"]) {
+      expect(objs.has(path)).toBe(true);
+    }
+  });
+
+  test("issue permalinks cache harder than the rolling pages", async () => {
+    const objs = byPath(await renderStaticSurface([issue(2, new Date())], 8));
+    const permalink = objs.get("/issue/2")!;
+    const home = objs.get("/")!;
+    expect(permalink.ttl).toBeGreaterThan(home.ttl);
   });
 });
 
@@ -155,13 +196,46 @@ describe("exportPublicAssets", () => {
     const store = makeMemoryObjectStore();
     setPublicObjectStoreForTesting(store);
     try {
-      const n = await exportPublicAssets();
-      expect(n).toBeGreaterThan(0);
+      const entries = await exportPublicAssets();
+      expect(entries.length).toBeGreaterThan(0);
       // The page sub-resources that were leaking to Fly:
       expect(await store.exists("assets/blurp.svg")).toBe(true);
       expect(await store.exists("assets/wave.js")).toBe(true);
       // Nested dirs keep their path (slash-joined, not OS sep).
       expect(await store.exists("assets/vendor/htmx-2.0.4.min.js")).toBe(true);
+    } finally {
+      setPublicObjectStoreForTesting(null);
+    }
+  });
+
+  test("assets are advertised at their /assets/ URL, favicon aliased", async () => {
+    const store = makeMemoryObjectStore();
+    setPublicObjectStoreForTesting(store);
+    try {
+      const { lookupRoute, parseManifest } = await import(
+        "../../infra/worker/src/routes.ts"
+      );
+      const { buildManifest } = await import("../shared/static-manifest.ts");
+      const manifest = parseManifest(
+        JSON.stringify(buildManifest(await exportPublicAssets(), new Date())),
+      );
+
+      // The sub-resource fetch that was waking Fly on every reader visit.
+      expect(lookupRoute(manifest, "/assets/blurp.svg")).toEqual({
+        key: "assets/blurp.svg",
+        contentType: "image/svg+xml",
+        ttl: 86_400,
+      });
+      expect(lookupRoute(manifest, "/assets/vendor/htmx-2.0.4.min.js")?.key).toBe(
+        "assets/vendor/htmx-2.0.4.min.js",
+      );
+      // Crawlers probe /favicon.ico directly; it aliases onto the mark.
+      expect(lookupRoute(manifest, "/favicon.ico")?.key).toBe(
+        "assets/blurp.svg",
+      );
+      // Traversal isn't expressible: the manifest is an exact-match map,
+      // so there's nothing to escape from.
+      expect(lookupRoute(manifest, "/assets/../manifest.json")).toBeNull();
     } finally {
       setPublicObjectStoreForTesting(null);
     }

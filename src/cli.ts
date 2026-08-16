@@ -22,6 +22,7 @@ const SUBCOMMANDS = [
   "editor-replay",
   "reset-publish",
   "retention",
+  "heartbeat",
   "cold-migrate",
   "eval",
   "scheduler-tick",
@@ -136,6 +137,9 @@ async function run(sub: Sub, args: string[]): Promise<void> {
     case "retention":
       await (await import("./pipeline/retention.ts")).retention();
       return;
+    case "heartbeat":
+      await (await import("./pipeline/heartbeat.ts")).heartbeat();
+      return;
     case "cold-migrate": {
       const batchSize = args[0] !== undefined ? Number(args[0]) : 500;
       const maxBatches = args[1] !== undefined ? Number(args[1]) : 0;
@@ -185,7 +189,7 @@ async function run(sub: Sub, args: string[]): Promise<void> {
       );
       const res = await exportStaticPages();
       console.log(
-        `static-export: wrote ${res.count} objects (${res.issues} issues) to the public store`,
+        `static-export: wrote ${res.count} objects (${res.issues} issues) + ${res.assets} assets to the public store, ${res.routes} routes in the manifest`,
       );
       return;
     }

@@ -25,9 +25,10 @@ unless a feature genuinely needs it). Architecture in
 
 ```
 ingest → score → editor → compose → autopublish → dispatch → retention
+                                                          → heartbeat
 ```
 
-Six scheduled stages, run hourly by `scheduler.ts` against the
+Seven scheduled stages, run hourly by `scheduler.ts` against the
 `pipeline_schedule` table (mig 039). Each acquires a DB mutex
 (`pipeline_lock`, mig 024) so manual + cron triggers can't collide.
 
@@ -115,8 +116,22 @@ is how the drift hid last time.
   that never flipped it, the tiering `docs/storage.md` describes has
   never actually run. Check that before concluding storage growth is a
   bug.
+- **heartbeat** runs every 6h, last in the tick so its digest reports
+  the state the tick *left* (`src/pipeline/heartbeat.ts`, mig 078). It
+  watches the failures that never throw — a stage outside its cadence,
+  a draft parked past the staleness ceiling, spend against the cap,
+  `pg_database_size` against `storage.db_budget_mb` — and mails the
+  operator. Two rules, both in the pure `heartbeatDecision`: a problem
+  mails at most every `heartbeat.alert_interval_hours` (12), and a
+  *healthy* pipeline still mails every
+  `heartbeat.all_clear_interval_hours` (168). **Don't drop the
+  all-clear to cut noise** — without it an empty inbox means both
+  "fine" and "the monitor died too", which is the exact ambiguity this
+  stage exists to remove. Stage stall thresholds are 3× cadence, and
+  anchored compose is measured against a week, not its ignored
+  `interval_sec`.
 
-Beyond the five scheduled stages, `src/pipeline/` also holds:
+Beyond the scheduled stages, `src/pipeline/` also holds:
 `urgent.ts` (event-driven mid-cycle publish), `eval.ts` (human-label
 calibration set surfaced at `/admin/eval`), `draft.ts` (admin draft
 publish/discard/recompose plumbing), `fixture.ts` (capture/replay
@@ -236,6 +251,7 @@ medium**. This shapes partition choices:
 | The fix gate became worse than no gate. The propose→preview→accept path (mig 065) was a human approving each recompose — but once the sweep started retrying hourly (mig 071), an adopted automatic pass cleared the pending proposal, so a candidate the operator was reading got wiped and Accept failed with "no proposal". It also gated nothing the loop wasn't already enforcing, and on a hands-off schedule the latency meant the brief sat waiting for an approval nobody was coming to give | Removed (mig 072 drops `fix_candidate_jsonb`). Reviewability moves from **before** the change to **after** it: `auto_fix_jsonb` carries the composer's `original_markdown` + `original_findings`, captured on the first run and never overwritten, and `/admin/review` renders the before/after plus the pass log. Remedies for a fix you dislike are the ordinary ones — Re-compose, edit the body, Discard | `src/shared/auto-fix.ts`, `src/views/admin-review.tsx` |
 | Gloss panel cries wolf — the acronym regex flags ubiquitous names (BBC, IBM) and every source-credit link label, so real findings stop being read. Worse, the AI layer quietly overruled them and the page showed both verdicts with equal weight | Four things, mig 070: the code whitelist is a deliberate **superset** of the composer prompt's (over-glossing costs six words, over-flagging costs the operator's trust) and `checker.ts` renders it into its own system prompt so the layers can't drift; acronyms appearing **only** inside markdown link labels aren't uses at all; `gloss_term.is_ignored` is an operator ignore list with a one-click "ignore" button on each finding; and `CheckResult.markdown_sha` lets the panel tell a current AI verdict from a stale one — a current verdict demotes the regex flags it didn't reproduce to an "overruled" fold-out | `src/shared/gloss-lint.ts`, `src/shared/check-schema.ts` |
 | "Re-generate fix" is a guaranteed no-op — the composer is cached on a hash of its rendered input, so the same findings produced the byte-identical brief straight out of `ai_call_log` and nothing on the page moved | The attempt number is rendered into the revision notes (`findingsToNotes(findings, attempt)`), which both breaks the hash and tells the composer something true: the last try didn't land. Persisted on `FixCandidate.attempt`, so each manual re-generate counts up. `/admin/review/:id/auto-fix` re-runs the whole automatic loop on demand — the hourly sweep deliberately won't (a composer call an hour), which had left no way to say "try again" | `src/shared/auto-fix.ts`, `src/api/admin.tsx` |
+| A stage fails on the hourly tick and **nobody hears about it**. The scheduler was already correct about retrying — due-ness reads `last_success_at`, so a failing stage stays due rather than silently advancing — but the human-facing half was a `console.error` on a machine that suspends between ticks. And the failures that hurt most here don't throw at all: a stage that stops being scheduled, a draft past the staleness ceiling, storage creeping toward the free-tier wall (which surfaced as "publish crashes"). For a product whose correct output is sometimes *nothing*, a jammed pipeline and a quiet week are the same observation | Two channels, both plain email through the existing `notifyAdmin`. (1) The scheduler's catch block mails on a throw, rate-limited by **consecutive-failure count** — powers of two, so 1/2/4/8… A count, not a clock, because each tick is a fresh `scheduler-tick` process and `notifyAdmin`'s dedup map is in-memory and always empty on arrival. (2) The `heartbeat` stage digests everything that never throws. Both decisions are pure functions (`shouldNotifyFailure`, `heartbeatDecision`, `findProblems`) with the DB reads next door in `pipeline-heartbeat.ts` | `src/shared/pipeline-health.ts`, `src/pipeline/heartbeat.ts`, `src/scheduler.ts` |
 | Operator can't tell a blocked pipeline from a quiet week, and can't drive a release from the web (every parameterized op was CLI-only because `pipeline_force_run` had nowhere to put an argument) | `/admin/release`: blockers (open draft, lock, cadence gap, next anchored compose), unpublished-backlog counts by age band with the stranded bands flagged, and a catch-up picker. `pipeline_force_run.args` (mig 067) carries stage parameters, so `/admin/run/:stage` can finally say *how* to run, not just *that* it should | `src/views/admin-release.tsx`, `src/api/admin.tsx` |
 | One forgotten draft silently stalls the whole pipeline (`runCompose` bails while any `is_draft` row exists, so every later compose no-ops with only a log line — this ate three weeks of briefs once, and a blocked pipeline looked exactly like a quiet one) | The autopublish sweep: a draft that can't sit forever can't block forever. Backed by the `/admin/review` banner, which states the actual publish time for an open draft instead of leaving the deadline implicit | `src/pipeline/autopublish.ts`, `src/views/admin-review.tsx` |
 | A reviewer added after the draft sweep (or one whose send errored) never gets the draft — the sweep's `NOT EXISTS` checks only that a `dispatch_log` row exists, not that it succeeded | "Send draft to reviewers" on `/admin/review/:id` → `resendDraftToReviewers`, which targets reviewers with no *settled* send. `DRAFT_SEND_SETTLED` must list statuses from **both** writers — the dispatch stage (`sent`/`noop`) and the Resend webhook (`delivered`/`delayed`), which rewrites rows by `provider_message_id`. Omitting the webhook's pair re-mails everyone whose delivery was confirmed | `src/pipeline/dispatch.ts`, `src/pipeline/dispatch-resend.test.ts` |
@@ -251,7 +267,9 @@ medium**. This shapes partition choices:
 | Pipeline pool drains on re-compose | Composer-replay harness (doesn't touch DB) | `bun run cli composer-replay …` |
 | Neon CU climbing from `/health` probe storm | `/health` is DB-less (process-alive only). DB-backed freshness payload lives at `/status` for external monitors; `/admin/status` for the operator. Freshness-query indexes from mig 051. | `src/api/index.tsx`, `fly.toml`, `src/api/status.ts` |
 | Neon woken by crawler/reader traffic on public pages | Public read pages (`/`, `/archive`, `/about`, `/privacy`, `/feed.xml`, `/sitemap.xml`, `/issue/:id`) served from the R2 page cache (TTL + bust on publish), not the DB. App machine autostops, so the cache must be out-of-process (R2). `/about` and `/privacy` are effectively static — the Hono routes still exist as a fallback for direct-to-origin probes, but the Worker serves the R2 copy first. | `src/shared/page-cache.ts`, `src/pipeline/draft.ts` |
-| Fly machine wakes on a reader visit *despite* the R2 edge | The HTML was edge-served, but its same-origin sub-resources weren't: `/assets/*` (brand mark, `wave.js`) + the `/favicon.ico` probe fell through the Worker's `keyFor` → proxied to Fly. Worker now serves `/assets/*` from R2 (`exportPublicAssets` mirrors `./public`). The `<link rel="icon">` tag in the layout helps well-behaved browsers but crawlers and older clients still probe `/favicon.ico` directly, so the Worker also maps `/favicon.ico` → `assets/blurp.svg` to keep that probe off the origin. | `infra/worker/src/index.ts`, `src/pipeline/static-export.tsx`, `src/views/layout.tsx` |
+| Fly machine wakes on a reader visit *despite* the R2 edge | The HTML was edge-served, but its same-origin sub-resources weren't: `/assets/*` (brand mark, `wave.js`) + the `/favicon.ico` probe fell through the Worker's key map → proxied to Fly. Both are edge-served now. The `<link rel="icon">` tag in the layout helps well-behaved browsers but crawlers and older clients still probe `/favicon.ico` directly, so the manifest aliases it onto `assets/blurp.svg` to keep that probe off the origin. | `infra/worker/src/index.ts`, `src/pipeline/static-export.tsx`, `src/views/layout.tsx` |
+| The path→key map existed twice — the export chose keys, the Worker re-derived them from the request path, and a comment on each side asked the next person to keep them in agreement. It drifted twice: `/assets/*` was added to the export only (the row above), and the Worker's `keyFor` was renamed to `pageTarget`/`assetTarget` while all three comments kept pointing at the old name. Nothing at runtime connected the two, so drift showed up as reader traffic quietly waking Fly | The export publishes its own map: `manifest.json`, written into the bucket **last** (after every body is in place) and re-read by the Worker per isolate on a 60s TTL. The Worker holds no routes at all, so adding a page/locale/asset is a one-sided change — which also dodges `worker-deploy.yml` only firing on `infra/worker/**`. No manifest = no routes = everything proxies to origin, the same Tier-0 degradation as an empty bucket (`bun run cli static-export` populates it without waiting for a publish). Worker routing lives in a Cloudflare-type-free `routes.ts` **so the app's tests can import the real resolver** and run it over the real export output — the old guard could only regex the locale list out of the Worker's source | `src/shared/static-manifest.ts`, `infra/worker/src/routes.ts`, `src/pipeline/static-export.tsx` |
+| `src/db/schema.ts` is hand-maintained against 77 migrations ("keep in sync by hand"). Drift is silent in the direction that matters: a migration adds or renames a column, the Kysely types don't know, and every query still type-checks while lying about what comes back | `test/integration/schema-drift.test.ts` diffs the declared `Database` interface against `information_schema` on the migrated test database — tables, columns, nullability, base type, and `Generated<>` on a column with no default. Costs nothing to run: the integration job already stands up Postgres and applies every migration. `numeric` maps to `string` on purpose (node-postgres doesn't parse numerics into JS numbers) | `test/integration/schema-drift.test.ts` |
 | Site 5xx + monitor alert during cold start (single autostopping machine races its own stop: "machine still active, refusing to start") | Stay scale-to-zero (min = 0) but soften: `auto_stop_machines = "suspend"` (resume from RAM) + 15s health-check interval so a failed post-boot check re-probes fast. Self-heals; runbook #13. Do NOT "fix" the adjacent pg sslmode warning by pinning verify-full — it breaks the Neon handshake (runbook #13). | `fly.toml`, `docs/runbook.md` |
 | Confirmation-email bombing / domain-reputation abuse via `POST /subscribe` | Three layers: per-recipient `last_confirmation_sent_at` cooldown (mig 061) kills same-address resend; a fixed-key global token bucket caps total outbound confirmations and alerts via `notifyAdmin` on trip; a coarse per-IP limiter wraps the signed-token routes. All throttle paths return the same `subscribed=1` redirect — never leak whether an address exists or was throttled. | `src/api/index.tsx`, `src/shared/rate-limit.ts` |
 
@@ -290,10 +308,12 @@ find out. Strings live in `src/shared/i18n.ts`, one typed object per
 locale, so a missing key is a compile error. Three things to know before
 touching it: locale is never negotiated from `Accept-Language` (reader
 pages sit behind an edge cache keyed on path alone, so varying by header
-hands the wrong language to whoever asks second); the R2 key map has to
-be changed in `static-export.tsx` **and** `infra/worker/src/index.ts`;
-and a subscriber's language lives on their row (mig 076) because a link
-clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
+hands the wrong language to whoever asks second); the R2 key map is
+authored once in `static-export.tsx` and published to the edge as
+`manifest.json`, so a new locale is a change there alone (the Worker
+needs no deploy); and a subscriber's language lives on their row
+(mig 076) because a link clicked from an inbox has no URL to recover it
+from. See `docs/i18n.md`.
 
 ## When in doubt
 
@@ -302,10 +322,11 @@ clicked from an inbox has no URL to recover it from. See `docs/i18n.md`.
   sub-resources** from a public R2 bucket and proxies the
   dynamic/write trickle to Fly. (Serving assets is load-bearing —
   miss them and the browser wakes Fly fetching the logo/favicon
-  off the R2-served HTML.) Publish-time export +
-  path→key map live in `src/pipeline/static-export.tsx` /
-  `infra/worker/`; keep the two key maps in sync. Opt-in via
-  `R2_PUBLIC_BUCKET` — no-op until set. See `docs/scaling.md`.
+  off the R2-served HTML.) The publish-time export owns the path→key
+  map (`src/pipeline/static-export.tsx`) and publishes it as
+  `manifest.json`; the Worker reads that and holds no routes of its
+  own. Opt-in via `R2_PUBLIC_BUCKET` — no-op until set. See
+  `docs/scaling.md`.
 - Don't add a new AI stage. Prefer hard structure in TypeScript.
 - Don't hot-patch prompts in production. Capture → replay → bump
   version → commit.

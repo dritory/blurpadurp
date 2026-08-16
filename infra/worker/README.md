@@ -19,8 +19,16 @@ before the bucket is populated** — it behaves as a plain caching proxy
 until `static-export` starts writing objects, then transparently
 upgrades to serving from R2.
 
-The path→key map in `src/index.ts` (`keyFor`) **must stay in sync** with
-the keys written by `src/pipeline/static-export.tsx`.
+The Worker does **not** hold a path→key map. The publish pipeline writes
+`manifest.json` into the bucket describing every object it wrote and the
+path that serves it; `src/routes.ts` resolves requests against that.
+Adding a page, a locale or an asset is a change to
+`src/pipeline/static-export.tsx` alone — no Worker deploy needed, which
+matters because `worker-deploy.yml` only fires on `infra/worker/**`.
+
+`src/routes.ts` is deliberately free of Cloudflare types so the app's
+test suite can import it and check the Worker's real resolver against
+the export's real output.
 
 ## Deploy
 

@@ -19,6 +19,11 @@ import { compose, type RetroOptions } from "./pipeline/compose.ts";
 import { autopublish } from "./pipeline/autopublish.ts";
 import { dispatch } from "./pipeline/dispatch.ts";
 import { retention } from "./pipeline/retention.ts";
+import { heartbeat } from "./pipeline/heartbeat.ts";
+import { notifyAdmin, renderAdminNotice } from "./shared/admin-notify.ts";
+import { getEnvOptional } from "./shared/env.ts";
+import { shouldNotifyFailure } from "./shared/pipeline-health.ts";
+import { countConsecutiveFailures } from "./shared/pipeline-heartbeat.ts";
 
 // The Fly machine schedule. Used as the lookahead window in the
 // cooldown check: a stage whose due-time would fall before the next
@@ -40,6 +45,9 @@ export interface StageJob {
 // still want). autopublish sits between compose and dispatch so a
 // draft that comes due is published in time for the same tick's
 // dispatch sweep to mail it, rather than waiting a further hour.
+//
+// heartbeat runs dead last, after retention, so its digest reports the
+// state the tick actually left behind rather than the one it found.
 const STAGES: StageJob[] = [
   { stage: "ingest", run: ingest },
   { stage: "score", run: score },
@@ -47,6 +55,7 @@ const STAGES: StageJob[] = [
   { stage: "autopublish", run: autopublish },
   { stage: "dispatch", run: dispatch },
   { stage: "retention", run: retention },
+  { stage: "heartbeat", run: heartbeat },
 ];
 
 // Decode compose's force-run payload. Shape: {"retro": true} for a
@@ -302,6 +311,62 @@ export async function runWithBookkeeping(
       .where("id", "=", inserted.id)
       .execute();
     console.error(`[scheduler] ${job.stage} errored:`, msg);
+    await notifyStageFailure(job.stage, msg);
+  }
+}
+
+// Tell the operator a stage threw.
+//
+// Until this existed the only record was the console.error above, on a
+// machine that suspends between ticks — so a stage could fail every hour
+// indefinitely and nothing would reach a human. The scheduler is correct
+// about *retrying* (due-ness is computed from last_success_at, so a
+// failing stage stays due rather than silently advancing); it was the
+// telling-anyone half that was missing.
+//
+// Rate-limited by failure count, not by a clock: powers of two, so the
+// first failure mails immediately and a stage broken for a week sends
+// ~8 mails rather than 168. It has to be count-based because each tick
+// is a fresh `bun run cli scheduler-tick` process — notifyAdmin's dedup
+// map is in-memory and always empty on arrival.
+//
+// Never throws: an alert that breaks the tick it is reporting on would
+// be worse than no alert.
+async function notifyStageFailure(stage: string, message: string): Promise<void> {
+  try {
+    const failures = await countConsecutiveFailures(stage);
+    if (!shouldNotifyFailure(failures)) {
+      console.log(
+        `[scheduler] ${stage}: failure #${failures} — suppressed (next mail at the following power of two)`,
+      );
+      return;
+    }
+    const base = getEnvOptional("BLURPADURP_PUBLIC_URL");
+    const { html, text } = renderAdminNotice({
+      heading: `${stage} failed`,
+      bodyLines: [
+        failures === 1
+          ? `The ${stage} stage threw on its latest run.`
+          : `The ${stage} stage has now failed ${failures}× in a row without a success in between.`,
+        "",
+        message.slice(0, 1000),
+        "",
+        "The scheduler keeps retrying: due-ness is computed from the last success, so a failing stage stays due rather than being skipped.",
+      ],
+      ...(base !== undefined
+        ? { ctaLabel: "Open admin status", ctaUrl: `${base}/admin/status` }
+        : {}),
+    });
+    await notifyAdmin({
+      subject: `Blurpadurp: ${stage} failed${failures > 1 ? ` (${failures}× in a row)` : ""}`,
+      html,
+      text,
+    });
+  } catch (e) {
+    console.error(
+      `[scheduler] could not send failure notice for ${stage}:`,
+      e instanceof Error ? e.message : e,
+    );
   }
 }
 

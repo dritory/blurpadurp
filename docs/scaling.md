@@ -28,12 +28,29 @@ on first request like the in-app R2 page cache (`page-cache.ts`). That
 cache stays as the origin's own fast path; the static export is the
 edge's copy.
 
-## Path → object-key map (keep in sync)
+## Path → object-key map (published, not duplicated)
 
-`src/pipeline/static-export.tsx` writes these; the Worker's
-`pageTarget()` (`infra/worker/src/index.ts`) reads them. **If you change
-one, change the other.** A drift guard in `static-export.test.ts` pins
-the locale-prefix list on both sides, but the rest is convention.
+`src/pipeline/static-export.tsx` is the only author of this map. It
+writes `manifest.json` into the bucket next to the pages
+(`src/shared/static-manifest.ts` builds it), and the Worker resolves
+every request against that file rather than deriving keys itself
+(`infra/worker/src/routes.ts`). **Adding a page, a locale or an asset is
+a one-sided change** — no Worker deploy required, since the Worker
+re-reads the manifest (per isolate, 60s TTL) rather than shipping the
+routes in its bundle.
+
+This replaced two hand-written maps joined by a "keep in sync" comment.
+They drifted twice: `/assets/*` was added to the export and not the
+Worker (waking Fly on every reader visit — see the table below for why
+that row is load-bearing), and the Worker's `keyFor` was later renamed
+without updating the three comments pointing at it.
+
+`static-manifest.test.ts` and `static-export.test.ts` import the
+Worker's real resolver and run it over the real export output, so a page
+that stops being reachable from the edge fails CI rather than quietly
+proxying to Fly.
+
+The table below is therefore descriptive — the manifest is authoritative:
 
 | URL | R2 key | Edge TTL |
 |---|---|---|
@@ -52,10 +69,18 @@ Locale note: the default locale keeps the bare keys, so adding a
 language moved nothing at the edge. Feed, sitemap and robots are
 deliberately **not** localized — one of each covers the whole site (the
 sitemap enumerates every locale's URLs, and the pages carry `hreflang`
-alternates saying they're translations of one another). Nothing at
-runtime connects the export's keys to the Worker's, so a locale added to
-one and not the other means `/no/*` silently proxies to Fly forever —
-which is what the drift guard exists to catch.
+alternates saying they're translations of one another). A locale added
+to `i18n.ts` but not rendered by the export simply isn't in the manifest
+and proxies to Fly; the localized-path test catches that before it
+ships.
+
+**Empty bucket, or no manifest, is safe.** No manifest means no routes,
+which means every request proxies to the origin — the Worker degrades to
+a plain caching proxy (Tier 0) exactly as it did before the bucket was
+populated. If you deploy the Worker before the next weekly publish, run
+`bun run cli static-export` to write the manifest rather than waiting.
+The manifest is written **last**, after every body is in place, so the
+edge never resolves a route to an object that isn't there yet.
 
 The `/assets/*` row is **load-bearing**: every reader page references
 same-origin sub-resources (the brand mark `/assets/blurp.svg`, `wave.js`,

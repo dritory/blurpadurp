@@ -584,6 +584,64 @@ payloads to a row it rewrites. Bulk belongs in `ai_call_log` (keyed by
 
 ---
 
+### 15. A heartbeat mail arrived (or stopped arriving)
+
+**The two mails, and what each means.**
+
+- **"`<stage>` failed"** — the scheduler's catch block. A stage threw on
+  its latest run. It is *not* skipped: due-ness is computed from
+  `last_success_at`, so a failing stage stays due and retries next tick.
+  Repeats are rate-limited by consecutive-failure count (1st, 2nd, 4th,
+  8th…), so an escalating subject line — "(8× in a row)" — means it has
+  been broken for at least eight ticks, not that it got worse.
+- **"Pipeline needs attention"** — the `heartbeat` stage (every 6h,
+  mig 078). It reports the failures that never throw. Re-sent at most
+  every `heartbeat.alert_interval_hours` (12) while the problem persists.
+- **"Pipeline healthy"** — the weekly all-clear
+  (`heartbeat.all_clear_interval_hours`, 168). Its job is to make an
+  empty inbox mean something. Which leads to the important case:
+
+**No mail for over a week is itself the alarm.** It means either the
+scheduler machine isn't ticking or the heartbeat stage is failing before
+it can send. Check, in order:
+
+```sh
+bun run cli status                      # last success per stage
+fly machine list -a blurpadurp          # is the scheduler machine alive?
+fly logs -a blurpadurp | grep heartbeat
+```
+
+`heartbeat` appears in its own digest, so a heartbeat that ran but
+couldn't mail still shows up in `pipeline_run` with `status = 'error'`.
+A heartbeat that never ran shows as `never` under last success.
+
+**What each problem line wants from you:**
+
+| Line | Action |
+|---|---|
+| `draft #N is …h old, past the …h staleness ceiling` | The sweep is deliberately refusing to send it (#5b). Publish it knowingly, or Discard — compose is blocked until you do. |
+| `draft #N … on hold` | Someone (or the sweep) parked it. `/admin/review` → clear the hold, or Discard. |
+| `<stage> has not succeeded since …` | #1–#7 by stage. `bun run cli status` for the full error. |
+| `database is … of a … budget` | #14. Check `auto_fix_jsonb` growth first, and remember Neon counts branch history — logical deletes don't shrink it until history rolls. |
+| `today's AI spend … cap` | #1. |
+
+**Tuning the noise.** Every threshold is config, not code:
+`heartbeat.alert_interval_hours`, `heartbeat.all_clear_interval_hours`,
+`storage.db_budget_mb`, `budget.daily_usd_cap`. Raise the intervals if
+the mail gets ignorable. **Don't turn the all-clear off** — an alerts-only
+monitor cannot distinguish a healthy pipeline from a dead monitor, which
+is the failure mode this whole stage exists to prevent. If it's genuinely
+too noisy, the honest fix is a wider `STALL_MULTIPLE` in
+`src/shared/pipeline-health.ts`, which is one number with a test on it.
+
+**Prevention:** this is the generalisation of #5b and #14 — both were
+silent for weeks because nothing was watching a number that was already
+in the database. Anything new that can wedge the pipeline without
+throwing belongs in `findProblems`, which is pure and takes a snapshot,
+so adding a check is a test and a case, not a new subsystem.
+
+---
+
 ## General triage rules
 
 1. **Don't hot-patch prompts in production.** Capture, replay, review,
