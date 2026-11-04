@@ -58,12 +58,15 @@ isn't fixable by information at all. "It exists, it's a show about X,
 everyone's watching" is the whole deliverable, and socially that is
 nearly always enough.
 
-One empirical handle exists already. The r/OutOfTheLoop connector is a
-weekly sample of exactly these gaps, phrased by the people who felt
-them, scored by a rubric whose early-reject list refuses most of what
-it brings. The scorer's `reject_reason` on that source, by week, is a
-direct measure of the demand the news lane turns away, and it should
-be read before any of the below is built.
+One empirical handle was supposed to exist already. The r/OutOfTheLoop
+connector is a weekly sample of exactly these gaps, phrased by the
+people who felt them, and what the news rubric does with it would be a
+direct measure of the demand the news lane turns away. In production
+it holds nine rows, all from May, and Reddit has answered 403 to every
+pull since (see the evidence section at the end). What the nine do
+show is that the gate, not the early-reject list, is what turns the
+FOMO-shaped ones away: none was early-rejected, and the five that
+failed all failed on half-life.
 
 ## Why the news pipeline can't carry this
 
@@ -78,15 +81,19 @@ half-life of hours or days by the rubric's own definitions, so even a
 water-cooler item (zeitgeist 5) scores at most 5 − non_obviousness
 against a threshold of 5. The multiplier is a durability proxy, and
 durability is the property the table says these classes don't have.
-The early-reject list refuses product launches, sports moments, award
-outcomes, celebrity moments and single-platform virality before any
-scoring happens, which is most of releases, people and moments. The
+The early-reject list names product launches, sports moments, award
+outcomes, celebrity moments and single-platform virality, which is
+most of releases, people and moments; in practice the scorer scores
+those anyway and the half-life multiplier does the refusing, and the
+reasons it does write down are mostly opinion columns, local crime and
+routine increments (the evidence section has the counts). The
 editor's four-quadrant rubric caps "loud but insignificant" at one or
 two picks per issue by design. And the sources measure events being
-reported: sixteen newsroom feeds, GDELT and Wikipedia, with only
-r/OutOfTheLoop measuring something being talked about, and the
-`viral_signals` fields the scorer could read never populated (open
-question O6).
+reported: twenty-nine newsroom feeds and Wikipedia, since GDELT has
+never produced a row in production and r/OutOfTheLoop stopped in May,
+so nothing live measures something being talked about, and the
+`viral_signals` fields the scorer could read were never populated
+(open question O6).
 
 So the choice is between widening the news gate and adding a second
 lane with its own gate. Widening is wrong for a reason the brief
@@ -183,8 +190,9 @@ lostness 4, publishes), a Netflix number one in its third week
 ninth week (already given to the reader, so memory suppresses it), a
 forty-eight-hour pile-on (lostness 0, fails), an in-circle crypto
 launch (encounter 1, breadth 1, fails), and the Tesla Roadster hover
-video (encounter 4, lostness 3, breadth 3 across YouTube, Wikipedia
-lookups and the tech desks, publishes as one sentence).
+video (encounter 4, lostness 3, breadth 3 across The Verge, Ars
+Technica and Al Jazeera, which is what production actually saw,
+publishes as one sentence).
 
 ## Sources: charts, not stories
 
@@ -321,23 +329,33 @@ gate under this design; it enters a second judgement on rows the news
 rules have already refused, and that is also what makes a cheap first
 phase possible.
 
-Phase zero needs no new source. The news scorer already sees the
-Roadster, since The Verge and Ars Technica are in the RSS set and
-GDELT carries the wire pickup, and it early-rejects it as a routine
-product launch, which stops the rubric before any number is written.
-The change is that an early-reject or gate-fail still emits two
-numbers, `recognition.encounter` and `recognition.lostness`, in the
-same call (the early-reject list exists to save tokens, and on
-DeepSeek tokens are no longer the constraint). `breadth` comes from
-what the row already carries: `source_count`,
-`wikipedia_corroborated`, the `crossover_discussion` trigger, and
-`additional_source_urls`. A pure selector next to `compose-shrug.ts`
-then builds Worth recognising from failed-gate rows the way shrug is
-built today, with one coexistence rule: a row with breakout evidence
-goes to recognising, a row without goes to shrug, and never both. The
-difference between the two sections is exactly that evidence, which
-is a nice property, since it means the section split is a measurement
-and not a mood.
+Phase zero needs no new source. The news scorer already saw the
+Roadster, five times in two days from The Verge, Ars Technica and Al
+Jazeera, and it did not early-reject the stunt: it scored it in full
+and the gate refused it at composite 2 against a threshold of 5, with
+`half_life` at 1 doing the work. The change is that a gate-fail or
+early-reject still emits two numbers, `recognition.encounter` and
+`recognition.lostness`, in the same call (early-rejected rows already
+carry a full set of scores in production, so this costs nothing).
+`breadth` has to be computed per theme, not read off the row.
+`additional_source_urls` and `source_count` are GDELT-only fields and
+are empty on every row the pipeline holds, and `wikipedia_corroborated`
+is a per-theme flag compose derives at run time. What a row does carry
+is the `crossover_discussion` trigger, and what its theme carries is
+the count of distinct source domains inside the compose window, which
+for the Roadster was three. So breadth is distinct domains in the
+cluster plus the crossover trigger, and the same selector that groups
+by cluster for the cap computes it. A pure selector next to
+`compose-shrug.ts` then builds Worth recognising from failed-gate rows
+the way shrug is built today, with one coexistence rule applied per
+cluster, not per row: a cluster with breakout evidence goes to
+recognising, one without goes to shrug, and never both. Per row is not
+enough, because production already shipped the Roadster as a shrug,
+and the row it shipped was a rival's mock video with no evidence on it
+while the stunt rows carrying the evidence sat one day outside the
+window. The difference between the two sections is exactly that
+evidence, which is a nice property, since it means the section split
+is a measurement and not a mood.
 
 This catches the Roadster, a halftime show, an album drop and a
 Netflix hit, because those reach the newsroom and tech feeds. It does
@@ -356,3 +374,122 @@ change. Phase two adds YouTube, Reddit r/all and the culture RSS feeds,
 which is when the breakout signal becomes real. Phase three is per-geo
 charts, and whether that becomes a per-locale section is the first
 decision worth making on evidence rather than now.
+
+## Evidence from production
+
+Read on 4 November 2026 from the production database, read-only, to
+check the two claims this doc leans on: that r/OutOfTheLoop measures
+the demand the news lane turns away, and that the Roadster row carries
+enough breadth for phase zero. Both came back different from what the
+doc assumed, and the body above has been corrected rather than
+caveated.
+
+Start with what the pipeline actually holds, because two of the four
+connectors in the registry turn out to be dead.
+
+| Source | Rows | First | Last | Early-rejected | Passed gate |
+|---|---|---|---|---|---|
+| rss | 69,431 | 2026-04-24 | 2026-11-04 | 14,664 | 9,791 |
+| wikipedia | 1,681 | 2026-04-26 | 2026-11-04 | 601 | 208 |
+| reddit_ootl | 9 | 2026-05-07 | 2026-05-16 | 0 | 4 |
+| gdelt | 0 | | | | |
+
+GDELT has never written a row: its cursor records "Cannot parse as
+CloudRegion" on every tick, which is the BigQuery location left unset,
+and it was still failing at the hour of reading. r/OutOfTheLoop ran
+for about three weeks in May and has had "403 Blocked" from Reddit on
+every pull since. Two things in this doc rested on those connectors
+without saying so. `additional_source_urls` and the scorer's
+`gdelt_metadata.source_count` are only ever written by GDELT, so the
+first is empty on all 16,031 rows of the last six weeks and the second
+exists nowhere; as a side effect the `source_count` the shrug selector
+ranks on is 1 for every candidate, and the round-robin across penalty
+factors is the only ranking shrug has. And the "measures something
+being talked about" source has been off for five months.
+
+The nine r/OutOfTheLoop rows are too few to break down by week, but
+they are not useless, because they contradict the mechanism the doc
+assumed. None was early-rejected. Four passed the gate (REI strikes,
+data-centre building, Spirit Airlines, backlash to The Sims) and one of
+those was published. The five that failed are the FOMO classes almost
+exactly: an Arby's takeover, the Met Gala, a game called Mixtape, the
+Kevin Hart roast, and people breaking into malls for Swatch watches.
+Each scored a `zeitgeist` of 3 and a `half_life` of 1 or 2, landing at
+composite 2 to 4 against the threshold of 5, and each carries a
+shrug-eligible penalty tag (`in_circle_hype`, `controversy_flash`,
+`narrow_audience`, `single_platform`). So the news lane does not throw
+these away before scoring; it scores them, gates them on durability,
+and hands them to shrug. Measuring the demand properly needs the
+connector unblocked, which is a connector job and not a lane job.
+
+Since that source cannot answer, the nearest substitute is the
+early-reject reasons on everything. The cold tier moves `raw_output`
+to R2 after fourteen days, so the readable sample is the 1,599
+early-rejected rows still inline, roughly the last two weeks, bucketed
+by keyword on the scorer's free-text reason. The buckets are
+approximate and the first one is a catch-all.
+
+| Reason bucket | Rows |
+|---|---|
+| routine, incremental, no new event | 456 |
+| uncategorised | 281 |
+| local crime, accident, casualty | 215 |
+| opinion and commentary | 189 |
+| lifestyle, explainer, evergreen | 150 |
+| product, gadget, deal | 89 |
+| release and entertainment | 89 |
+| celebrity, viral, clip | 57 |
+| routine earnings and markets | 46 |
+| sports and awards | 27 |
+
+The class-shaped buckets (releases, products, sport and awards, people,
+viral) add up to about one in eight early rejects. The list is not
+where the FOMO classes die; most of what it refuses is opinion, local
+crime and routine increments nobody has FOMO about. The classes die at
+the gate, the way the OOTL five did and the way the Roadster did. One
+more thing the prompt says and the data does not: early-rejected rows
+are supposed to leave the scores at zero, and all 3,724 of the last six
+weeks carry a full set of scores and factors anyway. Phase zero's "emit
+two more numbers on a rejected row" is therefore not a change to how
+the scorer behaves, only to what it is asked for.
+
+The Roadster arrived as five rows in two days, all RSS, all attached
+to one theme.
+
+| Row | Domain | Ingested | Early-rejected | zeitgeist | half_life | composite | Crossover trigger |
+|---|---|---|---|---|---|---|---|
+| the stunt | theverge.com | 16 Oct 03:34 | no | 3 | 1 | 2 | yes |
+| the stunt | aljazeera.com | 16 Oct 09:34 | yes | | | 1 | no |
+| the thrusters explained | arstechnica.com | 16 Oct 15:34 | no | 2 | 1 | 0 | yes |
+| "just for show" | theverge.com | 16 Oct 15:34 | no | 2 | 1 | 1 | yes |
+| rival's mock video | aljazeera.com | 17 Oct 09:34 | yes | 1 | 1 | -1 | no |
+
+The stunt was not early-rejected; the scorer took it seriously enough
+to tag `technical_breakthrough` and `crossover_discussion` alongside
+`in_circle_hype` and `manufactured_hype`, and the gate refused it on
+`half_life`, which is the durability argument from the second section
+exactly. On breadth, the row carries one of the four signals the doc
+listed: the crossover trigger is set on all three scored rows, while
+`additional_source_urls` is empty, there is no GDELT count, and the
+theme has no Wikipedia corroboration (no Wikipedia row touching Tesla,
+Roadster or Musk was ingested between 10 and 31 October). What the
+theme carries is three distinct domains in twenty-four hours, and that
+is the breadth signal phase zero has to use.
+
+Then the pipeline shipped it, in the wrong form. The rows were ingested
+on 16 October and scored on 18 and 19 October. Issue 26 was drafted on
+17 October at 07:36, when they were in the window but unscored, so the
+shrug selector could not see them. Issue 27 was drafted on 24 October
+at 06:36 with a seven-day window on `ingested_at`, which cut at 17
+October 06:36: every stunt row was out by a day, and the only Roadster
+row inside was the rival's mock video, ingested three hours after the
+cutoff. That row went out in Worth a shrug at rank 2, labelled
+in-circle hype: "A flying car company that has been flying cars for
+eleven years posted a video of its vehicle hovering over a Tesla
+Roadster." The reader was told about the jab and never about the
+stunt. Two design consequences follow. The shrug-or-recognising rule
+has to be decided per cluster, since the row with no evidence and the
+rows with the evidence are one story. And the lane's selector should
+window on `scored_at` rather than `ingested_at`, or a reference that
+lands on a Friday is invisible on Saturday and expired the Saturday
+after, which is what happened here.
