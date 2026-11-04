@@ -366,6 +366,7 @@ from. See `docs/i18n.md`.
 - Storage tiering + cold-storage plan: `docs/storage.md`
 - Scaling reads (edge Worker + static export to R2): `docs/scaling.md`
 - Locales (site chrome EN + NB; the brief is NOT translated): `docs/i18n.md`
+- Recognition lane (trends/culture beyond news — design, not built): `docs/recognition.md`
 - Backtesting methodology: `docs/backtesting.md`
 - Runbook for failure triage: `docs/runbook.md`
 - Tuning loop: `docs/tuning.md`
