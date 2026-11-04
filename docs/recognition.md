@@ -1,34 +1,92 @@
 # Recognition lane — beating FOMO on the stuff that isn't news
 
 Status: design, not built. This is the answer to "we replaced the feed
-for news; how do we replace it for everything else?"
+for news; how do we replace it for everything else?" It starts from
+what FOMO is actually made of, because the pipeline's shape should
+follow from that and not the other way round.
 
-## The gap
+## What people get FOMO from
 
-The mission in `concept.md` already covers this. A reader who quits
-social media should "get the meme without needing to watch", and
-videos and viral content are called first-class there. So the intent
-exists; what doesn't exist is a path through the pipeline that an
-ephemeral-but-everywhere item can survive. Four things stop it, and
-they are all correct for news, which is why we shouldn't loosen them.
+Start from the social situation, since that is where FOMO is felt:
+someone says something and you can't follow. The gap comes in a
+handful of shapes, and the shape determines what information would
+close it. "Did you hear what happened" is the news gap and it needs
+context and meaning, which is paragraphs. Every other shape needs
+less, usually a sentence.
 
-The first is the gate formula. `composite = zeitgeist × half_life −
-non_obviousness`, gated at 5. A trend has `half_life` 0 or 1 by the
-rubric's own definitions (hours, days), so even a water-cooler item
-(zeitgeist 5) scores at most 5 − non_obviousness, and anything the
-reader could have found in their default channels fails. The
-multiplier is a durability proxy, and durability is exactly the
-property we are told not to require here. The second is the early-reject
-list: routine product launches, sports results, award ceremonies,
-celebrity moments and single-platform virality are refused before any
-scoring happens, and those classes are most of what people reference
-at lunch. The third is the editor, whose four-quadrant rubric caps
-"loud but insignificant" at one or two picks per issue by design. The
-fourth is the sources: sixteen newsroom feeds, GDELT and Wikipedia
-measure events being reported, and only r/OutOfTheLoop measures
-something being talked about. The `viral_signals` fields in the scorer
-schema have never been populated (open question O6), so the one
-calibration block the scorer has for internet culture runs blind.
+| Shape of the gap | Class | Examples | What closes it | Lifetime |
+|---|---|---|---|---|
+| "Did you hear" | Events | an election, a strike, a collapse | what happened and what it means | days to months |
+| "Have you seen" | Releases | a Netflix show, an album, a game, a book | that it exists, what it is, that it's big | weeks |
+| "What does that mean" | Vocabulary | a meme, a sound, a phrase, a format | meaning, origin, whether it's already over | days to a season |
+| "Who is that" | People | a creator, a new pop star, a streamer | who, and why now | weeks, sometimes permanent |
+| "Did you see the clip" | Moments | a viral video, a halftime show, a goal, a livestream meltdown | what happened in it, one line | days |
+| "Everyone's doing X" | Behaviours and objects | Stanley cups, Labubu, pickleball, a new app | what it is, and that it's a wave | months |
+| "What do you think about" | Discourse | the take of the week, the main character | nothing we should supply | 48 hours |
+
+Four things fall out of the table.
+
+The cost structure is inverted. News is the one class that needs
+paragraphs, and the feed charges the least for it because newspapers
+exist. Vocabulary, people and moments need a sentence each, and the
+feed charges the most for them, because the only way to learn a meme
+is to be on the platform it lives on for long enough to see it three
+times. So the energy a reader spends on the feed goes mostly on the
+cheapest information.
+
+Every reference has a lifecycle. It emerges inside a platform or an
+age group, breaks out into general conversation, saturates (brands use
+it, it becomes cringe), then either fossilises into vocabulary or dies.
+FOMO lives in the breakout phase and nowhere else: before it you're
+allowed not to know, after it knowing is a liability. So where a thing
+sits in its lifecycle is part of the information, and it is data (weeks
+on a chart, rising or falling), not a judgement. A weekly cadence
+samples at breakout or later, which is the right moment.
+
+Who you get FOMO from determines which classes matter. The lunch table
+is events, releases, behaviours and discourse. Kids are vocabulary,
+people and moments. The group chat is moments and vocabulary. The
+"informed adult" framing in `concept.md` covers the first two classes
+well and leaves the rest to the feed, and the rest is exactly where one
+sentence closes the gap completely.
+
+Two kinds of FOMO we refuse. Discourse FOMO, the not-having-a-take
+kind, is the feed's core product, and serving it is being the feed;
+Worth a shrug already names these and dismisses them, which is the
+right treatment. Participatory FOMO, the not-having-watched-it kind,
+isn't fixable by information at all. "It exists, it's a show about X,
+everyone's watching" is the whole deliverable, and socially that is
+nearly always enough.
+
+One empirical handle exists already. The r/OutOfTheLoop connector is a
+weekly sample of exactly these gaps, phrased by the people who felt
+them, scored by a rubric whose early-reject list refuses most of what
+it brings. The scorer's `reject_reason` on that source, by week, is a
+direct measure of the demand the news lane turns away, and it should
+be read before any of the below is built.
+
+## Why the news pipeline can't carry this
+
+The mission in `concept.md` already covers it ("get the meme without
+needing to watch"). What doesn't exist is a path through the pipeline
+that a reference from classes two to six can survive. Four things stop
+it, and they are all correct for news, which is why we shouldn't
+loosen them.
+
+The gate formula multiplies by `half_life`, and a reference has a
+half-life of hours or days by the rubric's own definitions, so even a
+water-cooler item (zeitgeist 5) scores at most 5 − non_obviousness
+against a threshold of 5. The multiplier is a durability proxy, and
+durability is the property the table says these classes don't have.
+The early-reject list refuses product launches, sports moments, award
+outcomes, celebrity moments and single-platform virality before any
+scoring happens, which is most of releases, people and moments. The
+editor's four-quadrant rubric caps "loud but insignificant" at one or
+two picks per issue by design. And the sources measure events being
+reported: sixteen newsroom feeds, GDELT and Wikipedia, with only
+r/OutOfTheLoop measuring something being talked about, and the
+`viral_signals` fields the scorer could read never populated (open
+question O6).
 
 So the choice is between widening the news gate and adding a second
 lane with its own gate. Widening is wrong for a reason the brief
@@ -77,8 +135,14 @@ Three numbers, none of them about importance.
 | `lostness` (0–5) | How much context does the reader need to not be lost? 0 is self-explanatory, 5 is "no idea what that is" | scorer, from evidence |
 | `persistence` | Weeks this has stayed on at least one chart, or whether it is still rising | data, never the LLM |
 
-The gate is `encounter × lostness ≥ T` with `persistence ≥ 2` as the
-confidence floor. Two things are missing on purpose. There is no
+`lostness` is the "what does that mean" shape measured directly, and
+`encounter` is the breakout phase. The gate is `encounter × lostness
+≥ T` with `persistence ≥ 2` as the confidence floor. Lifecycle stage
+also ships as a pre-computed label on the row (`new`, `still going`,
+`fading`, from weeks-on-chart and direction), the same way the shrug
+tag does: it is the one piece of information the table says belongs
+with the reference, it comes from data, and giving it to the composer
+as a label keeps it out of the prose. Two things are missing on purpose. There is no
 `structural_importance` and no retrodiction field, because the
 request is to keep up without having to recognise anything as
 significant, and a rubric that asks the question would answer it. And
@@ -89,7 +153,10 @@ and the news lane already handles that.
 
 The scorer keeps the hard rules that matter (point-in-time, reasoning
 from evidence, no invented justifications) and drops the early-reject
-list entirely. Sports moments, award outcomes, album drops, celebrity
+list entirely, because that list is where releases, people and moments
+were being turned away. Discourse stays out through the breakout test
+and the persistence floor rather than a category rule: a pile-on is
+loud on one platform for two days and on no chart the week after. Sports moments, award outcomes, album drops, celebrity
 moments and product launches are all admissible if they broke out. The
 breakout test is the same one the news scorer already applies to
 internet culture: one platform means `encounter` ≤ 2, three or more
