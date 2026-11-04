@@ -71,3 +71,5 @@ The prompt already consumes `viral_signals` when present (cross-platform
 count, mainstream crossover, Google Trends tail, derivative count,
 KnowYourMeme status). The upstream collectors that compute these fields
 still need to be built. Each is a small source-specific module.
+Superseded by the recognition-lane design in `recognition.md`, which
+generalises these fields into chart observations rolled up per entity.
