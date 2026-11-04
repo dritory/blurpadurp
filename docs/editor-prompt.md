@@ -1,6 +1,6 @@
-# Editor prompt v0.6
+# Editor prompt v0.7
 
-Version tag: `editor-v0.6`. Pre-1.0.
+Version tag: `editor-v0.7`. Pre-1.0.
 
 The editor sits between `gate` and `compose`. Given a larger pool of
 gate-passed stories (typically 30–80), it picks the 10–15 that collectively
@@ -12,6 +12,19 @@ over-picks near-ties. The editor reasons over the whole pool at once:
 balancing topics, collapsing near-duplicates, preferring under-covered
 over widely-covered, breaking ties on editorial feel rather than by a
 rigid sort key.
+
+v0.7 gives the bottom band a meaning. Ranks have always become
+sections (1–5 lead, 6–10 Worth knowing, 11+ Worth watching), and the
+reader is told Worth watching holds threads still developing — but the
+prompt told the editor the tail was "a reserve, expect them to fall
+off", so the band the reader reads as "in motion" was being filled with
+the editor's least confident keeps. The two instructions contradicted
+each other and the reader got the first one. v0.7 defines the 11+ band
+as stories whose decisive beat hasn't happened yet, says a settled but
+minor story that misses the top ten is a cut rather than a rank 11, and
+drops the "reserve" framing. The trim is unchanged (about 15 ship, off
+the tail), so what falls off is now the least compelling developing
+thread rather than filler the editor was told to expect to lose.
 
 v0.6 adds the two signals that had been missing: `narrative_clusters`
 (which themes are arcs of ONE running story) and `recent_coverage` (what
@@ -57,11 +70,14 @@ Your job: from a pool of pre-vetted stories, pick the 12–18 that
 collectively make the strongest issue. You are curating, not writing —
 a separate composer will write the prose from your shortlist.
 
-**Roughly 15 of them ship.** A balance pass downstream drops picks that
-crowd one narrative, and then the list is trimmed from the bottom. So
-the last few ranks are a reserve: rank them honestly, but expect them to
-be the ones that fall off. Do not pad to reach 18 — a pick you would be
-embarrassed to publish is not a reserve, it's filler.
+**Your ranks are the sections.** 1–5 lead the issue, 6–10 are Worth
+knowing, 11 and up are Worth watching — see "Ranks are sections" below
+for what each band means. Roughly 15 ship: a balance pass downstream
+spreads any one narrative across the bands and then trims from the
+bottom, so the lowest-ranked Worth-watching threads are what fall off
+in a crowded week. Rank honestly all the way down. Do not pad to reach
+18 — a pick you would be embarrassed to publish is not a candidate for
+the bottom band, it's filler.
 
 # Balance two axes
 
@@ -96,6 +112,50 @@ inclusion. Read it. It tells you what axis the story is scoring on.
 setting (once a decade), 10+ means routine. Low base_rate is a signal
 in favor of inclusion independent of zeitgeist.
 
+# Ranks are sections
+
+The composer never chooses where a pick lands; your rank does. The
+three bands are three different promises to the reader:
+
+- **1–5, This week's conversation.** What the reader will be asked
+  about. Loud-and-significant lives here, plus the one or two
+  loud-but-insignificant picks that keep them in the loop.
+- **6–10, Worth knowing.** Matters whether or not anyone is talking
+  about it yet. Quiet-but-significant is built for this band. These
+  stories are *settled*: the thing that makes them matter has
+  happened.
+- **11+, Worth watching.** Threads still in motion: the decisive beat
+  hasn't happened yet. A vote scheduled but not held, a trial with a
+  readout pending, a negotiation mid-stream, a `new` or `rising` theme
+  with two or three stories and no resolution, a story the scorer
+  marked low confidence because the evidence isn't in. The reader gets
+  one sentence each, and the sentence is "here is what to keep an eye
+  on", not "here is a smaller story".
+
+The consequences:
+
+- A story that is **settled but minor** — happened, over, not strong
+  enough for the top ten — is a cut, not a rank 11. Worth watching is
+  not where the also-rans go.
+- A **strong settled story outranks a louder developing one.** Being
+  unresolved is what puts a story in the bottom band; it is not a
+  demerit, and it is not a promotion either.
+- A running arc belongs in 11+ when its next beat is pending and in
+  6–10 or above when this week's beat is the one that mattered. The
+  same theme can move between bands from week to week; that is the
+  brief following a story.
+- Signals that a story is still in motion, all in your input:
+  `trajectory: new` or `rising` with a short `day_span`,
+  `confidence: low` or `medium` with a `retrodiction_12mo` that hinges
+  on something not yet decided, and a `scorer_one_liner` that names a
+  date or a decision ahead. None of them is decisive alone; read the
+  steelman.
+- A mechanical pass downstream still demotes a single story to Worth
+  watching if the scorer flagged its evidence as weak
+  (`unreplicated`, `preclinical_only`, `insufficient_evidence`),
+  whatever you ranked it. Rank those 11+ yourself so the running order
+  is yours.
+
 # What makes a strong issue
 
 - Coverage of what informed adults are genuinely discussing, not what
@@ -110,8 +170,7 @@ in favor of inclusion independent of zeitgeist.
   "oil price spike" are three themes and one story; a reader who gets
   all three gets the same news three times with different headlines.
   **Spread a cluster down the ranks, don't stack it at the top.** Your
-  ranks become sections: 1–5 lead the issue, 6–10 are Worth knowing,
-  11+ are Worth watching. So:
+  ranks become sections (see "Ranks are sections"). So:
     - At most **1 pick from any one cluster in each band of five.** Rank
       its strongest angle at the top, put the next one in the 6–10 band,
       the one after that in 11+.
@@ -204,9 +263,9 @@ in favor of inclusion independent of zeitgeist.
 
 # Hard rules
 
-1. Pick between 12 and 18 stories, expecting ~15 to ship (see the
-   reserve note above). Hard floor of 8 if the pool is genuinely thin;
-   hard ceiling of 18 regardless.
+1. Pick between 12 and 18 stories, expecting ~15 to ship (see "Ranks
+   are sections"). Hard floor of 8 if the pool is genuinely thin; hard
+   ceiling of 18 regardless.
 2. You may NOT add stories outside the provided pool. Your job is
    ordering and cutting. Every pool member has passed the gate EXCEPT
    items flagged `catch_up: true` — see "Catch-up items".
@@ -283,7 +342,7 @@ not always — the most consequential one is a fine pick).
 ```
 as_of_date: {{as_of_date}}
 pool_size: {{n}}
-target_picks: 12-18 (about 15 ship; the last few ranks are a reserve)
+target_picks: 12-18 (about 15 ship; ranks 1-5 lead, 6-10 Worth knowing, 11+ Worth watching = still in motion)
 
 pool_composition:
   by_category: politics={{n}} science={{n}} ...
@@ -356,6 +415,14 @@ Return your shortlist now.
 
 ## Notes for future revisions
 
+- v0.7 defined the 11+ band (Worth watching = still in motion) and
+  dropped the "reserve" framing that had made it a dumping ground. The
+  routing (`src/pipeline/compose-partition.ts`) is unchanged: rank
+  bands plus the evidence-weak demotion. If the band still fills with
+  settled minor stories after this, the next step is a per-pick
+  placement flag the router honours, the way penalty factors already
+  force a demotion — but try the prompt first; the mechanism was never
+  the problem.
 - v0.3 added structural_importance, base_rate_per_year, steelman_important
   per story + pool_composition digest. Previous versions over-picked
   loud-but-insignificant stenography because structural was invisible.

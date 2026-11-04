@@ -63,7 +63,12 @@ is how the drift hid last time.
   `recent_coverage` (what the last three issues told the reader).
   Its output is **not** taken as final: `diversifyPicks` applies the
   cluster caps afterwards, because a prompt asking for balance had
-  demonstrably not been enough.
+  demonstrably not been enough. Its ranks **are** the sections (1–5,
+  6–10, 11+), and editor v0.7 tells it what the bottom band means —
+  Worth watching is threads still in motion, not the least-sure keeps.
+  Before v0.7 the prompt called the tail "a reserve, expect them to
+  fall off", which filled the band the reader reads as "developing"
+  with also-rans.
 - **compose** partitions picks into four fixed sections server-side,
   then runs the composer model to write prose
   (`docs/composer-prompt.md`).

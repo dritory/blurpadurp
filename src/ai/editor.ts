@@ -4,8 +4,11 @@
 // under-covered-angle preference. Composer writes from this shortlist.
 //
 // It asks for more than ships. compose-diversity.ts drops picks that
-// crowd one narrative and then trims from the bottom, so the tail ranks
-// are a reserve — see the "reserve" note in docs/editor-prompt.md.
+// crowd one narrative and then trims from the bottom. The ranks are the
+// sections (1–5 lead, 6–10 Worth knowing, 11+ Worth watching), and
+// since editor v0.7 the bottom band means "still in motion", not "least
+// sure" — see "Ranks are sections" in docs/editor-prompt.md. The
+// target_picks line below must match the user-message template there.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { readFile } from "node:fs/promises";
@@ -154,7 +157,7 @@ function renderUserMessage(input: EditorInput): string {
   // that crowd one narrative, and with a rich pool a dropped pick should
   // cost the issue a slot, not a whole section.
   lines.push(
-    `target_picks: 12-18 (about 15 ship; the last few ranks are a reserve)`,
+    `target_picks: 12-18 (about 15 ship; ranks 1-5 lead, 6-10 Worth knowing, 11+ Worth watching = still in motion)`,
     "",
   );
 
