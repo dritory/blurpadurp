@@ -132,17 +132,28 @@ Three numbers, none of them about importance.
 | Axis | Question | Who answers |
 |---|---|---|
 | `encounter` (0–5) | How likely is an informed adult to meet this reference in the next two weeks? | scorer, from evidence |
-| `lostness` (0–5) | How much context does the reader need to not be lost? 0 is self-explanatory, 5 is "no idea what that is" | scorer, from evidence |
-| `persistence` | Weeks this has stayed on at least one chart, or whether it is still rising | data, never the LLM |
+| `lostness` (0–5) | Would one factual sentence close the gap, and how badly is it needed? 0 is self-explanatory or no sentence would do, 5 is "no idea what that is" | scorer, from evidence |
+| `breadth` | Independent sources that observed it in the compose window: charts, r/all, Wikipedia lookups, a culture desk, a newsroom | data, never the LLM |
 
 `lostness` is the "what does that mean" shape measured directly, and
-`encounter` is the breakout phase. The gate is `encounter × lostness
-≥ T` with `persistence ≥ 2` as the confidence floor. Lifecycle stage
-also ships as a pre-computed label on the row (`new`, `still going`,
-`fading`, from weeks-on-chart and direction), the same way the shrug
-tag does: it is the one piece of information the table says belongs
-with the reference, it comes from data, and giving it to the composer
-as a label keeps it out of the prose. Two things are missing on purpose. There is no
+its definition does the discourse exclusion for free: for a take of
+the week no factual sentence closes the gap, since what the reader
+lacks is an opinion, so `lostness` is 0 by construction. `encounter`
+is the breakout phase. The gate is `encounter × lostness ≥ T` with
+`breadth ≥ 2` as the confidence floor: one source is a platform
+talking to itself, two independent ones is a thing that moved.
+
+An earlier draft used weeks-on-chart as the floor instead. That was
+wrong for the "did you see the clip" class, which lives days: a video
+everyone saw on Tuesday has a persistence of one week at the Saturday
+compose and would never pass, and it is the single clearest case the
+lane exists for. Duration is the wrong proxy for breakout; breadth is
+the right one. Weeks-on-chart survives as a lifecycle label on the row
+(`new`, `still going`, `fading`, from dwell and direction), the same
+way the shrug tag does: it is the one piece of information the table
+says belongs with the reference, it comes from data, and giving it to
+the composer as a label keeps it out of the prose. Two things are
+missing on purpose. There is no
 `structural_importance` and no retrodiction field, because the
 request is to keep up without having to recognise anything as
 significant, and a rubric that asks the question would answer it. And
@@ -154,9 +165,11 @@ and the news lane already handles that.
 The scorer keeps the hard rules that matter (point-in-time, reasoning
 from evidence, no invented justifications) and drops the early-reject
 list entirely, because that list is where releases, people and moments
-were being turned away. Discourse stays out through the breakout test
-and the persistence floor rather than a category rule: a pile-on is
-loud on one platform for two days and on no chart the week after. Sports moments, award outcomes, album drops, celebrity
+were being turned away. Discourse stays out through `lostness` rather
+than a category rule, and `manufactured_hype` stays as a penalty tag
+the scorer can set from evidence (paid placement, no organic
+discussion), because a marketing budget can buy breadth for a week and
+we are still judging whether people actually met the thing. Sports moments, award outcomes, album drops, celebrity
 moments and product launches are all admissible if they broke out. The
 breakout test is the same one the news scorer already applies to
 internet culture: one platform means `encounter` ≤ 2, three or more
@@ -167,9 +180,11 @@ prompt_version`, same version-bump discipline as the other three.
 Calibration anchors, point-in-time: Clubhouse at peak (encounter 3,
 lostness 4, publishes), a Netflix number one in its third week
 (encounter 4, lostness 3, publishes), a song at number one for the
-ninth week (persistence 9, but it was already given to the reader, so
-memory suppresses it), a forty-eight-hour pile-on (persistence 0,
-fails), an in-circle crypto launch (encounter 1, fails).
+ninth week (already given to the reader, so memory suppresses it), a
+forty-eight-hour pile-on (lostness 0, fails), an in-circle crypto
+launch (encounter 1, breadth 1, fails), and the Tesla Roadster hover
+video (encounter 4, lostness 3, breadth 3 across YouTube, Wikipedia
+lookups and the tech desks, publishes as one sentence).
 
 ## Sources: charts, not stories
 
@@ -263,7 +278,7 @@ covers the reader who only wants the news.
 
 Config keys: `recognition.enabled` (false until the sources are
 tuned), `recognition.prompt_version`, `recognition.gate_threshold`,
-`recognition.min_persistence_weeks` (2), `recognition.max_items` (6),
+`recognition.min_breadth` (2), `recognition.max_items` (6),
 `recognition.geos` (`["global"]`, see below), `recognition.model_id`
 (the DeepSeek scorer is fine; volume is a few dozen calls a week since
 chart sizes bound it).
@@ -276,8 +291,8 @@ breakout shows up in Wikipedia lookups, r/OutOfTheLoop, Google Trends
 and the culture desks within days. The brief's latency promise was
 always hours to days, and the weekly cadence turns out to be a filter
 rather than a problem: a thing that is gone by Saturday is a thing
-nobody will reference next week, so `persistence` measured at compose
-time is doing real work. We will be late on everything and right about
+nobody will reference next week, so being observed inside the compose
+window is doing real work. We will be late on everything and right about
 what is still alive, which is the trade the product makes everywhere
 else.
 
@@ -299,17 +314,37 @@ which the per-cluster cap can't catch. Expect to tune the attach
 threshold for this lane separately and to add a small alias table when
 the same miss recurs.
 
-And a rubric with no significance axis can still be gamed by
-manufactured breakouts, since a marketing budget can buy a week on
-several charts. The persistence floor is the defence, and the second
-one is the same as in the news lane: keep `manufactured_hype` as a
-penalty tag the scorer can set from evidence (paid placement, no
-organic discussion), and let it block. We are not judging whether the
-thing matters; we are still judging whether people actually met it.
-
 ## Build order
 
-Two sources, one rule, one section, then widen. Phase one is the
+None of the news rules bend. The Roadster video never enters the news
+gate under this design; it enters a second judgement on rows the news
+rules have already refused, and that is also what makes a cheap first
+phase possible.
+
+Phase zero needs no new source. The news scorer already sees the
+Roadster, since The Verge and Ars Technica are in the RSS set and
+GDELT carries the wire pickup, and it early-rejects it as a routine
+product launch, which stops the rubric before any number is written.
+The change is that an early-reject or gate-fail still emits two
+numbers, `recognition.encounter` and `recognition.lostness`, in the
+same call (the early-reject list exists to save tokens, and on
+DeepSeek tokens are no longer the constraint). `breadth` comes from
+what the row already carries: `source_count`,
+`wikipedia_corroborated`, the `crossover_discussion` trigger, and
+`additional_source_urls`. A pure selector next to `compose-shrug.ts`
+then builds Worth recognising from failed-gate rows the way shrug is
+built today, with one coexistence rule: a row with breakout evidence
+goes to recognising, a row without goes to shrug, and never both. The
+difference between the two sections is exactly that evidence, which
+is a nice property, since it means the section split is a measurement
+and not a mood.
+
+This catches the Roadster, a halftime show, an album drop and a
+Netflix hit, because those reach the newsroom and tech feeds. It does
+not catch vocabulary or most people, because a meme does not get an
+article until it is already over. That is what the chart sources are
+for, and phase zero tells us how much of the demand they are needed
+for before any connector is written. Phase one is the
 Wikimedia top-pageviews connector with the per-article baseline, the
 Netflix TSV, the `trend_observation` table and roll-up, the
 recognition prompt, the pure selector and the compose section, shipped
