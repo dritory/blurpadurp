@@ -149,22 +149,7 @@ import {
   parseReviewFlash,
 } from "./loaders.tsx";
 import { PUBLIC_URL } from "./config.ts";
-
-// Queue a stage for the next scheduler tick, with an optional jsonb
-// payload (mig 067). UPSERT rather than DO NOTHING: `stage` is the
-// primary key, which usefully caps the queue at one pending run per
-// stage, but with args in play a second request carrying *different*
-// parameters must replace the first rather than be silently dropped.
-async function queueStageRun(stage: string, args: unknown): Promise<void> {
-  const payload = args === null ? null : (JSON.stringify(args) as never);
-  await db
-    .insertInto("pipeline_force_run")
-    .values({ stage, args: payload })
-    .onConflict((oc) =>
-      oc.column("stage").doUpdateSet({ args: payload, requested_at: new Date() }),
-    )
-    .execute();
-}
+import { queueForceRun } from "../shared/force-run.ts";
 
 export function registerAdminRoutes(app: Hono): void {
   app.get("/admin", (c) => c.redirect("/admin/issues", 302));
@@ -221,11 +206,11 @@ export function registerAdminRoutes(app: Hono): void {
     }
 
     if (mode === "plain") {
-      await queueStageRun("compose", null);
+      await queueForceRun("compose", null);
       return c.redirect("/admin/release?queued=plain", 303);
     }
     if (mode === "ranked") {
-      await queueStageRun("compose", { retro: true });
+      await queueForceRun("compose", { retro: true });
       return c.redirect("/admin/release?queued=ranked", 303);
     }
 
@@ -236,7 +221,7 @@ export function registerAdminRoutes(app: Hono): void {
     if (ids.length === 0) {
       return c.redirect("/admin/release?error=no_selection", 303);
     }
-    await queueStageRun("compose", { retro: { storyIds: ids } });
+    await queueForceRun("compose", { retro: { storyIds: ids } });
     return c.redirect(`/admin/release?queued=selected&n=${ids.length}`, 303);
   });
 
@@ -660,7 +645,7 @@ export function registerAdminRoutes(app: Hono): void {
   app.post("/admin/run/:stage", async (c) => {
     const stage = c.req.param("stage");
     if (getSchedulerStage(stage) === undefined) return c.text("unknown stage", 404);
-    await queueStageRun(stage, null);
+    await queueForceRun(stage, null);
     return c.redirect(`/admin/scheduler?triggered=${encodeURIComponent(stage)}`, 303);
   });
 

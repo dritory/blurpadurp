@@ -194,6 +194,42 @@ Webhook endpoint needed: Resend can POST delivery events to a URL.
 Scaffold as `/webhooks/resend` — same HMAC verification pattern as the
 magic-link tokens, signed with `RESEND_WEBHOOK_SECRET`.
 
+## Confirmation queue
+
+The confirmation email is the one send that is not an issue, and until
+mig 079 it never touched this stage: `POST /subscribe` sent it inline,
+behind a process-wide token bucket (60 burst, one a minute) that bounds
+outbound mail from a distributed signup flood. On a trip the handler
+returned the normal "check your inbox" redirect and dropped the send.
+That is the right answer to a flood and the wrong one to a launch day,
+where it loses every real reader past the first sixty with one operator
+alert as the only trace.
+
+So a trip now queues. The handler stamps
+`email_subscription.confirmation_queued_at` (COALESCE, so a resubmit
+keeps its place in line), queues a `pipeline_force_run` for dispatch,
+and returns the same redirect — the response still never says whether
+an address exists or was throttled. The sweep's last pass,
+`drainConfirmationQueue` in `src/shared/confirmation.ts`, sends the
+oldest `subscribe.confirmation_drain_batch` (200) rows and expires,
+unsent, anything queued longer than
+`subscribe.confirmation_queue_max_age_hours` (24) or that confirmed or
+unsubscribed while waiting. Expiry runs first and is not charged to the
+batch, so stale rows can't starve live ones.
+
+Two consequences worth holding onto. The per-hour ceiling on a flood is
+now the batch rather than the bucket (about 4800 a day instead of
+1440), and nothing under it is lost. And latency for a reader past the
+cap is one scheduler tick, because the force-run pulls dispatch forward
+from its six-hour cadence. The heartbeat reports a queue whose oldest
+row is past three hours (`confirmation_queue`), and `/admin/status`
+shows the depth, so a flood being drained and a drain that has stopped
+both have somewhere to be seen. The inline path and the drain share
+`sendConfirmation`, which stamps `last_confirmation_sent_at` and clears
+the queue mark before the network call, for the same reason the handler
+always did: a concurrent resubmit must not slip the cooldown, and a
+bouncing address must not become a retry loophole.
+
 ## Push failures
 
 web-push surfaces per-subscription errors via HTTP status on the

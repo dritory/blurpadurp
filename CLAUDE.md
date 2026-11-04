@@ -104,8 +104,9 @@ is how the drift hid last time.
   From header is `FROM_NAME <FROM_EMAIL>` (`formatFrom`); a bare
   address shows as "brief" in every inbox list. Web-push is stubbed. The Resend
   webhook (`/webhooks/resend`) handles bounces/complaints and
-  auto-unsubscribes hard failures. Design + send-window logic in
-  `docs/dispatch.md`.
+  auto-unsubscribes hard failures. The sweep's last pass drains
+  confirmation emails the signup cap deferred (mig 079). Design +
+  send-window logic in `docs/dispatch.md`.
 - **retention** runs daily — prunes unconfirmed subs, anonymizes
   long-unsubscribed rows, trims old `dispatch_log` entries, ages out cold
   embeddings, **deletes unscored noise stories** past
@@ -272,6 +273,7 @@ medium**. This shapes partition choices:
 | `src/db/schema.ts` is hand-maintained against 77 migrations ("keep in sync by hand"). Drift is silent in the direction that matters: a migration adds or renames a column, the Kysely types don't know, and every query still type-checks while lying about what comes back | `test/integration/schema-drift.test.ts` diffs the declared `Database` interface against `information_schema` on the migrated test database — tables, columns, nullability, base type, and `Generated<>` on a column with no default. Costs nothing to run: the integration job already stands up Postgres and applies every migration. `numeric` maps to `string` on purpose (node-postgres doesn't parse numerics into JS numbers) | `test/integration/schema-drift.test.ts` |
 | Site 5xx + monitor alert during cold start (single autostopping machine races its own stop: "machine still active, refusing to start") | Stay scale-to-zero (min = 0) but soften: `auto_stop_machines = "suspend"` (resume from RAM) + 15s health-check interval so a failed post-boot check re-probes fast. Self-heals; runbook #13. Do NOT "fix" the adjacent pg sslmode warning by pinning verify-full — it breaks the Neon handshake (runbook #13). | `fly.toml`, `docs/runbook.md` |
 | Confirmation-email bombing / domain-reputation abuse via `POST /subscribe` | Three layers: per-recipient `last_confirmation_sent_at` cooldown (mig 061) kills same-address resend; a fixed-key global token bucket caps total outbound confirmations and alerts via `notifyAdmin` on trip; a coarse per-IP limiter wraps the signed-token routes. All throttle paths return the same `subscribed=1` redirect — never leak whether an address exists or was throttled. | `src/api/index.tsx`, `src/shared/rate-limit.ts` |
+| The cap above **dropped** real readers: on a trip the handler returned "check your inbox" and silently skipped the send, so a launch-day spike lost everyone past the first 60 with one operator alert as the only trace. A flood and the best day the product has had looked identical to the handler | A trip **queues** (mig 079): `confirmation_queued_at` on the row, plus a dispatch force-run so the drain runs on the next tick. `drainConfirmationQueue` (last pass of the dispatch sweep) sends the oldest `subscribe.confirmation_drain_batch` (200) per run and expires rows past `subscribe.confirmation_queue_max_age_hours` (24) or already confirmed/unsubscribed, unsent — so a flood is still capped per hour, by the batch instead of the bucket, and nothing under it is lost. Same redirect either way (no enumeration signal). Heartbeat flags a queue older than 3h; `/admin/status` shows depth. Both send paths share `sendConfirmation`, so the stamp-before-send rule can't drift | `src/shared/confirmation.ts`, `src/api/subscription.tsx`, `test/integration/confirmation-queue.test.ts` |
 
 ## Tuning loop
 

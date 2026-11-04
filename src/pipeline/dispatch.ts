@@ -14,6 +14,7 @@
 // Push delivery is out of scope. Stubbed for later.
 
 import { db } from "../db/index.ts";
+import { drainConfirmationQueue } from "../shared/confirmation.ts";
 import { getEnvOptional } from "../shared/env.ts";
 import { type MailResult, sendMail } from "../shared/mailer.ts";
 import { withLock } from "../shared/pipeline-lock.ts";
@@ -38,7 +39,23 @@ export async function dispatch(): Promise<void> {
     // 'draft' vs 'email'), so neither blocks the other.
     await runDraftDispatch();
     await runDispatch();
+    await runConfirmationDrain();
   });
+}
+
+// Confirmations the subscribe handler's global send cap deferred
+// (mig 079). Last in the sweep: an issue going out to confirmed readers
+// should not wait behind signups. Each run sends one batch, and the
+// handler queues a force-run on every trip, so during a spike this is
+// effectively hourly; the rest of the time the probe hits an empty
+// partial index.
+async function runConfirmationDrain(): Promise<void> {
+  const r = await drainConfirmationQueue();
+  if (r.sent > 0 || r.expired > 0 || r.remaining > 0) {
+    console.log(
+      `[dispatch] confirmations sent=${r.sent} expired=${r.expired} remaining=${r.remaining}`,
+    );
+  }
 }
 
 // A reviewer subscription has no display name, so derive a friendly one

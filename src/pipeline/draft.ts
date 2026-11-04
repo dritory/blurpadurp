@@ -26,6 +26,7 @@ import { sql } from "kysely";
 
 import { makeComposer } from "../ai/composer.ts";
 import { db } from "../db/index.ts";
+import { queueForceRun } from "../shared/force-run.ts";
 import { bustPublicPages } from "../shared/page-cache.ts";
 import { refreshStaticSurface } from "./static-export.tsx";
 import type { ComposerInput } from "../shared/composer-schema.ts";
@@ -48,11 +49,7 @@ import { buildPickRows, produceDraft } from "./compose.ts";
 // committed.
 async function queueDispatch(): Promise<void> {
   try {
-    await db
-      .insertInto("pipeline_force_run")
-      .values({ stage: "dispatch", args: null })
-      .onConflict((oc) => oc.column("stage").doNothing())
-      .execute();
+    await queueForceRun("dispatch");
   } catch (err) {
     console.error(
       "[publish] could not queue dispatch — it will go out on the next scheduled sweep:",

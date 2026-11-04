@@ -166,6 +166,10 @@ export interface Database {
     // When the last confirmation email was sent. Gates the per-recipient
     // resend cooldown in POST /subscribe (mig 061). Null = never sent.
     last_confirmation_sent_at: Date | null;
+    // Set when the global confirmation-send cap deferred this row's
+    // confirmation (mig 079); the dispatch stage drains these in
+    // batches and nulls it on send or expiry. Null = nothing pending.
+    confirmation_queued_at: Date | null;
     // Language for everything we send this address and for the
     // preferences page they reach by signed link (mig 076). The
     // subscribe form carries it; there is no URL to read it from once
