@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { sql } from "kysely";
 import { db } from "../../src/db/index.ts";
 import {
@@ -20,6 +20,14 @@ const RUN = process.env.RUN_INTEGRATION === "1";
 // is the row bookkeeping, which is exactly what the drain is for.
 
 describe.skipIf(!RUN)("confirmation queue (integration)", () => {
+  // sendConfirmation mints a signed /confirm link, and the signer reads
+  // its secret from the environment at call time. Same convention as
+  // tokens.test.ts: the test owns its own prerequisite rather than
+  // leaning on CI to export one.
+  beforeAll(() => {
+    process.env.BLURPADURP_TOKEN_SECRET ??= "itest-secret-do-not-use-in-prod";
+  });
+
   const PREFIX = "itest-cq-";
   const NOW = new Date("2026-11-04T12:00:00Z");
   const HOUR = 3_600_000;
