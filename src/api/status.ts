@@ -5,6 +5,7 @@
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
 import { getConfigNumberOrNull } from "../shared/config-store.ts";
+import { loadConfirmationQueueFacts } from "../shared/confirmation.ts";
 
 export interface PipelineStatus {
   db_ok: boolean;
@@ -15,6 +16,8 @@ export interface PipelineStatus {
   last_issue_at: Date | null;
   last_issue_age_sec: number | null;
   unscored_backlog: number;
+  /** Confirmation emails waiting on the dispatch drain (mig 079). */
+  confirmation_queue: number;
   today_spend_usd: number;
   daily_cap_usd: number | null;
   budget_remaining_usd: number | null;
@@ -37,6 +40,7 @@ export async function loadPipelineStatus(): Promise<PipelineStatus> {
       last_issue_at: null,
       last_issue_age_sec: null,
       unscored_backlog: 0,
+      confirmation_queue: 0,
       today_spend_usd: 0,
       daily_cap_usd: null,
       budget_remaining_usd: null,
@@ -87,6 +91,7 @@ export async function loadPipelineStatus(): Promise<PipelineStatus> {
   const todaySpend = Number(spendRow?.s ?? 0);
 
   const capFinite = await getConfigNumberOrNull("budget.daily_usd_cap");
+  const queue = await loadConfirmationQueueFacts();
 
   return {
     db_ok,
@@ -106,6 +111,7 @@ export async function loadPipelineStatus(): Promise<PipelineStatus> {
         ? Math.floor((now - lastIssueAt.getTime()) / 1000)
         : null,
     unscored_backlog: backlog,
+    confirmation_queue: queue.depth,
     today_spend_usd: todaySpend,
     daily_cap_usd: capFinite,
     budget_remaining_usd:

@@ -176,6 +176,13 @@ export const AdminStatus: FC<{ s: PipelineStatus; storage?: StorageStatus }> = (
           <td>stories awaiting score</td>
         </tr>
         <tr>
+          <td>Confirmation queue</td>
+          <td class={`num ${s.confirmation_queue > 0 ? "warn" : "ok"}`}>
+            {s.confirmation_queue}
+          </td>
+          <td>signups waiting for the dispatch drain (send cap tripped)</td>
+        </tr>
+        <tr>
           <td>Today's spend</td>
           <td class="num">${s.today_spend_usd.toFixed(2)}</td>
           <td>

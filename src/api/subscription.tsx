@@ -6,7 +6,6 @@ import { z } from "zod";
 
 import { db } from "../db/index.ts";
 import { getEnvOptional } from "../shared/env.ts";
-import { sendMail } from "../shared/mailer.ts";
 import { notifyAdmin, renderAdminNotice } from "../shared/admin-notify.ts";
 import {
   clientIp,
@@ -14,8 +13,9 @@ import {
   withinCooldown,
 } from "../shared/rate-limit.ts";
 import { verifySvixSignature } from "../shared/svix.ts";
-import { signToken, verifyToken } from "../shared/tokens.ts";
-import { renderConfirmationEmail } from "../views/email.ts";
+import { queueConfirmation, sendConfirmation } from "../shared/confirmation.ts";
+import { queueForceRun } from "../shared/force-run.ts";
+import { verifyToken } from "../shared/tokens.ts";
 import {
   ManagePage,
 } from "../views/manage.tsx";
@@ -26,7 +26,6 @@ import {
   isValidTimezone,
   subscriberLocale,
 } from "./loaders.tsx";
-import { PUBLIC_URL } from "./config.ts";
 import {
   DEFAULT_LOCALE,
   LOCALES,
@@ -317,19 +316,35 @@ app.post(subscribePath, async (c) => {
   }
 
   // Global outbound-confirmation cap. Bounds blast radius from distributed
-  // IPs that the per-IP limiter can't see. On a trip we drop the send
-  // silently (same redirect, no enumeration signal) and alert the operator
-  // — a dedupe key keeps it to one mail per window instead of one per
-  // dropped send.
+  // IPs that the per-IP limiter can't see. On a trip the row is QUEUED
+  // (mig 079) rather than dropped — the dispatch stage drains it in
+  // bounded batches, so a launch-day spike reaches every reader within
+  // the hour and a flood is still capped per hour, just by the drain
+  // batch instead of the bucket. Same redirect either way: the response
+  // must never reveal whether the address exists or was throttled. The
+  // operator alert stays, deduped to one mail an hour, because a trip is
+  // either the best day the product has had or an attack, and both are
+  // worth a look.
   if (!confirmationSendLimiter.take(CONFIRMATION_SEND_GLOBAL_KEY)) {
-    console.warn("[subscribe] global confirmation-send cap tripped; dropping");
+    console.warn("[subscribe] global confirmation-send cap tripped; queueing");
+    await queueConfirmation(Number(row.id));
+    try {
+      await queueForceRun("dispatch");
+    } catch (err) {
+      console.error(
+        "[subscribe] could not queue dispatch — the confirmation drains on the next scheduled sweep:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     const notice = renderAdminNotice({
       heading: "Confirmation-email cap tripped",
       bodyLines: [
-        "The global outbound-confirmation rate limit was hit, so new " +
-          "confirmation emails are being dropped.",
-        "This usually means a distributed signup flood. Check /admin and " +
-          "the edge (Cloudflare) if this persists.",
+        "The global outbound-confirmation rate limit was hit. New " +
+          "confirmations are being queued and the dispatch stage drains " +
+          "them in batches (subscribe.confirmation_drain_batch per run).",
+        "A signup spike is the good explanation. A distributed flood is " +
+          "the other one — check /admin/status for queue depth and the " +
+          "edge (Cloudflare) if this persists.",
       ],
     });
     await notifyAdmin({
@@ -342,42 +357,9 @@ app.post(subscribePath, async (c) => {
     return c.redirect(`${subscribePath}?subscribed=1`, 303);
   }
 
-  // Mint a signed /confirm/:token magic link and send it. Failure to
-  // send is logged but doesn't reveal itself to the user — we never
-  // tell a submitter whether their address was deliverable (prevents
-  // email-validity probing).
-  const token = signToken({
-    kind: "confirm-email",
-    subscriptionId: Number(row.id),
-  });
-  const confirmUrl = `${PUBLIC_URL}/confirm/${token}`;
   // The stored locale, not the route's — for an existing unconfirmed
   // row that is the language they originally signed up in.
-  const mail = renderConfirmationEmail({
-    brandUrl: PUBLIC_URL,
-    confirmUrl,
-    locale: subscriberLocale(row.locale),
-  });
-  // Stamp the send time before awaiting the network call so concurrent
-  // resubmits of the same address can't slip past the cooldown. We stamp
-  // even on send failure: a bouncing/erroring address shouldn't be a
-  // retry-spam loophole, and the operator-facing error is logged below.
-  await db
-    .updateTable("email_subscription")
-    .set({ last_confirmation_sent_at: new Date() })
-    .where("id", "=", Number(row.id))
-    .execute();
-  const res = await sendMail({
-    to: email,
-    subject: mail.subject,
-    html: mail.html,
-    text: mail.text,
-  });
-  if (!res.ok) {
-    console.error(
-      `[subscribe] confirmation send failed for ${email}: ${res.error}`,
-    );
-  }
+  await sendConfirmation({ id: Number(row.id), email, locale: row.locale });
   return c.redirect(`${subscribePath}?subscribed=1`, 303);
 });
 }

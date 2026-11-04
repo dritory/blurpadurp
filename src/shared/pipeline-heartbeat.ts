@@ -3,6 +3,7 @@
 
 import { sql } from "kysely";
 import { db } from "../db/index.ts";
+import { loadConfirmationQueueFacts } from "./confirmation.ts";
 import { startOfUtcDay } from "../ai/budget-core.ts";
 import { getConfigNumber, getConfigNumberOrNull } from "./config-store.ts";
 import {
@@ -158,10 +159,11 @@ async function loadDbBytes(): Promise<number | null> {
 export async function loadHealthSnapshot(
   now: Date = new Date(),
 ): Promise<HealthSnapshot> {
-  const [facts, draft, dbBytes] = await Promise.all([
+  const [facts, draft, dbBytes, confirmationQueue] = await Promise.all([
     loadStageFacts(),
     loadDraft(),
     loadDbBytes(),
+    loadConfirmationQueueFacts(),
   ]);
 
   const backlogRow = await db
@@ -193,6 +195,7 @@ export async function loadHealthSnapshot(
     dailyCapUsd,
     dbBytes,
     dbBudgetBytes: dbBudgetMb === null ? null : dbBudgetMb * 1024 * 1024,
+    confirmationQueue,
   };
 }
 

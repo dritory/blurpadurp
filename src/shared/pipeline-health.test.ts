@@ -42,6 +42,7 @@ function snapshot(over: Partial<HealthSnapshot> = {}): HealthSnapshot {
     dailyCapUsd: 10,
     dbBytes: 100 * 1024 * 1024,
     dbBudgetBytes: 400 * 1024 * 1024,
+    confirmationQueue: { depth: 0, oldestQueuedAt: null },
     ...over,
   };
 }
@@ -143,6 +144,32 @@ describe("shouldNotifyFailure", () => {
 describe("findProblems", () => {
   test("a healthy snapshot has none — that's what all-clear means", () => {
     expect(findProblems(snapshot())).toEqual([]);
+  });
+
+  test("a confirmation queue inside the drain's grace is not a problem", () => {
+    // The handler queues a dispatch force-run on every cap trip, so a
+    // row queued an hour ago is simply waiting for the next tick.
+    const snap = snapshot({
+      confirmationQueue: {
+        depth: 140,
+        oldestQueuedAt: new Date(NOW.getTime() - HOUR),
+      },
+    });
+    expect(findProblems(snap)).toEqual([]);
+  });
+
+  test("a confirmation queue older than the grace is reported with its depth", () => {
+    const snap = snapshot({
+      confirmationQueue: {
+        depth: 140,
+        oldestQueuedAt: new Date(NOW.getTime() - 5 * HOUR),
+      },
+    });
+    const p = findProblems(snap);
+    expect(p).toHaveLength(1);
+    expect(p[0]?.kind).toBe("confirmation_queue");
+    expect(p[0]?.summary).toContain("140 confirmation emails");
+    expect(p[0]?.summary).toContain("oldest 5h");
   });
 
   test("reports a stalled stage with its last error", () => {

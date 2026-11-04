@@ -112,14 +112,23 @@ export interface HealthSnapshot {
   dailyCapUsd: number | null;
   dbBytes: number | null;
   dbBudgetBytes: number | null;
+  /** Confirmation emails deferred by the signup send cap (mig 079). */
+  confirmationQueue: { depth: number; oldestQueuedAt: Date | null };
 }
+
+/** A queued confirmation older than this means the drain is not
+ *  keeping up or not running. The handler queues a dispatch force-run
+ *  on every trip, so the expected wait is one hourly tick; three ticks
+ *  is the same grace the stall rule gives a stage. */
+export const CONFIRMATION_QUEUE_STALE_HOURS = 3;
 
 export type ProblemKind =
   | "stage_stalled"
   | "stage_failing"
   | "draft_stuck"
   | "budget"
-  | "storage";
+  | "storage"
+  | "confirmation_queue";
 
 export interface Problem {
   kind: ProblemKind;
@@ -220,9 +229,26 @@ export function findProblems(snap: HealthSnapshot): Problem[] {
     }
   }
 
+  const q = snap.confirmationQueue;
+  if (q.oldestQueuedAt !== null) {
+    const age = hoursSince(q.oldestQueuedAt, snap.now);
+    if (age > CONFIRMATION_QUEUE_STALE_HOURS) {
+      // Readers who signed up and never got a mail. Either a flood is
+      // being drained at the batch rate (fine, but worth knowing) or
+      // dispatch is not running (not fine).
+      problems.push({
+        kind: "confirmation_queue",
+        summary:
+          `${q.depth} confirmation email${q.depth === 1 ? "" : "s"} queued, oldest ` +
+          `${Math.round(age)}h — the signup send cap tripped and the drain is behind`,
+      });
+    }
+  }
+
   const order: ProblemKind[] = [
     "draft_stuck",
     "stage_stalled",
+    "confirmation_queue",
     "storage",
     "budget",
     "stage_failing",
